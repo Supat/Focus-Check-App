@@ -69,6 +69,7 @@ struct OverlayControls: View {
             }
 
             depthInstallRow
+            mosaicToggleRow
         }
         #if os(iOS)
         .onPencilSqueeze { phase in
@@ -90,6 +91,18 @@ struct OverlayControls: View {
 
     private func formatted(_ value: Float) -> String {
         String(format: "%.2f", value)
+    }
+
+    @ViewBuilder
+    private var mosaicToggleRow: some View {
+        if viewModel.sensitiveContentCheckAvailable {
+            Toggle(isOn: $viewModel.mosaicEnabled) {
+                Label("Mosaic sensitive content", systemImage: "eye.slash")
+                    .font(.caption)
+            }
+            .toggleStyle(.switch)
+            .controlSize(.small)
+        }
     }
 
     @ViewBuilder

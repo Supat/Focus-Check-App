@@ -141,6 +141,11 @@ final class FocusViewModel: ObservableObject {
     @Published var motionBlur: MotionBlurReport?
     @Published var motionOverlay: CIImage?
     @Published var exposureInfo: ExposureInfo?
+    @Published var isSensitive: Bool?
+    /// User-controlled mosaic toggle. Defaults on — protective default so
+    /// sensitive content isn't displayed until the user explicitly opts in.
+    @Published var mosaicEnabled: Bool = true
+    @Published var sensitiveContentCheckAvailable: Bool = false
     @Published var isAnalyzing: Bool = false
     @Published var errorMessage: String?
     @Published var depthAvailable: Bool = false
@@ -153,10 +158,12 @@ final class FocusViewModel: ObservableObject {
     init() {
         self.analyzer = FocusAnalyzer()
         Task { [weak self] in
-            let available = await self?.analyzer.isDepthAvailable ?? false
+            let depth = await self?.analyzer.isDepthAvailable ?? false
+            let sensitive = await self?.analyzer.isSensitiveContentCheckAvailable ?? false
             await MainActor.run {
-                self?.depthAvailable = available
-                self?.depthInstall = available ? .installed : .notInstalled
+                self?.depthAvailable = depth
+                self?.depthInstall = depth ? .installed : .notInstalled
+                self?.sensitiveContentCheckAvailable = sensitive
             }
         }
     }
@@ -195,6 +202,7 @@ final class FocusViewModel: ObservableObject {
         focalPlane = nil
         motionBlur = nil
         motionOverlay = nil
+        isSensitive = nil
         exposureInfo = ExposureInfo.read(from: url)
         sourceName = name
 
@@ -214,6 +222,7 @@ final class FocusViewModel: ObservableObject {
                     self?.focalPlane = overlays.focalPlane
                     self?.motionBlur = overlays.motionBlur
                     self?.motionOverlay = overlays.motionOverlay
+                    self?.isSensitive = overlays.isSensitive
                     self?.isAnalyzing = false
                 }
             } catch is CancellationError {
@@ -239,6 +248,7 @@ final class FocusViewModel: ObservableObject {
         focalPlane = nil
         motionBlur = nil
         motionOverlay = nil
+        isSensitive = nil
         exposureInfo = nil
         errorMessage = nil
         isAnalyzing = false
@@ -262,6 +272,7 @@ final class FocusViewModel: ObservableObject {
                     self?.focalPlane = overlays.focalPlane
                     self?.motionBlur = overlays.motionBlur
                     self?.motionOverlay = overlays.motionOverlay
+                    self?.isSensitive = overlays.isSensitive
                     self?.isAnalyzing = false
                 }
             } catch is CancellationError {

@@ -83,14 +83,15 @@ final class FocusRenderer {
                        color: Color, focalPlane: Float?,
                        zoomScale: CGFloat, zoomAnchor: CGPoint,
                        sharpness: CIImage?, depth: CIImage?, motion: CIImage?,
-                       overlayHidden: Bool) =
+                       overlayHidden: Bool, mosaic: Bool) =
             MainActor.assumeIsolated {
-                (viewModel.sourceImage, viewModel.style, viewModel.threshold,
-                 viewModel.overlayColor, viewModel.focalPlane,
-                 viewModel.zoomScale, viewModel.zoomAnchor,
-                 viewModel.sharpnessOverlay, viewModel.depthOverlay,
-                 viewModel.motionOverlay,
-                 viewModel.overlayHidden)
+                let applyMosaic = (viewModel.isSensitive == true) && viewModel.mosaicEnabled
+                return (viewModel.sourceImage, viewModel.style, viewModel.threshold,
+                        viewModel.overlayColor, viewModel.focalPlane,
+                        viewModel.zoomScale, viewModel.zoomAnchor,
+                        viewModel.sharpnessOverlay, viewModel.depthOverlay,
+                        viewModel.motionOverlay,
+                        viewModel.overlayHidden, applyMosaic)
             }
 
         guard let source = snapshot.source else {
@@ -103,6 +104,17 @@ final class FocusRenderer {
         let zoom = snapshot.zoomScale
         let anchor = snapshot.zoomAnchor
         let fitted = fit(image: source, into: drawableSize, zoom: zoom, anchor: anchor)
+
+        // Sensitive content + mosaic toggle on → pixelate the whole frame and
+        // skip overlay compositing. Apple's SensitiveContentAnalysis is
+        // image-level, so there's no region to mosaic just that part.
+        if snapshot.mosaic {
+            let pixelate = CIFilter.pixellate()
+            pixelate.inputImage = fitted
+            pixelate.scale = Float(max(drawableSize.width, drawableSize.height) / 32)
+            pixelate.center = CGPoint(x: fitted.extent.midX, y: fitted.extent.midY)
+            return (pixelate.outputImage ?? fitted).cropped(to: fitted.extent)
+        }
 
         // Press-and-hold compare mode: return the base photo only.
         if snapshot.overlayHidden { return fitted }

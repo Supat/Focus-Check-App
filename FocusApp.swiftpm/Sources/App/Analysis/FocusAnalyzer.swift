@@ -21,6 +21,9 @@ actor FocusAnalyzer {
         /// Used by the `.motion` overlay style to highlight *where* motion
         /// blur is concentrated rather than just reporting a global scalar.
         var motionOverlay: CIImage?
+        /// Apple's Sensitive Content Analysis result. nil when the framework
+        /// is unavailable or Communication Safety is off in Screen Time.
+        var isSensitive: Bool?
     }
 
     private let device: MTLDevice
@@ -28,6 +31,7 @@ actor FocusAnalyzer {
     private let ciContext: CIContext
     private let laplacian: LaplacianVariance
     private let motionBlur: MotionBlurDetector
+    private let sensitiveContent = SensitiveContentChecker()
     private var depthEstimator: DepthEstimator?
     private let downloader = DepthModelDownloader()
 
@@ -84,9 +88,13 @@ actor FocusAnalyzer {
         return image
     }
 
+    /// Exposed so the view model can hide the mosaic toggle when the framework
+    /// or Communication Safety isn't available on this device.
+    var isSensitiveContentCheckAvailable: Bool { sensitiveContent.isAvailable }
+
     /// Run the analysis pipeline for the given mode. Returns display-ready overlay images
     /// already upscaled to the source's extent.
-    func analyze(mode: AnalysisMode) throws -> Overlays {
+    func analyze(mode: AnalysisMode) async throws -> Overlays {
         guard let source else { throw AnalysisError.imageDecodeFailed }
         try Task.checkCancellation()
 
@@ -102,6 +110,10 @@ actor FocusAnalyzer {
         let motionOverlay = motionBlur.detectMap(in: source).flatMap {
             upscale(image: $0, toExtentOf: source)
         }
+
+        // Sensitive-content classification — binary, image-level. Off-main
+        // async; returns nil if Communication Safety is disabled.
+        let isSensitive = await sensitiveContent.check(image: source, ciContext: ciContext)
 
         switch mode {
         case .sharpness:
@@ -130,7 +142,8 @@ actor FocusAnalyzer {
             depth: depth,
             focalPlane: focalPlane,
             motionBlur: motionReport,
-            motionOverlay: motionOverlay
+            motionOverlay: motionOverlay,
+            isSensitive: isSensitive
         )
     }
 
