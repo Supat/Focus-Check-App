@@ -26,6 +26,13 @@ enum AnalysisMode: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum DepthInstallState: Equatable {
+    case notInstalled
+    case downloading(progress: Double)
+    case installed
+    case failed(String)
+}
+
 @MainActor
 final class FocusViewModel: ObservableObject {
     // Scrubbable display state — cheap, no re-analysis.
@@ -43,15 +50,45 @@ final class FocusViewModel: ObservableObject {
     @Published var isAnalyzing: Bool = false
     @Published var errorMessage: String?
     @Published var depthAvailable: Bool = false
+    @Published var depthInstall: DepthInstallState = .notInstalled
 
     let analyzer: FocusAnalyzer
     private var currentTask: Task<Void, Never>?
+    private var installTask: Task<Void, Never>?
 
     init() {
         self.analyzer = FocusAnalyzer()
         Task { [weak self] in
             let available = await self?.analyzer.isDepthAvailable ?? false
-            await MainActor.run { self?.depthAvailable = available }
+            await MainActor.run {
+                self?.depthAvailable = available
+                self?.depthInstall = available ? .installed : .notInstalled
+            }
+        }
+    }
+
+    func downloadDepthModel() {
+        guard installTask == nil else { return }
+        depthInstall = .downloading(progress: 0)
+        let analyzer = self.analyzer
+        installTask = Task { [weak self] in
+            do {
+                try await analyzer.installDepthModel { p in
+                    // Progress callback may arrive on any thread — hop to main.
+                    Task { @MainActor in
+                        self?.depthInstall = .downloading(progress: p)
+                    }
+                }
+                await MainActor.run {
+                    self?.depthAvailable = true
+                    self?.depthInstall = .installed
+                }
+            } catch {
+                await MainActor.run {
+                    self?.depthInstall = .failed(error.localizedDescription)
+                }
+            }
+            await MainActor.run { self?.installTask = nil }
         }
     }
 

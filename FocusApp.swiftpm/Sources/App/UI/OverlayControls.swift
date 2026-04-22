@@ -42,14 +42,9 @@ struct OverlayControls: View {
                 .onChange(of: viewModel.mode) { _, _ in
                     viewModel.reanalyze()
                 }
-
-                if !viewModel.depthAvailable {
-                    Label("No depth model", systemImage: "exclamationmark.triangle")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .labelStyle(.titleAndIcon)
-                }
             }
+
+            depthInstallRow
         }
         #if os(iOS)
         .onPencilSqueeze { phase in
@@ -59,5 +54,50 @@ struct OverlayControls: View {
             }
         }
         #endif
+    }
+
+    @ViewBuilder
+    private var depthInstallRow: some View {
+        switch viewModel.depthInstall {
+        case .installed:
+            // Depth mode is ready — no row needed.
+            EmptyView()
+
+        case .notInstalled:
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.down.circle")
+                    .foregroundStyle(.secondary)
+                Text("Depth model (~50 MB) not installed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Download") { viewModel.downloadDepthModel() }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+            }
+
+        case .downloading(let progress):
+            HStack(spacing: 8) {
+                ProgressView(value: progress)
+                Text("\(Int(progress * 100))%")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44, alignment: .trailing)
+            }
+
+        case .failed(let message):
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+                Text(message)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                Spacer()
+                Button("Retry") { viewModel.downloadDepthModel() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+        }
     }
 }

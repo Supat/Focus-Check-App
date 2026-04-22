@@ -33,17 +33,17 @@ let package = Package(
             ]
         )
     ],
+    dependencies: [
+        // Pure-Swift ZIP extraction — used by DepthModelDownloader to unzip the
+        // compiled `.mlmodelc` after downloading it at runtime.
+        .package(url: "https://github.com/weichsel/ZIPFoundation", from: "0.9.19")
+    ],
     targets: [
         .executableTarget(
             name: "App",
             path: "Sources/App",
-            resources: [
-                // Depth Anything v2 is an optional hybrid-mode asset. Enable by:
-                //   1. xcrun coremlcompiler compile DepthAnythingV2SmallF16.mlpackage /tmp/
-                //   2. cp -r /tmp/DepthAnythingV2SmallF16.mlmodelc Sources/App/Resources/
-                //   3. Uncomment the line below.
-                // `.copy` is REQUIRED — `.process` silently breaks `.mlmodelc` directories.
-                // .copy("Resources/DepthAnythingV2SmallF16.mlmodelc")
+            dependencies: [
+                .product(name: "ZIPFoundation", package: "ZIPFoundation")
             ]
         )
     ]

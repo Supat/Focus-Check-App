@@ -15,7 +15,8 @@ actor FocusAnalyzer {
     private let commandQueue: MTLCommandQueue
     private let ciContext: CIContext
     private let laplacian: LaplacianVariance
-    private let depthEstimator: DepthEstimator?
+    private var depthEstimator: DepthEstimator?
+    private let downloader = DepthModelDownloader()
 
     private var source: CIImage?
 
@@ -37,6 +38,14 @@ actor FocusAnalyzer {
     }
 
     var isDepthAvailable: Bool { depthEstimator != nil }
+
+    /// Download + install the Depth Anything v2 `.mlmodelc` from the maintainer's
+    /// release URL, then refresh the estimator so Depth/Hybrid modes become usable.
+    /// Progress (0...1) is reported via the callback — may run on any thread.
+    func installDepthModel(progress: @Sendable @escaping (Double) -> Void) async throws {
+        try await downloader.install(progress: progress)
+        depthEstimator = try DepthEstimator()
+    }
 
     /// Decode a URL into the working CIImage. RAW goes through `CIRAWFilter`; everything else
     /// loads via `CIImage(contentsOf:)` which respects EXIF orientation.

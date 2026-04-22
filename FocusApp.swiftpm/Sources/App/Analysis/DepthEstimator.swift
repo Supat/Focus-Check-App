@@ -4,22 +4,16 @@ import Vision
 
 /// Wraps the pre-compiled Depth Anything v2 Small F16 model.
 ///
-/// The `.mlmodelc` must be placed in `Sources/App/Resources/` and registered via `.copy()` in
-/// `Package.swift` (see CLAUDE.md — SPM cannot compile `.mlpackage`). When the bundle does not
-/// contain the model, `load()` throws `AnalysisError.modelMissing` and the analyzer falls back to
-/// sharpness-only mode rather than crashing.
+/// The `.mlmodelc` is fetched at runtime by `DepthModelDownloader` and installed into
+/// `Application Support/`. `init()` probes that location first, falling back to the
+/// app bundle for dev setups that manually drop the model into `Sources/App/Resources/`.
+/// When neither source has the model, it throws `AnalysisError.modelMissing` and the
+/// analyzer degrades to sharpness-only.
 struct DepthEstimator {
     private let model: MLModel
 
     init() throws {
-        // `.iOSApplication` products bundle `.copy` resources into the main bundle.
-        // We avoid `Bundle.module` because it's only synthesized when the target
-        // declares at least one resource — and the `.mlmodelc` copy line in
-        // `Package.swift` is left commented until the user drops the model in.
-        guard let url = Bundle.main.url(forResource: "DepthAnythingV2SmallF16",
-                                        withExtension: "mlmodelc") else {
-            throw AnalysisError.modelMissing
-        }
+        let url = try Self.locateModel()
         let config = MLModelConfiguration()
         config.computeUnits = .all  // Prefer ANE; falls back to GPU then CPU.
         do {
@@ -27,6 +21,20 @@ struct DepthEstimator {
         } catch {
             throw AnalysisError.modelLoadFailed(error.localizedDescription)
         }
+    }
+
+    /// Probe the runtime install location first, then the app bundle. Returns the
+    /// first `.mlmodelc` URL found, or throws `.modelMissing`.
+    private static func locateModel() throws -> URL {
+        if let installed = try? DepthModelDownloader.installedURL(),
+           FileManager.default.fileExists(atPath: installed.path) {
+            return installed
+        }
+        if let bundled = Bundle.main.url(forResource: "DepthAnythingV2SmallF16",
+                                         withExtension: "mlmodelc") {
+            return bundled
+        }
+        throw AnalysisError.modelMissing
     }
 
     /// Predict a relative monocular depth map at the model's native resolution.
