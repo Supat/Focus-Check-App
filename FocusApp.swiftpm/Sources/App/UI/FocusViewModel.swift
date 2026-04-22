@@ -71,7 +71,7 @@ final class FocusViewModel: ObservableObject {
     // Scrubbable display state — cheap, no re-analysis.
     @Published var threshold: Float = 0.35
     @Published var overlayColor: Color = .red
-    @Published var style: OverlayStyle = .peaking {
+    @Published var style: OverlayStyle = .off {
         didSet {
             // Focus Error needs depth data. Auto-promote to hybrid analysis so
             // the user doesn't have to toggle two controls.
