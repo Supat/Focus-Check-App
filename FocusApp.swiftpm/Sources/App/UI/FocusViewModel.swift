@@ -37,7 +37,7 @@ enum DepthInstallState: Equatable {
 final class FocusViewModel: ObservableObject {
     // Scrubbable display state — cheap, no re-analysis.
     @Published var threshold: Float = 0.35
-    @Published var overlayColor: Color = .yellow
+    @Published var overlayColor: Color = .red
     @Published var style: OverlayStyle = .peaking
 
     // Analysis configuration — change triggers re-analysis.
