@@ -112,7 +112,7 @@ struct SensitiveContentChecker {
     }
 }
 
-/// Minimal wrapper around a downloaded OpenNSFW-style Core ML model.
+/// Minimal wrapper around a downloaded Core ML NSFW classifier.
 /// Loaded lazily at first use; held statically so repeated invocations
 /// reuse the MLModel instance.
 private final class NSFWClassifier {
@@ -122,7 +122,7 @@ private final class NSFWClassifier {
 
     private let model: MLModel
     private let inputName: String
-    private let outputName: String
+    private let inputSize: CGSize
 
     init() throws {
         let url = try NSFWModelDownloader.installedURL()
@@ -137,17 +137,29 @@ private final class NSFWClassifier {
             throw AnalysisError.modelLoadFailed(error.localizedDescription)
         }
         self.inputName = model.modelDescription.inputDescriptionsByName.keys.first ?? "image"
-        self.outputName = model.modelDescription.outputDescriptionsByName.keys.first ?? "classLabelProbs"
+
+        // Read the model's expected input size from its image constraint.
+        // CreateML models typically fix this at 299x299 or 224x224.
+        var resolvedSize = CGSize(width: 224, height: 224)
+        if let desc = model.modelDescription.inputDescriptionsByName[inputName],
+           let constraint = desc.imageConstraint {
+            resolvedSize = CGSize(
+                width: constraint.pixelsWide,
+                height: constraint.pixelsHigh
+            )
+        }
+        self.inputSize = resolvedSize
     }
 
     /// NSFW probability in [0, 1]. Returns nil on any failure.
     func nsfwProbability(for image: CIImage, ciContext: CIContext) -> Float? {
-        let side = 224
-        let resized = resize(image, to: CGSize(width: side, height: side))
+        let w = Int(inputSize.width)
+        let h = Int(inputSize.height)
+        let resized = resize(image, to: inputSize)
 
         var pixelBuffer: CVPixelBuffer?
         let attrs: [CFString: Any] = [kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary]
-        CVPixelBufferCreate(kCFAllocatorDefault, side, side,
+        CVPixelBufferCreate(kCFAllocatorDefault, w, h,
                             kCVPixelFormatType_32BGRA,
                             attrs as CFDictionary,
                             &pixelBuffer)
@@ -165,22 +177,32 @@ private final class NSFWClassifier {
         }
     }
 
-    /// Probe common output shapes: dictionary {NSFW: p, SFW: q} or 2-element
-    /// MLMultiArray where index 1 is the NSFW probability. Different
-    /// checkpoints encode this differently.
+    /// CreateML image classifiers expose two outputs — `classLabel` (String)
+    /// and `classLabelProbs` (Dictionary<String, Double>) — so we have to
+    /// iterate all output names to find the probability dictionary. Also
+    /// falls back to MLMultiArray outputs for non-CreateML models.
     private func extractNSFWScore(from result: MLFeatureProvider) -> Float? {
-        if let dict = result.featureValue(for: outputName)?.dictionaryValue {
-            for (key, value) in dict {
-                let keyStr = (key as? String) ?? String(describing: key)
-                if keyStr.lowercased().contains("nsfw"),
-                   let num = value as? NSNumber {
-                    return num.floatValue
+        for name in result.featureNames {
+            guard let value = result.featureValue(for: name) else { continue }
+            // Class-probability dictionary path (CreateML default).
+            if value.type == .dictionary {
+                let dict = value.dictionaryValue
+                for (key, number) in dict {
+                    let keyStr = (key as? String) ?? String(describing: key)
+                    if keyStr.lowercased().contains("nsfw") {
+                        return number.floatValue
+                    }
                 }
             }
         }
-        if let array = result.featureValue(for: outputName)?.multiArrayValue {
-            if array.count >= 2 { return array[1].floatValue }
-            if array.count == 1 { return array[0].floatValue }
+        // MLMultiArray fallback: OpenNSFW-style checkpoints emit a 2-element
+        // [SFW, NSFW] probability vector; some single-output variants emit
+        // just the NSFW probability.
+        for name in result.featureNames {
+            if let array = result.featureValue(for: name)?.multiArrayValue {
+                if array.count >= 2 { return array[1].floatValue }
+                if array.count == 1 { return array[0].floatValue }
+            }
         }
         return nil
     }
