@@ -84,7 +84,7 @@ final class FocusRenderer {
                        zoomScale: CGFloat, zoomAnchor: CGPoint,
                        sharpness: CIImage?, depth: CIImage?, motion: CIImage?,
                        overlayHidden: Bool, mosaic: Bool, mosaicMode: MosaicMode,
-                       faces: [CGRect]) =
+                       faces: [CGRect], bodies: [CGRect]) =
             MainActor.assumeIsolated {
                 let applyMosaic = (viewModel.isSensitive == true) && viewModel.mosaicEnabled
                 return (viewModel.sourceImage, viewModel.style, viewModel.threshold,
@@ -93,7 +93,7 @@ final class FocusRenderer {
                         viewModel.sharpnessOverlay, viewModel.depthOverlay,
                         viewModel.motionOverlay,
                         viewModel.overlayHidden, applyMosaic, viewModel.mosaicMode,
-                        viewModel.faceRectangles)
+                        viewModel.faceRectangles, viewModel.bodyRectangles)
             }
 
         guard let source = snapshot.source else {
@@ -109,7 +109,10 @@ final class FocusRenderer {
             switch snapshot.mosaicMode {
             case .face:
                 guard !snapshot.faces.isEmpty else { return source }
-                return faceMosaic(source: source, faces: snapshot.faces)
+                return regionMosaic(source: source, regions: snapshot.faces)
+            case .body:
+                guard !snapshot.bodies.isEmpty else { return source }
+                return regionMosaic(source: source, regions: snapshot.bodies)
             case .whole:
                 return wholeMosaic(source: source)
             }
@@ -510,28 +513,31 @@ final class FocusRenderer {
         return (pixelate.outputImage ?? source).cropped(to: source.extent)
     }
 
-    /// Pixelate only the face bounding boxes; everything else stays untouched.
+    /// Pixelate only the supplied regions; everything else stays untouched.
     /// Operates on the source image so downstream fit+zoom doesn't have to
-    /// transform the rectangles. Block size scales with the smallest face so
-    /// blocks stay roughly proportional to what they're covering.
-    private func faceMosaic(source: CIImage, faces: [CGRect]) -> CIImage {
-        guard let smallestFace = faces.min(by: {
+    /// transform the rectangles. Block size scales with the smallest region
+    /// so blocks stay roughly proportional to what they're covering, capped
+    /// to a fraction of the source so very large body boxes don't end up
+    /// with absurdly chunky blocks.
+    private func regionMosaic(source: CIImage, regions: [CGRect]) -> CIImage {
+        guard let smallest = regions.min(by: {
             $0.width * $0.height < $1.width * $1.height
         }) else { return source }
 
         let pixelate = CIFilter.pixellate()
         pixelate.inputImage = source.clampedToExtent()
-        let blockSize = min(smallestFace.width, smallestFace.height) * 0.08
-        pixelate.scale = Float(max(blockSize, 4))
+        let regionBased = min(smallest.width, smallest.height) * 0.08
+        let cap = max(source.extent.width, source.extent.height) / 32
+        pixelate.scale = Float(max(min(regionBased, cap), 4))
         pixelate.center = CGPoint(x: source.extent.midX, y: source.extent.midY)
         let pixelated = (pixelate.outputImage ?? source).cropped(to: source.extent)
 
-        // Mask: black canvas with white rects for each face. The blend filter
-        // reads the red channel as the mask weight.
+        // Mask: black canvas with white rects for each region. The blend
+        // filter reads the red channel as the mask weight.
         var mask: CIImage = CIImage(color: CIColor.black).cropped(to: source.extent)
-        for face in faces {
-            // Expand 10% so hair / chin / ears are also covered.
-            let expanded = face.insetBy(dx: -face.width * 0.1, dy: -face.height * 0.1)
+        for region in regions {
+            // Expand 10% so edges (hair, hands, etc.) are also covered.
+            let expanded = region.insetBy(dx: -region.width * 0.1, dy: -region.height * 0.1)
             let whiteBox = CIImage(color: CIColor.white).cropped(to: expanded)
             let stack = CIFilter.sourceOverCompositing()
             stack.inputImage = whiteBox

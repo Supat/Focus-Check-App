@@ -29,6 +29,9 @@ actor FocusAnalyzer {
         /// Empty array when no faces detected. Used by the renderer to mosaic
         /// only face regions when sensitive content is flagged.
         var faceRectangles: [CGRect] = []
+        /// Full-body bounding boxes from VNDetectHumanRectanglesRequest, also
+        /// in source-extent coordinates. Used for the .body mosaic mode.
+        var bodyRectangles: [CGRect] = []
     }
 
     private let device: MTLDevice
@@ -134,6 +137,7 @@ actor FocusAnalyzer {
         // Face rectangles — used by the mosaic renderer. Detect on every
         // analysis so the data is ready when the user toggles mosaic on.
         let faceRectangles = detectFaces(in: source)
+        let bodyRectangles = detectBodies(in: source)
 
         switch mode {
         case .sharpness:
@@ -164,7 +168,8 @@ actor FocusAnalyzer {
             motionBlur: motionReport,
             motionOverlay: motionOverlay,
             isSensitive: isSensitive,
-            faceRectangles: faceRectangles
+            faceRectangles: faceRectangles,
+            bodyRectangles: bodyRectangles
         )
     }
 
@@ -183,18 +188,37 @@ actor FocusAnalyzer {
             return []
         }
         guard let observations = request.results as? [VNFaceObservation] else { return [] }
-        let extent = image.extent
-        return observations.map { obs -> CGRect in
-            // VNFaceObservation.boundingBox is normalized 0..1, Y-up — same
-            // convention as CIImage extent, so the conversion is just scale +
-            // translate by the source image's origin.
-            CGRect(
-                x: extent.minX + obs.boundingBox.minX * extent.width,
-                y: extent.minY + obs.boundingBox.minY * extent.height,
-                width: obs.boundingBox.width * extent.width,
-                height: obs.boundingBox.height * extent.height
-            )
+        return observations.map { denormalize($0.boundingBox, in: image.extent) }
+    }
+
+    /// Run Vision's full-body human rectangles request. `upperBodyOnly = false`
+    /// makes the boxes cover from head to feet rather than just torso/head.
+    private func detectBodies(in image: CIImage) -> [CGRect] {
+        guard let cgImage = ciContext.createCGImage(image, from: image.extent) else {
+            return []
         }
+        let request = VNDetectHumanRectanglesRequest()
+        request.upperBodyOnly = false
+        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+        do {
+            try handler.perform([request])
+        } catch {
+            return []
+        }
+        guard let observations = request.results as? [VNHumanObservation] else { return [] }
+        return observations.map { denormalize($0.boundingBox, in: image.extent) }
+    }
+
+    /// Vision boundingBoxes are normalized 0..1 with Y-up — the same
+    /// convention as CIImage extent — so the conversion is just scale +
+    /// translate by the source image's origin.
+    private func denormalize(_ box: CGRect, in extent: CGRect) -> CGRect {
+        CGRect(
+            x: extent.minX + box.minX * extent.width,
+            y: extent.minY + box.minY * extent.height,
+            width: box.width * extent.width,
+            height: box.height * extent.height
+        )
     }
 
     /// Estimate the focal plane depth as the median of depth values at high-sharpness pixels.
