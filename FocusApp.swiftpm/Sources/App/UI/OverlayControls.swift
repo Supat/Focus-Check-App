@@ -97,6 +97,7 @@ struct OverlayControls: View {
     @ViewBuilder
     private var mosaicToggleRow: some View {
         HStack {
+            Spacer()
             Label("Mosaic sensitive content", systemImage: "eye.slash")
                 .font(.caption)
             Toggle("", isOn: $viewModel.mosaicEnabled)
@@ -104,7 +105,6 @@ struct OverlayControls: View {
                 .toggleStyle(.switch)
                 .controlSize(.small)
                 .disabled(!viewModel.sensitiveContentAvailability.isReady)
-            Spacer()
         }
     }
 
