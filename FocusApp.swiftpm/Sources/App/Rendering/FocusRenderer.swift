@@ -214,7 +214,11 @@ final class FocusRenderer {
 
     private func maskComposite(base: CIImage, sharpness: CIImage?, depth: CIImage?,
                                threshold: CGFloat, tint: CIColor) -> CIImage {
-        guard let mask = maskForMode(sharpness: sharpness, depth: depth, threshold: threshold)
+        // Mask mode runs with a gentler effective threshold than the slider shows —
+        // Peaking's edge-gated display is naturally sparse, but Mask benefits from
+        // wider coverage so the translucent fill communicates in-focus regions.
+        let adjusted = threshold * 0.7
+        guard let mask = maskForMode(sharpness: sharpness, depth: depth, threshold: adjusted)
         else { return base }
         let coloredTint = CIColor(red: tint.red, green: tint.green, blue: tint.blue, alpha: 0.5)
         let colored = CIImage(color: coloredTint).cropped(to: base.extent)
