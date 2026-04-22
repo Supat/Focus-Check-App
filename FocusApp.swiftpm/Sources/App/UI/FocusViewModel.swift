@@ -64,14 +64,49 @@ final class FocusViewModel: ObservableObject {
     @Published var zoomScale: CGFloat = 1.0
     @Published var zoomAnchor: CGPoint = CGPoint(x: 0.5, y: 0.5)
 
-    /// Double-tap handler: toggle between fit-to-view and 2.5x centered at `normalized`.
+    private var zoomAnimationTask: Task<Void, Never>?
+
+    /// Double-tap handler: toggle between fit-to-view and 2.5x centered at `normalized`,
+    /// interpolating the transition over ~250 ms. SwiftUI's withAnimation doesn't apply
+    /// here because MTKView reads the raw values in its render callback rather than
+    /// through SwiftUI's transaction system, so we drive the animation manually.
     func toggleZoom(at normalized: CGPoint) {
-        if zoomScale > 1.001 {
-            zoomScale = 1.0
-            zoomAnchor = CGPoint(x: 0.5, y: 0.5)
-        } else {
-            zoomScale = 2.5
-            zoomAnchor = normalized
+        let zoomedIn = zoomScale > 1.001
+        let targetScale: CGFloat = zoomedIn ? 1.0 : 2.5
+        let targetAnchor: CGPoint = zoomedIn
+            ? CGPoint(x: 0.5, y: 0.5)
+            : normalized
+        animateZoom(toScale: targetScale, toAnchor: targetAnchor)
+    }
+
+    private func animateZoom(toScale target: CGFloat, toAnchor targetAnchor: CGPoint) {
+        zoomAnimationTask?.cancel()
+
+        let startScale = zoomScale
+        let startAnchor = zoomAnchor
+        let duration: Double = 0.25
+        let stepDuration: Double = 1.0 / 60.0
+        let steps = max(1, Int(duration / stepDuration))
+        let stepNS = UInt64(stepDuration * 1_000_000_000)
+
+        zoomAnimationTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            for step in 1...steps {
+                if Task.isCancelled { return }
+                let t = Double(step) / Double(steps)
+                // Symmetric quadratic ease-in-out.
+                let eased = CGFloat(t < 0.5 ? 2 * t * t : 1 - 2 * (1 - t) * (1 - t))
+                self.zoomScale = startScale + (target - startScale) * eased
+                self.zoomAnchor = CGPoint(
+                    x: startAnchor.x + (targetAnchor.x - startAnchor.x) * eased,
+                    y: startAnchor.y + (targetAnchor.y - startAnchor.y) * eased
+                )
+                try? await Task.sleep(nanoseconds: stepNS)
+            }
+            if !Task.isCancelled {
+                self.zoomScale = target
+                self.zoomAnchor = targetAnchor
+            }
         }
     }
 
@@ -166,6 +201,8 @@ final class FocusViewModel: ObservableObject {
     func clear() {
         currentTask?.cancel()
         currentTask = nil
+        zoomAnimationTask?.cancel()
+        zoomAnimationTask = nil
         sourceImage = nil
         sharpnessOverlay = nil
         depthOverlay = nil
