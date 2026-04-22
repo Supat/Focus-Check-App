@@ -95,63 +95,13 @@ struct OverlayControls: View {
 
     @ViewBuilder
     private var mosaicToggleRow: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Toggle(isOn: $viewModel.mosaicEnabled) {
-                    Label("Mosaic sensitive content", systemImage: "eye.slash")
-                        .font(.caption)
-                }
-                .toggleStyle(.switch)
-                .controlSize(.small)
-                .disabled(!viewModel.sensitiveContentAvailability.isReady)
-
-                Spacer()
-
-                Button {
-                    viewModel.refreshSensitiveContentAvailability()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.caption)
-                }
-                .buttonStyle(.borderless)
-            }
-
-            // Always surface the raw SCSensitivityAnalyzer.analysisPolicy —
-            // the commonest failure mode is a non-obvious one (policy stays
-            // .disabled despite the Screen Time toggle being on, device
-            // not provisioned for Communication Safety, etc.).
-            Text(viewModel.sensitiveContentAvailability.debugLabel)
-                .font(.caption2.monospaced())
-                .foregroundStyle(.tertiary)
-
-            switch viewModel.sensitiveContentAvailability {
-            case .frameworkMissing:
-                Text("SensitiveContentAnalysis framework unavailable on this OS.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            case .disabled:
-                Text("Enable Settings → Screen Time → Communication Safety, then tap ↻.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            case .simpleInterventions, .descriptiveInterventions:
-                if viewModel.sourceImage != nil {
-                    switch viewModel.isSensitive {
-                    case .some(true):
-                        Label("Classified as sensitive", systemImage: "exclamationmark.shield.fill")
-                            .font(.caption2)
-                            .foregroundStyle(.orange)
-                    case .some(false):
-                        Label("Classified as safe", systemImage: "checkmark.shield")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    case .none:
-                        Label("Not analysed", systemImage: "ellipsis.circle")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
+        Toggle(isOn: $viewModel.mosaicEnabled) {
+            Label("Mosaic sensitive content", systemImage: "eye.slash")
+                .font(.caption)
         }
+        .toggleStyle(.switch)
+        .controlSize(.small)
+        .disabled(!viewModel.sensitiveContentAvailability.isReady)
     }
 
     @ViewBuilder
