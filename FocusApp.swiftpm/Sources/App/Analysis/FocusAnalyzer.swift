@@ -401,8 +401,8 @@ actor FocusAnalyzer {
 
             // Width covers both eyes plus padding; height proportional so the
             // bar reads as a proper redaction strip rather than a hair-thin line.
-            let barWidth = eyeDistance * 1.4
-            let barHeight = eyeDistance * 0.3
+            let barWidth = eyeDistance * 1.75
+            let barHeight = eyeDistance * 0.33
 
             let center = CGPoint(
                 x: (leftCenter.x + rightCenter.x) / 2,
