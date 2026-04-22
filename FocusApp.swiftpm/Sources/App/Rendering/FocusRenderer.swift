@@ -153,7 +153,27 @@ final class FocusRenderer {
 
     private func heatmapComposite(base: CIImage, sharpness: CIImage?, depth: CIImage?) -> CIImage {
         guard let magnitude = sharpness ?? depth else { return base }
-        let mapped = viridis(magnitude.clampedToExtent().cropped(to: base.extent))
+        let cropped = magnitude.clampedToExtent().cropped(to: base.extent)
+
+        // Sharpness/depth maps are single-channel (R-only); G and B are zero. Broadcast R into
+        // all three channels so the viridis CIColorCube samples at (v, v, v) — otherwise the
+        // lookup only probes one axis and every pixel collapses to the purple low-end of viridis.
+        // Also apply a gain since raw Laplacian values typically sit in ~0..0.2.
+        let gain: CGFloat = 6.0
+        let broadcast = CIFilter.colorMatrix()
+        broadcast.inputImage = cropped
+        broadcast.rVector = CIVector(x: gain, y: 0, z: 0, w: 0)
+        broadcast.gVector = CIVector(x: gain, y: 0, z: 0, w: 0)
+        broadcast.bVector = CIVector(x: gain, y: 0, z: 0, w: 0)
+        broadcast.aVector = CIVector(x: 0, y: 0, z: 0, w: 1)
+
+        let normalized = (broadcast.outputImage ?? cropped).applyingFilter("CIColorClamp", parameters: [
+            "inputMinComponents": CIVector(x: 0, y: 0, z: 0, w: 0),
+            "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1)
+        ])
+
+        let mapped = viridis(normalized)
+
         // 60% opacity overlay — reads well without fully hiding the photo.
         let alpha = CIFilter.colorMatrix()
         alpha.inputImage = mapped
