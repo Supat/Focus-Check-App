@@ -109,10 +109,10 @@ final class FocusRenderer {
             switch snapshot.mosaicMode {
             case .face:
                 guard !snapshot.faces.isEmpty else { return source }
-                return regionMosaic(source: source, regions: snapshot.faces)
+                return regionMosaic(source: source, regions: snapshot.faces, capDivisor: 32)
             case .body:
                 guard !snapshot.bodies.isEmpty else { return source }
-                return regionMosaic(source: source, regions: snapshot.bodies)
+                return regionMosaic(source: source, regions: snapshot.bodies, capDivisor: 64)
             case .whole:
                 return wholeMosaic(source: source)
             }
@@ -503,12 +503,11 @@ final class FocusRenderer {
         return (stops.last!.1, stops.last!.2, stops.last!.3)
     }
 
-    /// Pixelate the whole source. Block size scales with the longer side of
-    /// the source so the coarseness reads consistently across image sizes.
+    /// Pixelate the whole source. Block size is `longer_side / 64`.
     private func wholeMosaic(source: CIImage) -> CIImage {
         let pixelate = CIFilter.pixellate()
         pixelate.inputImage = source.clampedToExtent()
-        pixelate.scale = Float(max(source.extent.width, source.extent.height) / 32)
+        pixelate.scale = Float(max(source.extent.width, source.extent.height) / 64)
         pixelate.center = CGPoint(x: source.extent.midX, y: source.extent.midY)
         return (pixelate.outputImage ?? source).cropped(to: source.extent)
     }
@@ -517,9 +516,10 @@ final class FocusRenderer {
     /// Operates on the source image so downstream fit+zoom doesn't have to
     /// transform the rectangles. Block size scales with the smallest region
     /// so blocks stay roughly proportional to what they're covering, capped
-    /// to a fraction of the source so very large body boxes don't end up
-    /// with absurdly chunky blocks.
-    private func regionMosaic(source: CIImage, regions: [CGRect]) -> CIImage {
+    /// to `longer_side / capDivisor` — a larger capDivisor = smaller blocks.
+    private func regionMosaic(source: CIImage,
+                              regions: [CGRect],
+                              capDivisor: CGFloat) -> CIImage {
         guard let smallest = regions.min(by: {
             $0.width * $0.height < $1.width * $1.height
         }) else { return source }
@@ -527,7 +527,7 @@ final class FocusRenderer {
         let pixelate = CIFilter.pixellate()
         pixelate.inputImage = source.clampedToExtent()
         let regionBased = min(smallest.width, smallest.height) * 0.08
-        let cap = max(source.extent.width, source.extent.height) / 32
+        let cap = max(source.extent.width, source.extent.height) / capDivisor
         pixelate.scale = Float(max(min(regionBased, cap), 4))
         pixelate.center = CGPoint(x: source.extent.midX, y: source.extent.midY)
         let pixelated = (pixelate.outputImage ?? source).cropped(to: source.extent)
