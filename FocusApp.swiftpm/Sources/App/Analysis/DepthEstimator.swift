@@ -12,8 +12,12 @@ struct DepthEstimator {
     private let model: MLModel
 
     init() throws {
-        guard let url = Bundle.module.url(forResource: "DepthAnythingV2SmallF16",
-                                          withExtension: "mlmodelc") else {
+        // `.iOSApplication` products bundle `.copy` resources into the main bundle.
+        // We avoid `Bundle.module` because it's only synthesized when the target
+        // declares at least one resource — and the `.mlmodelc` copy line in
+        // `Package.swift` is left commented until the user drops the model in.
+        guard let url = Bundle.main.url(forResource: "DepthAnythingV2SmallF16",
+                                        withExtension: "mlmodelc") else {
             throw AnalysisError.modelMissing
         }
         let config = MLModelConfiguration()
