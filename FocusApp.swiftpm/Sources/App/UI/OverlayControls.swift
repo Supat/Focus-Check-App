@@ -100,6 +100,16 @@ struct OverlayControls: View {
             Spacer()
             Label("Mosaic sensitive content", systemImage: "eye.slash")
                 .font(.caption)
+            Picker("Mosaic mode", selection: $viewModel.mosaicMode) {
+                ForEach(MosaicMode.allCases) { mode in
+                    Text(mode.rawValue).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .controlSize(.small)
+            .frame(width: 130)
+            .disabled(!viewModel.mosaicEnabled || !viewModel.sensitiveContentAvailability.isReady)
             Toggle("", isOn: $viewModel.mosaicEnabled)
                 .labelsHidden()
                 .toggleStyle(.switch)

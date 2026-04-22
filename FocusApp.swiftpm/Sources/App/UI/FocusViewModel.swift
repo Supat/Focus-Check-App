@@ -45,6 +45,13 @@ enum DepthInstallState: Equatable {
     case failed(String)
 }
 
+/// Which region the mosaic covers when the user has the mosaic toggle on.
+enum MosaicMode: String, CaseIterable, Identifiable {
+    case face  = "Face"
+    case whole = "Whole"
+    var id: String { rawValue }
+}
+
 @MainActor
 final class FocusViewModel: ObservableObject {
     // Scrubbable display state — cheap, no re-analysis.
@@ -146,6 +153,7 @@ final class FocusViewModel: ObservableObject {
     /// User-controlled mosaic toggle. Defaults on — protective default so
     /// sensitive content isn't displayed until the user explicitly opts in.
     @Published var mosaicEnabled: Bool = true
+    @Published var mosaicMode: MosaicMode = .face
     @Published var sensitiveContentAvailability: SensitiveContentAvailability = .frameworkMissing
     /// Install state for the NSFW fallback model. Reuses DepthInstallState —
     /// the shape (notInstalled / downloading / installed / failed) is generic.

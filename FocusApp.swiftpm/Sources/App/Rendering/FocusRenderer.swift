@@ -83,7 +83,8 @@ final class FocusRenderer {
                        color: Color, focalPlane: Float?,
                        zoomScale: CGFloat, zoomAnchor: CGPoint,
                        sharpness: CIImage?, depth: CIImage?, motion: CIImage?,
-                       overlayHidden: Bool, mosaic: Bool, faces: [CGRect]) =
+                       overlayHidden: Bool, mosaic: Bool, mosaicMode: MosaicMode,
+                       faces: [CGRect]) =
             MainActor.assumeIsolated {
                 let applyMosaic = (viewModel.isSensitive == true) && viewModel.mosaicEnabled
                 return (viewModel.sourceImage, viewModel.style, viewModel.threshold,
@@ -91,20 +92,27 @@ final class FocusRenderer {
                         viewModel.zoomScale, viewModel.zoomAnchor,
                         viewModel.sharpnessOverlay, viewModel.depthOverlay,
                         viewModel.motionOverlay,
-                        viewModel.overlayHidden, applyMosaic, viewModel.faceRectangles)
+                        viewModel.overlayHidden, applyMosaic, viewModel.mosaicMode,
+                        viewModel.faceRectangles)
             }
 
         guard let source = snapshot.source else {
             return CIImage(color: CIColor.black).cropped(to: CGRect(origin: .zero, size: drawableSize))
         }
 
-        // Sensitive content + mosaic toggle on → pixelate just the detected
-        // face regions of the source before fit+zoom. Doing the mosaic at
-        // source resolution lets the existing fit/zoom transform handle the
-        // resulting image without any rect-coordinate gymnastics.
+        // Sensitive content + mosaic toggle on → pixelate either just the
+        // detected face regions or the whole frame, depending on mode.
+        // Applied at source resolution so fit+zoom handles the result
+        // without any rect-coordinate gymnastics.
         let baseSource: CIImage = {
-            guard snapshot.mosaic, !snapshot.faces.isEmpty else { return source }
-            return faceMosaic(source: source, faces: snapshot.faces)
+            guard snapshot.mosaic else { return source }
+            switch snapshot.mosaicMode {
+            case .face:
+                guard !snapshot.faces.isEmpty else { return source }
+                return faceMosaic(source: source, faces: snapshot.faces)
+            case .whole:
+                return wholeMosaic(source: source)
+            }
         }()
 
         // Apply fit + zoom to the base AND both overlays using identical parameters
@@ -490,6 +498,16 @@ final class FocusRenderer {
             }
         }
         return (stops.last!.1, stops.last!.2, stops.last!.3)
+    }
+
+    /// Pixelate the whole source. Block size scales with the longer side of
+    /// the source so the coarseness reads consistently across image sizes.
+    private func wholeMosaic(source: CIImage) -> CIImage {
+        let pixelate = CIFilter.pixellate()
+        pixelate.inputImage = source.clampedToExtent()
+        pixelate.scale = Float(max(source.extent.width, source.extent.height) / 32)
+        pixelate.center = CGPoint(x: source.extent.midX, y: source.extent.midY)
+        return (pixelate.outputImage ?? source).cropped(to: source.extent)
     }
 
     /// Pixelate only the face bounding boxes; everything else stays untouched.
