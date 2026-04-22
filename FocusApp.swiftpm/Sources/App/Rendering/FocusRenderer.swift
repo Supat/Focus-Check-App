@@ -83,7 +83,7 @@ final class FocusRenderer {
                        color: Color, focalPlane: Float?,
                        zoomScale: CGFloat, zoomAnchor: CGPoint,
                        sharpness: CIImage?, depth: CIImage?, motion: CIImage?,
-                       overlayHidden: Bool, mosaic: Bool) =
+                       overlayHidden: Bool, mosaic: Bool, faces: [CGRect]) =
             MainActor.assumeIsolated {
                 let applyMosaic = (viewModel.isSensitive == true) && viewModel.mosaicEnabled
                 return (viewModel.sourceImage, viewModel.style, viewModel.threshold,
@@ -91,32 +91,31 @@ final class FocusRenderer {
                         viewModel.zoomScale, viewModel.zoomAnchor,
                         viewModel.sharpnessOverlay, viewModel.depthOverlay,
                         viewModel.motionOverlay,
-                        viewModel.overlayHidden, applyMosaic)
+                        viewModel.overlayHidden, applyMosaic, viewModel.faceRectangles)
             }
 
         guard let source = snapshot.source else {
             return CIImage(color: CIColor.black).cropped(to: CGRect(origin: .zero, size: drawableSize))
         }
 
+        // Sensitive content + mosaic toggle on → pixelate just the detected
+        // face regions of the source before fit+zoom. Doing the mosaic at
+        // source resolution lets the existing fit/zoom transform handle the
+        // resulting image without any rect-coordinate gymnastics.
+        let baseSource: CIImage = {
+            guard snapshot.mosaic, !snapshot.faces.isEmpty else { return source }
+            return faceMosaic(source: source, faces: snapshot.faces)
+        }()
+
         // Apply fit + zoom to the base AND both overlays using identical parameters
         // so they stay spatially aligned. The overlays are already at source.extent
         // (upscaled by FocusAnalyzer), so the same transform maps them 1:1.
         let zoom = snapshot.zoomScale
         let anchor = snapshot.zoomAnchor
-        let fitted = fit(image: source, into: drawableSize, zoom: zoom, anchor: anchor)
+        let fitted = fit(image: baseSource, into: drawableSize, zoom: zoom, anchor: anchor)
 
-        // Sensitive content + mosaic toggle on → pixelate the whole frame and
-        // skip overlay compositing. Apple's SensitiveContentAnalysis is
-        // image-level, so there's no region to mosaic just that part.
-        if snapshot.mosaic {
-            let pixelate = CIFilter.pixellate()
-            pixelate.inputImage = fitted
-            pixelate.scale = Float(max(drawableSize.width, drawableSize.height) / 32)
-            pixelate.center = CGPoint(x: fitted.extent.midX, y: fitted.extent.midY)
-            return (pixelate.outputImage ?? fitted).cropped(to: fitted.extent)
-        }
-
-        // Press-and-hold compare mode: return the base photo only.
+        // Press-and-hold compare mode: return the base photo only (still
+        // mosaiced if applicable).
         if snapshot.overlayHidden { return fitted }
 
         let sharpnessOverlay = snapshot.sharpness.map {
@@ -491,6 +490,42 @@ final class FocusRenderer {
             }
         }
         return (stops.last!.1, stops.last!.2, stops.last!.3)
+    }
+
+    /// Pixelate only the face bounding boxes; everything else stays untouched.
+    /// Operates on the source image so downstream fit+zoom doesn't have to
+    /// transform the rectangles. Block size scales with the smallest face so
+    /// blocks stay roughly proportional to what they're covering.
+    private func faceMosaic(source: CIImage, faces: [CGRect]) -> CIImage {
+        guard let smallestFace = faces.min(by: {
+            $0.width * $0.height < $1.width * $1.height
+        }) else { return source }
+
+        let pixelate = CIFilter.pixellate()
+        pixelate.inputImage = source.clampedToExtent()
+        let blockSize = min(smallestFace.width, smallestFace.height) * 0.08
+        pixelate.scale = Float(max(blockSize, 4))
+        pixelate.center = CGPoint(x: source.extent.midX, y: source.extent.midY)
+        let pixelated = (pixelate.outputImage ?? source).cropped(to: source.extent)
+
+        // Mask: black canvas with white rects for each face. The blend filter
+        // reads the red channel as the mask weight.
+        var mask: CIImage = CIImage(color: CIColor.black).cropped(to: source.extent)
+        for face in faces {
+            // Expand 10% so hair / chin / ears are also covered.
+            let expanded = face.insetBy(dx: -face.width * 0.1, dy: -face.height * 0.1)
+            let whiteBox = CIImage(color: CIColor.white).cropped(to: expanded)
+            let stack = CIFilter.sourceOverCompositing()
+            stack.inputImage = whiteBox
+            stack.backgroundImage = mask
+            mask = stack.outputImage ?? mask
+        }
+
+        let blend = CIFilter.blendWithMask()
+        blend.inputImage = pixelated
+        blend.backgroundImage = source
+        blend.maskImage = mask
+        return (blend.outputImage ?? source).cropped(to: source.extent)
     }
 
     private func fit(image: CIImage, into size: CGSize,

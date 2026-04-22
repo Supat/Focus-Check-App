@@ -2,6 +2,7 @@ import Metal
 import CoreImage
 import CoreImage.CIFilterBuiltins
 import ImageIO
+import Vision
 
 /// Owns all heavyweight GPU/ML resources and serializes access through actor isolation.
 /// CLAUDE.md rule: MPS / CIContext / MLModel calls live on this actor.
@@ -24,6 +25,10 @@ actor FocusAnalyzer {
         /// Apple's Sensitive Content Analysis result. nil when the framework
         /// is unavailable or Communication Safety is off in Screen Time.
         var isSensitive: Bool?
+        /// Face bounding boxes in source-extent coordinates (CIImage Y-up).
+        /// Empty array when no faces detected. Used by the renderer to mosaic
+        /// only face regions when sensitive content is flagged.
+        var faceRectangles: [CGRect] = []
     }
 
     private let device: MTLDevice
@@ -126,6 +131,10 @@ actor FocusAnalyzer {
         // async; returns nil if Communication Safety is disabled.
         let isSensitive = await sensitiveContent.check(image: source, ciContext: ciContext)
 
+        // Face rectangles — used by the mosaic renderer. Detect on every
+        // analysis so the data is ready when the user toggles mosaic on.
+        let faceRectangles = detectFaces(in: source)
+
         switch mode {
         case .sharpness:
             let tex = try laplacian.sharpnessMap(from: source, ciContext: ciContext)
@@ -154,8 +163,38 @@ actor FocusAnalyzer {
             focalPlane: focalPlane,
             motionBlur: motionReport,
             motionOverlay: motionOverlay,
-            isSensitive: isSensitive
+            isSensitive: isSensitive,
+            faceRectangles: faceRectangles
         )
+    }
+
+    /// Run Vision's face-rectangles request and convert the normalized
+    /// bounding boxes back into the image's CIImage extent space. Returns
+    /// an empty array if rendering or detection fails.
+    private func detectFaces(in image: CIImage) -> [CGRect] {
+        guard let cgImage = ciContext.createCGImage(image, from: image.extent) else {
+            return []
+        }
+        let request = VNDetectFaceRectanglesRequest()
+        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+        do {
+            try handler.perform([request])
+        } catch {
+            return []
+        }
+        guard let observations = request.results as? [VNFaceObservation] else { return [] }
+        let extent = image.extent
+        return observations.map { obs -> CGRect in
+            // VNFaceObservation.boundingBox is normalized 0..1, Y-up — same
+            // convention as CIImage extent, so the conversion is just scale +
+            // translate by the source image's origin.
+            CGRect(
+                x: extent.minX + obs.boundingBox.minX * extent.width,
+                y: extent.minY + obs.boundingBox.minY * extent.height,
+                width: obs.boundingBox.width * extent.width,
+                height: obs.boundingBox.height * extent.height
+            )
+        }
     }
 
     /// Estimate the focal plane depth as the median of depth values at high-sharpness pixels.

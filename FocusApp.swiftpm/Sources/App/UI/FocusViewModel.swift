@@ -142,6 +142,7 @@ final class FocusViewModel: ObservableObject {
     @Published var motionOverlay: CIImage?
     @Published var exposureInfo: ExposureInfo?
     @Published var isSensitive: Bool?
+    @Published var faceRectangles: [CGRect] = []
     /// User-controlled mosaic toggle. Defaults on — protective default so
     /// sensitive content isn't displayed until the user explicitly opts in.
     @Published var mosaicEnabled: Bool = true
@@ -251,6 +252,7 @@ final class FocusViewModel: ObservableObject {
         motionBlur = nil
         motionOverlay = nil
         isSensitive = nil
+        faceRectangles = []
         exposureInfo = ExposureInfo.read(from: url)
         sourceName = name
         refreshSensitiveContentAvailability()
@@ -272,6 +274,7 @@ final class FocusViewModel: ObservableObject {
                     self?.motionBlur = overlays.motionBlur
                     self?.motionOverlay = overlays.motionOverlay
                     self?.isSensitive = overlays.isSensitive
+                    self?.faceRectangles = overlays.faceRectangles
                     self?.isAnalyzing = false
                 }
             } catch is CancellationError {
@@ -298,6 +301,7 @@ final class FocusViewModel: ObservableObject {
         motionBlur = nil
         motionOverlay = nil
         isSensitive = nil
+        faceRectangles = []
         exposureInfo = nil
         errorMessage = nil
         isAnalyzing = false
@@ -322,6 +326,7 @@ final class FocusViewModel: ObservableObject {
                     self?.motionBlur = overlays.motionBlur
                     self?.motionOverlay = overlays.motionOverlay
                     self?.isSensitive = overlays.isSensitive
+                    self?.faceRectangles = overlays.faceRectangles
                     self?.isAnalyzing = false
                 }
             } catch is CancellationError {
