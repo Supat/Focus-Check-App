@@ -339,6 +339,49 @@ final class FocusViewModel: ObservableObject {
         zoomAnchor = CGPoint(x: 0.5, y: 0.5)
     }
 
+    /// Render the current image + overlays at source resolution and write
+    /// a PNG file to the temp directory. Returns the URL so ContentView
+    /// can feed it to a ShareLink. Throws if no image is loaded or the
+    /// encode fails.
+    func exportPNG() async throws -> URL {
+        guard let source = sourceImage else { throw AnalysisError.imageDecodeFailed }
+
+        let inputs = FocusCompositeInputs(
+            source: source,
+            style: style,
+            threshold: threshold,
+            tint: CIColor(color: overlayColor) ?? CIColor(red: 1, green: 0.85, blue: 0),
+            focalPlane: focalPlane,
+            sharpness: sharpnessOverlay,
+            depth: depthOverlay,
+            motion: motionOverlay,
+            mosaic: (isSensitive == true) && mosaicEnabled,
+            mosaicMode: mosaicMode,
+            faces: faceRectangles,
+            bodies: bodyRectangles,
+            groins: groinRectangles,
+            eyes: eyeBars,
+            chests: chestRectangles
+        )
+
+        let baseName: String
+        if let name = sourceName, !name.isEmpty {
+            let stripped = URL(fileURLWithPath: name)
+                .deletingPathExtension()
+                .lastPathComponent
+            baseName = stripped.isEmpty ? "FocusCheck" : stripped
+        } else {
+            baseName = "FocusCheck"
+        }
+        let suffix = UUID().uuidString.prefix(8)
+        let destination = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(baseName)-\(suffix)")
+            .appendingPathExtension("png")
+
+        try await analyzer.exportPNG(inputs: inputs, destination: destination)
+        return destination
+    }
+
     func reanalyze() {
         guard sourceImage != nil else { return }
         currentTask?.cancel()

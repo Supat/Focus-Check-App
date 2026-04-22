@@ -99,6 +99,42 @@ actor FocusAnalyzer {
         depthEstimator = try DepthEstimator()
     }
 
+    /// Render the composite for `inputs` at source resolution via the
+    /// analyzer's CIContext, encode as PNG, and write to `destination`.
+    /// Uses sRGB for the output so the file looks right on generic image
+    /// viewers — extended Display P3 is the working space but PNGs in the
+    /// wild are overwhelmingly sRGB.
+    func exportPNG(inputs: FocusCompositeInputs, destination: URL) throws {
+        let composite = FocusRenderer.composite(
+            inputs,
+            drawableSize: inputs.source.extent.size,
+            overlayHidden: false,
+            zoomScale: 1,
+            zoomAnchor: CGPoint(x: 0.5, y: 0.5)
+        )
+        let cropped = composite.cropped(to: inputs.source.extent)
+        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
+        guard let cgImage = ciContext.createCGImage(
+            cropped, from: cropped.extent,
+            format: .RGBA8,
+            colorSpace: colorSpace
+        ) else {
+            throw AnalysisError.coreImageFailure
+        }
+
+        guard let dest = CGImageDestinationCreateWithURL(
+            destination as CFURL,
+            "public.png" as CFString,
+            1, nil
+        ) else {
+            throw AnalysisError.coreImageFailure
+        }
+        CGImageDestinationAddImage(dest, cgImage, nil)
+        guard CGImageDestinationFinalize(dest) else {
+            throw AnalysisError.coreImageFailure
+        }
+    }
+
     /// Decode a URL into the working CIImage. RAW goes through `CIRAWFilter`; everything else
     /// loads via `CIImage(contentsOf:)` which respects EXIF orientation.
     func loadImage(from url: URL) throws -> CIImage {

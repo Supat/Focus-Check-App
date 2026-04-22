@@ -1,7 +1,14 @@
 import SwiftUI
 
+private struct ExportedImage: Identifiable {
+    let url: URL
+    var id: String { url.absoluteString }
+}
+
 struct ContentView: View {
     @StateObject private var viewModel = FocusViewModel()
+    @State private var exportedImage: ExportedImage?
+    @State private var isExporting = false
 
     var body: some View {
         NavigationStack {
@@ -19,12 +26,18 @@ struct ContentView: View {
                                 Label("Remove photo", systemImage: "xmark.circle")
                             }
                         }
+                        ToolbarItem(placement: .primaryAction) {
+                            exportButton
+                        }
                     }
                     ToolbarItem(placement: .primaryAction) {
                         ImageImporter { url, name in
                             viewModel.load(url: url, name: name)
                         }
                     }
+                }
+                .sheet(item: $exportedImage) { item in
+                    ShareSheet(url: item.url)
                 }
                 .overlay(alignment: .top) {
                     if let error = viewModel.errorMessage {
@@ -100,6 +113,36 @@ struct ContentView: View {
                 .padding()
                 .background(.bar)
         }
+    }
+
+    /// Triggers an async composite + PNG encode on the view model, then
+    /// presents the system share sheet so the user can save to Files,
+    /// Photos, or send via any registered share target.
+    private var exportButton: some View {
+        Button {
+            guard !isExporting else { return }
+            isExporting = true
+            Task {
+                defer { Task { @MainActor in isExporting = false } }
+                do {
+                    let url = try await viewModel.exportPNG()
+                    await MainActor.run {
+                        exportedImage = ExportedImage(url: url)
+                    }
+                } catch {
+                    await MainActor.run {
+                        viewModel.errorMessage = error.localizedDescription
+                    }
+                }
+            }
+        } label: {
+            if isExporting {
+                ProgressView().controlSize(.small)
+            } else {
+                Label("Export PNG", systemImage: "square.and.arrow.up")
+            }
+        }
+        .disabled(isExporting)
     }
 
     @ViewBuilder
@@ -196,4 +239,18 @@ struct ContentView: View {
             return true
         }
     }
+}
+
+/// Thin UIKit wrapper around UIActivityViewController — SwiftUI's ShareLink
+/// doesn't play well with URLs produced asynchronously after a user tap,
+/// since it expects the item to be known at tap time.
+private struct ShareSheet: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: [url], applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController,
+                                context: Context) {}
 }
