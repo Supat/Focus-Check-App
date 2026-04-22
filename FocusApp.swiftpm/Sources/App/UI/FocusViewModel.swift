@@ -136,6 +136,7 @@ final class FocusViewModel: ObservableObject {
     @Published var sharpnessOverlay: CIImage?
     @Published var depthOverlay: CIImage?
     @Published var focalPlane: Float?
+    @Published var motionBlur: MotionBlurReport?
     @Published var isAnalyzing: Bool = false
     @Published var errorMessage: String?
     @Published var depthAvailable: Bool = false
@@ -188,6 +189,7 @@ final class FocusViewModel: ObservableObject {
         sharpnessOverlay = nil
         depthOverlay = nil
         focalPlane = nil
+        motionBlur = nil
         sourceName = name
 
         let mode = self.mode
@@ -204,6 +206,7 @@ final class FocusViewModel: ObservableObject {
                     self?.sharpnessOverlay = overlays.sharpness
                     self?.depthOverlay = overlays.depth
                     self?.focalPlane = overlays.focalPlane
+                    self?.motionBlur = overlays.motionBlur
                     self?.isAnalyzing = false
                 }
             } catch is CancellationError {
@@ -227,6 +230,7 @@ final class FocusViewModel: ObservableObject {
         sharpnessOverlay = nil
         depthOverlay = nil
         focalPlane = nil
+        motionBlur = nil
         errorMessage = nil
         isAnalyzing = false
         zoomScale = 1.0
@@ -247,6 +251,7 @@ final class FocusViewModel: ObservableObject {
                     self?.sharpnessOverlay = overlays.sharpness
                     self?.depthOverlay = overlays.depth
                     self?.focalPlane = overlays.focalPlane
+                    self?.motionBlur = overlays.motionBlur
                     self?.isAnalyzing = false
                 }
             } catch is CancellationError {

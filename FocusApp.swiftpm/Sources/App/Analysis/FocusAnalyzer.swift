@@ -14,12 +14,16 @@ actor FocusAnalyzer {
         /// Focus Error renderer to classify out-of-focus pixels as too-close vs.
         /// too-far relative to this scalar focal plane.
         var focalPlane: Float?
+        /// Global motion-blur signature from FFT analysis. `nil` if detection
+        /// failed or the image is sharp / isotropically blurred.
+        var motionBlur: MotionBlurReport?
     }
 
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
     private let ciContext: CIContext
     private let laplacian: LaplacianVariance
+    private let motionBlur: MotionBlurDetector
     private var depthEstimator: DepthEstimator?
     private let downloader = DepthModelDownloader()
 
@@ -39,6 +43,7 @@ actor FocusAnalyzer {
             .cacheIntermediates: false
         ])
         self.laplacian = LaplacianVariance(device: device, commandQueue: queue)
+        self.motionBlur = MotionBlurDetector(ciContext: self.ciContext)
         self.depthEstimator = try? DepthEstimator()
     }
 
@@ -84,6 +89,9 @@ actor FocusAnalyzer {
         var sharpness: CIImage?
         var depth: CIImage?
         var focalPlane: Float?
+        // Motion blur is cheap (~10 ms) and independent of the selected mode —
+        // run it every time so the info badge stays accurate after mode changes.
+        let motionReport = motionBlur.detect(in: source)
 
         switch mode {
         case .sharpness:
@@ -107,7 +115,12 @@ actor FocusAnalyzer {
             }
         }
 
-        return Overlays(sharpness: sharpness, depth: depth, focalPlane: focalPlane)
+        return Overlays(
+            sharpness: sharpness,
+            depth: depth,
+            focalPlane: focalPlane,
+            motionBlur: motionReport
+        )
     }
 
     /// Estimate the focal plane depth as the median of depth values at high-sharpness pixels.

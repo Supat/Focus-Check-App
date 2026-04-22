@@ -82,12 +82,34 @@ struct ContentView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay(alignment: .top) { motionBlurBadge }
 
             Divider()
 
             OverlayControls(viewModel: viewModel)
                 .padding()
                 .background(.bar)
+        }
+    }
+
+    @ViewBuilder
+    private var motionBlurBadge: some View {
+        if let mb = viewModel.motionBlur, mb.isSignificant, viewModel.sourceImage != nil {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.left.and.right")
+                    // Math angle (CCW from east) → SwiftUI rotation (CW positive).
+                    .rotationEffect(.degrees(-Double(mb.angle)))
+                Text("Motion blur ≈ \(Int(mb.angle.rounded()))°")
+                    .font(.caption.monospacedDigit())
+                Text("\(Int((mb.confidence * 100).rounded()))%")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(.regularMaterial, in: Capsule())
+            .padding(.top, 8)
+            .transition(.move(edge: .top).combined(with: .opacity))
         }
     }
 
