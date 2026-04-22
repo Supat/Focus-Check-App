@@ -94,7 +94,12 @@ struct ContentView: View {
 
     @ViewBuilder
     private var motionBlurBadge: some View {
-        if let mb = viewModel.motionBlur, mb.isSignificant, viewModel.sourceImage != nil {
+        // Normally hide the badge for sub-threshold readings, but when the user
+        // has explicitly selected the Motion overlay, always surface the
+        // number so the angle and confidence are visible even on mild cases.
+        if let mb = viewModel.motionBlur,
+           viewModel.sourceImage != nil,
+           mb.isSignificant || viewModel.style == .motion {
             HStack(spacing: 6) {
                 Image(systemName: "arrow.left.and.right")
                     // Math angle (CCW from east) → SwiftUI rotation (CW positive).
