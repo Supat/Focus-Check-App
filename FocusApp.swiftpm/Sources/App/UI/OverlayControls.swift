@@ -99,12 +99,12 @@ struct OverlayControls: View {
         HStack {
             Label("Mosaic sensitive content", systemImage: "eye.slash")
                 .font(.caption)
-            Spacer()
             Toggle("", isOn: $viewModel.mosaicEnabled)
                 .labelsHidden()
                 .toggleStyle(.switch)
                 .controlSize(.small)
                 .disabled(!viewModel.sensitiveContentAvailability.isReady)
+            Spacer()
         }
     }
 

@@ -56,7 +56,9 @@ enum SensitiveContentAvailability: Equatable {
 struct SensitiveContentChecker {
 
     /// Probability ≥ this flags the image as sensitive in the NSFW fallback.
-    private let nsfwConfidenceThreshold: Float = 0.6
+    /// Lower = stricter (flags more content). 0.4 catches borderline cases the
+    /// CreateML-trained lovoo classifier returns moderate confidence on.
+    private let nsfwConfidenceThreshold: Float = 0.4
 
     var availability: SensitiveContentAvailability {
         #if canImport(SensitiveContentAnalysis)
