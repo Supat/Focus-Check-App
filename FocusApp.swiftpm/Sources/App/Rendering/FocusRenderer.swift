@@ -137,7 +137,8 @@ final class FocusRenderer {
             return peakingComposite(base: fitted, sharpness: sharpnessOverlay, depth: depthOverlay,
                                     threshold: threshold, tint: tint)
         case .heatmap:
-            return heatmapComposite(base: fitted, sharpness: sharpnessOverlay, depth: depthOverlay)
+            return heatmapComposite(base: fitted, sharpness: sharpnessOverlay, depth: depthOverlay,
+                                    threshold: threshold)
         case .mask:
             return maskComposite(base: fitted, sharpness: sharpnessOverlay, depth: depthOverlay,
                                  threshold: threshold, tint: tint)
@@ -202,36 +203,65 @@ final class FocusRenderer {
         return blend.outputImage ?? base
     }
 
-    private func heatmapComposite(base: CIImage, sharpness: CIImage?, depth: CIImage?) -> CIImage {
-        guard let magnitude = sharpness ?? depth else { return base }
+    private func heatmapComposite(base: CIImage, sharpness: CIImage?, depth: CIImage?,
+                                  threshold: CGFloat) -> CIImage {
+        // Combine the two signals. In Hybrid mode both are non-nil; take the
+        // per-pixel maximum so depth rescues smooth in-focus surfaces that the
+        // Laplacian underestimates (skin, sky, walls). Other modes just use
+        // whichever signal is present.
+        let magnitude: CIImage
+        switch (sharpness, depth) {
+        case (let s?, let d?):
+            let combine = CIFilter.maximumCompositing()
+            combine.inputImage = s
+            combine.backgroundImage = d
+            magnitude = combine.outputImage ?? s
+        case (let s?, nil):
+            magnitude = s
+        case (nil, let d?):
+            magnitude = d
+        case (nil, nil):
+            return base
+        }
         let cropped = magnitude.clampedToExtent().cropped(to: base.extent)
 
-        // Sharpness/depth maps are single-channel (R-only); G and B are zero. Broadcast R into
-        // all three channels so the viridis CIColorCube samples at (v, v, v) — otherwise the
-        // lookup only probes one axis and every pixel collapses to the purple low-end of viridis.
-        // Also apply a gain since raw Laplacian values typically sit in ~0..0.2.
+        // Sharpness/depth maps are single-channel (R-only); G and B are zero.
+        // Broadcast R into all three channels so the viridis CIColorCube samples
+        // the diagonal. Fixed gain (6x) lifts raw Laplacian magnitudes (~0..0.2)
+        // into the 0..1 range; threshold controls a subtractive floor so the
+        // slider trims off dim pixels without changing peak brightness.
         let gain: CGFloat = 6.0
-        let broadcast = CIFilter.colorMatrix()
-        broadcast.inputImage = cropped
-        broadcast.rVector = CIVector(x: gain, y: 0, z: 0, w: 0)
-        broadcast.gVector = CIVector(x: gain, y: 0, z: 0, w: 0)
-        broadcast.bVector = CIVector(x: gain, y: 0, z: 0, w: 0)
-        broadcast.aVector = CIVector(x: 0, y: 0, z: 0, w: 1)
+        let bias: CGFloat = -3.0 * threshold
 
-        let normalized = (broadcast.outputImage ?? cropped).applyingFilter("CIColorClamp", parameters: [
-            "inputMinComponents": CIVector(x: 0, y: 0, z: 0, w: 0),
-            "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1)
-        ])
+        let normalized = cropped
+            .applyingFilter("CIColorMatrix", parameters: [
+                "inputRVector": CIVector(x: gain, y: 0, z: 0, w: 0),
+                "inputGVector": CIVector(x: gain, y: 0, z: 0, w: 0),
+                "inputBVector": CIVector(x: gain, y: 0, z: 0, w: 0),
+                "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1),
+                "inputBiasVector": CIVector(x: bias, y: bias, z: bias, w: 0)
+            ])
+            .applyingFilter("CIColorClamp", parameters: [
+                "inputMinComponents": CIVector(x: 0, y: 0, z: 0, w: 0),
+                "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1)
+            ])
 
         let mapped = viridis(normalized)
 
-        // 60% opacity overlay — reads well without fully hiding the photo.
-        let alpha = CIFilter.colorMatrix()
-        alpha.inputImage = mapped
-        alpha.aVector = CIVector(x: 0, y: 0, z: 0, w: 0.6)
-        let blend = CIFilter.sourceOverCompositing()
-        blend.inputImage = alpha.outputImage
+        // Variable alpha: use the normalized magnitude as the mask so weak
+        // regions let the photo show through and only strong regions are
+        // fully overlaid. 0.75 peak alpha keeps some photo detail visible.
+        let mask = normalized.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": CIVector(x: 0.75, y: 0, z: 0, w: 0),
+            "inputGVector": CIVector(x: 0.75, y: 0, z: 0, w: 0),
+            "inputBVector": CIVector(x: 0.75, y: 0, z: 0, w: 0),
+            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1)
+        ])
+
+        let blend = CIFilter.blendWithMask()
+        blend.inputImage = mapped
         blend.backgroundImage = base
+        blend.maskImage = mask
         return blend.outputImage ?? base
     }
 
