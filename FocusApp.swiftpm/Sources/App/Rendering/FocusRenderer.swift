@@ -136,19 +136,27 @@ final class FocusRenderer {
         else { return base }
 
         // Real camera-style peaking: extract Sobel edges from the source at display
-        // resolution, then gate by the in-focus mask so only edges the analyzer
-        // considers sharp glow through. `Mask` remains the flood-filled variant.
+        // resolution, then gate by the in-focus mask. `Mask` remains the
+        // flood-filled variant.
+        //
+        // The CIContext works in extended-linear Display P3, where linearized pixel
+        // values cluster near zero in dark/mid tones — so raw Sobel gradients are
+        // tiny. Crank filter intensity to max and apply a hard luma gain before
+        // clamping so real edges saturate to 1.0 while flat regions stay at 0.
         let sobel = CIFilter.edges()
         sobel.inputImage = base.clampedToExtent()
-        sobel.intensity = 6.0
+        sobel.intensity = 10.0
         let edgeImage = (sobel.outputImage ?? base).cropped(to: base.extent)
 
-        // Luma → grayscale edge magnitude, then clamp to [0,1].
+        let edgeGain: CGFloat = 20.0
         let edgeMask = edgeImage
             .applyingFilter("CIColorMatrix", parameters: [
-                "inputRVector": CIVector(x: 0.2126, y: 0.7152, z: 0.0722, w: 0),
-                "inputGVector": CIVector(x: 0.2126, y: 0.7152, z: 0.0722, w: 0),
-                "inputBVector": CIVector(x: 0.2126, y: 0.7152, z: 0.0722, w: 0),
+                "inputRVector": CIVector(x: 0.2126 * edgeGain, y: 0.7152 * edgeGain,
+                                         z: 0.0722 * edgeGain, w: 0),
+                "inputGVector": CIVector(x: 0.2126 * edgeGain, y: 0.7152 * edgeGain,
+                                         z: 0.0722 * edgeGain, w: 0),
+                "inputBVector": CIVector(x: 0.2126 * edgeGain, y: 0.7152 * edgeGain,
+                                         z: 0.0722 * edgeGain, w: 0),
                 "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1)
             ])
             .applyingFilter("CIColorClamp", parameters: [
@@ -156,7 +164,8 @@ final class FocusRenderer {
                 "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1)
             ])
 
-        // Intersect with in-focus mask: per-pixel product of edge strength and focus confidence.
+        // Gate by in-focus mask — both are near-binary after their respective gains,
+        // so multiplication yields a near-binary combined mask.
         let gated = CIFilter.multiplyCompositing()
         gated.inputImage = edgeMask
         gated.backgroundImage = focusMask
