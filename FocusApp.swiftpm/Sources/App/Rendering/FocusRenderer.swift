@@ -81,25 +81,34 @@ final class FocusRenderer {
         // MTKView delegate callbacks run on main — safe to read the view model directly.
         let snapshot: (source: CIImage?, style: OverlayStyle, threshold: Float,
                        color: Color, focalPlane: Float?,
-                       zoomScale: CGFloat, zoomAnchor: CGPoint) =
+                       zoomScale: CGFloat, zoomAnchor: CGPoint,
+                       sharpness: CIImage?, depth: CIImage?) =
             MainActor.assumeIsolated {
                 (viewModel.sourceImage, viewModel.style, viewModel.threshold,
                  viewModel.overlayColor, viewModel.focalPlane,
-                 viewModel.zoomScale, viewModel.zoomAnchor)
+                 viewModel.zoomScale, viewModel.zoomAnchor,
+                 viewModel.sharpnessOverlay, viewModel.depthOverlay)
             }
 
         guard let source = snapshot.source else {
             return CIImage(color: CIColor.black).cropped(to: CGRect(origin: .zero, size: drawableSize))
         }
 
-        // Fit source to drawable, then apply zoom around the tap anchor.
-        let fitted = fit(image: source, into: drawableSize,
-                         zoom: snapshot.zoomScale, anchor: snapshot.zoomAnchor)
+        // Apply fit + zoom to the base AND both overlays using identical parameters
+        // so they stay spatially aligned. The overlays are already at source.extent
+        // (upscaled by FocusAnalyzer), so the same transform maps them 1:1.
+        let zoom = snapshot.zoomScale
+        let anchor = snapshot.zoomAnchor
+        let fitted = fit(image: source, into: drawableSize, zoom: zoom, anchor: anchor)
+        let sharpnessOverlay = snapshot.sharpness.map {
+            fit(image: $0, into: drawableSize, zoom: zoom, anchor: anchor)
+        }
+        let depthOverlay = snapshot.depth.map {
+            fit(image: $0, into: drawableSize, zoom: zoom, anchor: anchor)
+        }
 
         let threshold = CGFloat(snapshot.threshold)
         let tint = CIColor(color: snapshot.color) ?? CIColor(red: 1, green: 0.85, blue: 0)
-
-        let (sharpnessOverlay, depthOverlay) = overlays(for: fitted)
 
         switch snapshot.style {
         case .peaking:
@@ -115,26 +124,6 @@ final class FocusRenderer {
                                        focalPlane: snapshot.focalPlane,
                                        threshold: threshold)
         }
-    }
-
-    private func overlays(for target: CIImage) -> (sharpness: CIImage?, depth: CIImage?) {
-        // MTKView delegate callbacks run on the main thread; the view model is @MainActor-isolated
-        // so direct reads here are safe without hopping actors.
-        let sharp = MainActor.assumeIsolated { viewModel.sharpnessOverlay }
-        let depth = MainActor.assumeIsolated { viewModel.depthOverlay }
-
-        func align(_ image: CIImage?) -> CIImage? {
-            guard let image else { return nil }
-            let sx = target.extent.width / image.extent.width
-            let sy = target.extent.height / image.extent.height
-            let scale = min(sx, sy)
-            return image
-                .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-                .transformed(by: CGAffineTransform(translationX: target.extent.minX,
-                                                   y: target.extent.minY))
-        }
-
-        return (align(sharp), align(depth))
     }
 
     // MARK: - Style pipelines
