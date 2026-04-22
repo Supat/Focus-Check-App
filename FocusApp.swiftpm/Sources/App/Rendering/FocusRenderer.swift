@@ -240,16 +240,36 @@ final class FocusRenderer {
         return blend.outputImage ?? base
     }
 
-    /// Tint regions where the per-patch motion-blur confidence exceeds the
-    /// threshold. Uses the user-chosen overlay color; 50% alpha so the
-    /// underlying photo detail stays readable under the tint.
+    /// Tint regions where the per-patch motion-blur confidence exceeds a
+    /// cutoff tied to the threshold slider. 50% tint alpha keeps the photo
+    /// detail visible under the overlay.
+    ///
+    /// Motion confidence is already in [0,1] (unlike the ~0-0.2 Laplacian
+    /// signal), so we use a dedicated linear threshold instead of reusing
+    /// `thresholded()`'s 24x pre-gain which would saturate everything.
     private func motionComposite(base: CIImage, motion: CIImage?,
                                  threshold: CGFloat, tint: CIColor) -> CIImage {
         guard let motion else { return base }
 
-        // Reuse the existing threshold helper. preGain (6) × steepness (4) matches
-        // the mask pipeline; values above threshold saturate toward 1 quickly.
-        let mask = thresholded(motion, at: threshold)
+        // Slider → effective confidence cutoff. Natural image variation usually
+        // sits below 0.3, real motion blur above 0.5, so map [0,1] → [0.3, 0.8].
+        let cutoff = 0.3 + 0.5 * threshold
+        let steepness: CGFloat = 5.0
+        let scale = steepness
+        let bias = -steepness * cutoff
+
+        let mask = motion
+            .applyingFilter("CIColorMatrix", parameters: [
+                "inputRVector": CIVector(x: scale, y: 0, z: 0, w: 0),
+                "inputGVector": CIVector(x: scale, y: 0, z: 0, w: 0),
+                "inputBVector": CIVector(x: scale, y: 0, z: 0, w: 0),
+                "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1),
+                "inputBiasVector": CIVector(x: bias, y: bias, z: bias, w: 0)
+            ])
+            .applyingFilter("CIColorClamp", parameters: [
+                "inputMinComponents": CIVector(x: 0, y: 0, z: 0, w: 0),
+                "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1)
+            ])
 
         let coloredTint = CIColor(red: tint.red, green: tint.green, blue: tint.blue, alpha: 0.5)
         let colored = CIImage(color: coloredTint).cropped(to: base.extent)

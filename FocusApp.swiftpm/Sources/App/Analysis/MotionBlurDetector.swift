@@ -10,8 +10,10 @@ struct MotionBlurReport: Equatable {
     /// 1 = perfectly directional (strong motion blur along a single axis).
     let confidence: Float
 
-    /// Heuristic cutoff for surfacing the badge to users.
-    var isSignificant: Bool { confidence > 0.25 }
+    /// Heuristic cutoff for surfacing the badge to users. Set high enough that
+    /// directional-texture false positives (fences, waves, stripes) don't
+    /// consistently trigger it.
+    var isSignificant: Bool { confidence > 0.4 }
 }
 
 /// Detects motion blur by analysing the image's 2D frequency spectrum.
