@@ -246,13 +246,11 @@ final class FocusViewModel: ObservableObject {
         currentTask?.cancel()
         isAnalyzing = true
         errorMessage = nil
-        sharpnessOverlay = nil
-        depthOverlay = nil
-        focalPlane = nil
-        motionBlur = nil
-        motionOverlay = nil
-        isSensitive = nil
-        faceRectangles = []
+        // Deliberately don't clear sharpnessOverlay / depthOverlay / focalPlane
+        // / motionBlur / motionOverlay / isSensitive / faceRectangles here.
+        // The old source image keeps showing until the new analysis lands,
+        // so clearing the derived state would cause the old image to briefly
+        // lose its mosaic / overlays while the new analysis runs.
         exposureInfo = ExposureInfo.read(from: url)
         sourceName = name
         refreshSensitiveContentAvailability()
