@@ -20,8 +20,13 @@ struct ImageImporter: View {
             // `PhotosPicker` nested inside a `Menu` is a known SwiftUI bug:
             // the menu dismisses on tap but the picker sheet never presents.
             // Flip a flag here and present via `.photosPicker(isPresented:...)` below.
+            //
+            // Also: request photo-library access *before* presenting the picker.
+            // PhotosPickerItem.itemIdentifier is the PHAsset.localIdentifier only
+            // when the app has Photos access at pick-time; otherwise it's an
+            // opaque string that PHAsset.fetchAssets can't resolve.
             Button {
-                showingPhotosPicker = true
+                presentPhotosPickerAfterAuth()
             } label: {
                 Label("Photo Library", systemImage: "photo.stack")
             }
@@ -95,31 +100,42 @@ struct ImageImporter: View {
         }
     }
 
-    /// Look up the Photo asset's original filename via PhotoKit. Requires read access
-    /// to the library — prompts on first call if authorization is undetermined. Falls
-    /// back to the provided generic name whenever anything about the chain is
-    /// unavailable (no itemIdentifier, denied access, asset missing, no resources).
+    /// Ensure photo-library access is granted before presenting the picker. If
+    /// already authorized, present immediately; if undetermined, prompt and wait
+    /// for the user's answer. If denied, present anyway — the picker itself still
+    /// works, we just fall back to a generic display name.
+    private func presentPhotosPickerAfterAuth() {
+        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        switch status {
+        case .authorized, .limited:
+            showingPhotosPicker = true
+        case .notDetermined:
+            Task { @MainActor in
+                _ = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
+                showingPhotosPicker = true
+            }
+        default:
+            showingPhotosPicker = true
+        }
+    }
+
+    /// Look up the Photo asset's original filename via PhotoKit. The caller must
+    /// already have requested photo-library access — otherwise `itemIdentifier`
+    /// isn't a PHAsset.localIdentifier and the fetch returns empty. Falls back
+    /// to the generic name whenever the chain breaks (no identifier, no access,
+    /// asset not in limited-access allowlist, missing resources).
     private func resolvedFilename(for item: PhotosPickerItem, fallback: String) async -> String {
         guard let id = item.itemIdentifier else { return fallback }
 
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-        let authorized: Bool
         switch status {
-        case .authorized, .limited:
-            authorized = true
-        case .notDetermined:
-            let granted = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
-            authorized = (granted == .authorized || granted == .limited)
-        default:
-            authorized = false
+        case .authorized, .limited: break
+        default: return fallback
         }
-        guard authorized else { return fallback }
 
         let fetch = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil)
         guard let asset = fetch.firstObject else { return fallback }
 
-        // PHAssetResource.assetResources is synchronous but can return multiple
-        // resources (photo + adjustment data); the first one is the original.
         let resources = PHAssetResource.assetResources(for: asset)
         return resources.first?.originalFilename ?? fallback
     }
