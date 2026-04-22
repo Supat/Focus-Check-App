@@ -84,7 +84,7 @@ final class FocusRenderer {
                        zoomScale: CGFloat, zoomAnchor: CGPoint,
                        sharpness: CIImage?, depth: CIImage?, motion: CIImage?,
                        overlayHidden: Bool, mosaic: Bool, mosaicMode: MosaicMode,
-                       faces: [CGRect], bodies: [CGRect]) =
+                       faces: [CGRect], bodies: [CGRect], groins: [CGRect]) =
             MainActor.assumeIsolated {
                 let applyMosaic = (viewModel.isSensitive == true) && viewModel.mosaicEnabled
                 return (viewModel.sourceImage, viewModel.style, viewModel.threshold,
@@ -93,7 +93,8 @@ final class FocusRenderer {
                         viewModel.sharpnessOverlay, viewModel.depthOverlay,
                         viewModel.motionOverlay,
                         viewModel.overlayHidden, applyMosaic, viewModel.mosaicMode,
-                        viewModel.faceRectangles, viewModel.bodyRectangles)
+                        viewModel.faceRectangles, viewModel.bodyRectangles,
+                        viewModel.groinRectangles)
             }
 
         guard let source = snapshot.source else {
@@ -110,6 +111,9 @@ final class FocusRenderer {
             case .face:
                 guard !snapshot.faces.isEmpty else { return source }
                 return regionMosaic(source: source, regions: snapshot.faces, capDivisor: 32)
+            case .groin:
+                guard !snapshot.groins.isEmpty else { return source }
+                return regionMosaic(source: source, regions: snapshot.groins, capDivisor: 32)
             case .body:
                 // Prefer full-body regions; if Vision didn't find any, fall
                 // back to face rects so flagged content still gets some cover.

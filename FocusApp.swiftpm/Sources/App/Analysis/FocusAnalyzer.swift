@@ -38,6 +38,9 @@ actor FocusAnalyzer {
         /// Full-body bounding boxes from VNDetectHumanRectanglesRequest, also
         /// in source-extent coordinates. Used for the .body mosaic mode.
         var bodyRectangles: [CGRect] = []
+        /// Groin rectangles derived from body-pose hip joints, in source-
+        /// extent coordinates. Used for the .groin mosaic mode.
+        var groinRectangles: [CGRect] = []
     }
 
     private let device: MTLDevice
@@ -147,6 +150,7 @@ actor FocusAnalyzer {
         // analysis so the data is ready when the user toggles mosaic on.
         let faceRectangles = detectFaces(in: source)
         let bodyRectangles = detectBodies(in: source)
+        let groinRectangles = detectGroins(in: source)
 
         switch mode {
         case .sharpness:
@@ -180,7 +184,8 @@ actor FocusAnalyzer {
             sensitiveLabel: sensitiveLabel,
             sensitiveConfidence: sensitiveConfidence,
             faceRectangles: faceRectangles,
-            bodyRectangles: bodyRectangles
+            bodyRectangles: bodyRectangles,
+            groinRectangles: groinRectangles
         )
     }
 
@@ -218,6 +223,52 @@ actor FocusAnalyzer {
         }
         guard let observations = request.results as? [VNHumanObservation] else { return [] }
         return observations.map { denormalize($0.boundingBox, in: image.extent) }
+    }
+
+    /// Derive groin rectangles from body-pose hip joints. One rect per
+    /// person whose `leftHip` / `rightHip` keypoints exceed a confidence
+    /// floor. Centred slightly below the hip midpoint — the joint
+    /// landmarks sit at the top of the femur, so "below" covers the
+    /// pelvis/groin region.
+    private func detectGroins(in image: CIImage) -> [CGRect] {
+        guard let cgImage = ciContext.createCGImage(image, from: image.extent) else {
+            return []
+        }
+        let request = VNDetectHumanBodyPoseRequest()
+        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+        do {
+            try handler.perform([request])
+        } catch {
+            return []
+        }
+        guard let observations = request.results as? [VNHumanBodyPoseObservation] else { return [] }
+        let extent = image.extent
+
+        return observations.compactMap { obs -> CGRect? in
+            guard let leftHip = try? obs.recognizedPoint(.leftHip),
+                  let rightHip = try? obs.recognizedPoint(.rightHip),
+                  leftHip.confidence > 0.3,
+                  rightHip.confidence > 0.3
+            else { return nil }
+
+            // Normalized 0..1, Y-up coordinates — same as bounding boxes.
+            let cx = (leftHip.location.x + rightHip.location.x) / 2
+            let cy = (leftHip.location.y + rightHip.location.y) / 2
+            let hipDistance = max(abs(rightHip.location.x - leftHip.location.x), 0.04)
+
+            // Rect padded 1.5x hip width, offset downward (lower Y in Y-up
+            // coords) so the box covers the pelvis below the hip landmarks.
+            let w = hipDistance * 1.5
+            let h = hipDistance * 1.0
+            let yOffset = -hipDistance * 0.35
+            let normalized = CGRect(
+                x: cx - w / 2,
+                y: cy - h / 2 + yOffset,
+                width: w,
+                height: h
+            )
+            return denormalize(normalized, in: extent)
+        }
     }
 
     /// Vision boundingBoxes are normalized 0..1 with Y-up — the same

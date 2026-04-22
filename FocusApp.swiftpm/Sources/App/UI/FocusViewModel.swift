@@ -48,6 +48,7 @@ enum DepthInstallState: Equatable {
 /// Which region the mosaic covers when the user has the mosaic toggle on.
 enum MosaicMode: String, CaseIterable, Identifiable {
     case face  = "Face"
+    case groin = "Groin"
     case body  = "Body"
     case whole = "Whole"
     var id: String { rawValue }
@@ -154,6 +155,7 @@ final class FocusViewModel: ObservableObject {
     @Published var sensitiveConfidence: Float?
     @Published var faceRectangles: [CGRect] = []
     @Published var bodyRectangles: [CGRect] = []
+    @Published var groinRectangles: [CGRect] = []
     /// User-controlled mosaic toggle. Defaults on — protective default so
     /// sensitive content isn't displayed until the user explicitly opts in.
     @Published var mosaicEnabled: Bool = true
@@ -288,6 +290,7 @@ final class FocusViewModel: ObservableObject {
                     self?.sensitiveConfidence = overlays.sensitiveConfidence
                     self?.faceRectangles = overlays.faceRectangles
                     self?.bodyRectangles = overlays.bodyRectangles
+                    self?.groinRectangles = overlays.groinRectangles
                     self?.isAnalyzing = false
                 }
             } catch is CancellationError {
@@ -318,6 +321,7 @@ final class FocusViewModel: ObservableObject {
         sensitiveConfidence = nil
         faceRectangles = []
         bodyRectangles = []
+        groinRectangles = []
         exposureInfo = nil
         errorMessage = nil
         isAnalyzing = false
@@ -346,6 +350,7 @@ final class FocusViewModel: ObservableObject {
                     self?.sensitiveConfidence = overlays.sensitiveConfidence
                     self?.faceRectangles = overlays.faceRectangles
                     self?.bodyRectangles = overlays.bodyRectangles
+                    self?.groinRectangles = overlays.groinRectangles
                     self?.isAnalyzing = false
                 }
             } catch is CancellationError {
