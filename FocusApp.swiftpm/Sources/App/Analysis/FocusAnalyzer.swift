@@ -198,13 +198,10 @@ actor FocusAnalyzer {
         let sensitiveLabel = sensitiveResult?.topLabel
         let sensitiveConfidence = sensitiveResult?.confidence
 
-        // Face rectangles — used by the mosaic renderer. Detect on every
-        // analysis so the data is ready when the user toggles mosaic on.
-        let faceRectangles = detectFaces(in: source)
-        let bodyRectangles = detectBodies(in: source)
-        let groinRectangles = detectGroins(in: source)
-        let eyeBars = detectEyes(in: source)
-        let chestRectangles = detectChests(in: source)
+        // Face / body / pose detection — consolidated into a single Vision
+        // pass so the source only gets decoded to a CGImage once and the
+        // three requests share the handler's image pyramid.
+        let vision = runVision(in: source)
 
         switch mode {
         case .sharpness:
@@ -237,226 +234,170 @@ actor FocusAnalyzer {
             isSensitive: isSensitive,
             sensitiveLabel: sensitiveLabel,
             sensitiveConfidence: sensitiveConfidence,
-            faceRectangles: faceRectangles,
-            bodyRectangles: bodyRectangles,
-            groinRectangles: groinRectangles,
-            eyeBars: eyeBars,
-            chestRectangles: chestRectangles
+            faceRectangles: vision.faces,
+            bodyRectangles: vision.bodies,
+            groinRectangles: vision.groins,
+            eyeBars: vision.eyes,
+            chestRectangles: vision.chests
         )
     }
 
-    /// Run Vision's face-rectangles request and convert the normalized
-    /// bounding boxes back into the image's CIImage extent space. Returns
-    /// an empty array if rendering or detection fails.
-    private func detectFaces(in image: CIImage) -> [CGRect] {
-        guard let cgImage = ciContext.createCGImage(image, from: image.extent) else {
-            return []
-        }
-        let request = VNDetectFaceRectanglesRequest()
-        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-        do {
-            try handler.perform([request])
-        } catch {
-            return []
-        }
-        guard let observations = request.results as? [VNFaceObservation] else { return [] }
-        return observations.map { denormalize($0.boundingBox, in: image.extent) }
+    /// Bundle of all Vision-derived rectangles and bars produced in one pass.
+    private struct VisionResults {
+        var faces: [CGRect] = []
+        var eyes: [EyeBar] = []
+        var bodies: [CGRect] = []
+        var groins: [CGRect] = []
+        var chests: [CGRect] = []
     }
 
-    /// Run Vision's full-body human rectangles request. `upperBodyOnly = false`
-    /// makes the boxes cover from head to feet rather than just torso/head.
-    private func detectBodies(in image: CIImage) -> [CGRect] {
+    /// Run all five Vision-based detections in a single pass. The previous
+    /// approach spent 5 × `createCGImage` + 5 × `VNImageRequestHandler` per
+    /// analysis — one handler with three requests shares the image decode and
+    /// any internal pyramid the framework builds. Face rectangles come from
+    /// the landmarks request (`VNDetectFaceLandmarksRequest` is a subclass of
+    /// the rectangle request); groin + chest share one body-pose request.
+    private func runVision(in image: CIImage) -> VisionResults {
         guard let cgImage = ciContext.createCGImage(image, from: image.extent) else {
-            return []
+            return VisionResults()
         }
-        let request = VNDetectHumanRectanglesRequest()
-        request.upperBodyOnly = false
-        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-        do {
-            try handler.perform([request])
-        } catch {
-            return []
-        }
-        guard let observations = request.results as? [VNHumanObservation] else { return [] }
-        return observations.map { denormalize($0.boundingBox, in: image.extent) }
-    }
-
-    /// Derive groin rectangles from body-pose hip joints. One rect per
-    /// person whose `leftHip` / `rightHip` keypoints exceed a confidence
-    /// floor. Centred slightly below the hip midpoint — the joint
-    /// landmarks sit at the top of the femur, so "below" covers the
-    /// pelvis/groin region.
-    private func detectGroins(in image: CIImage) -> [CGRect] {
-        guard let cgImage = ciContext.createCGImage(image, from: image.extent) else {
-            return []
-        }
-        let request = VNDetectHumanBodyPoseRequest()
-        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-        do {
-            try handler.perform([request])
-        } catch {
-            return []
-        }
-        guard let observations = request.results as? [VNHumanBodyPoseObservation] else { return [] }
         let extent = image.extent
 
-        return observations.compactMap { obs -> CGRect? in
-            guard let leftHip = try? obs.recognizedPoint(.leftHip),
-                  let rightHip = try? obs.recognizedPoint(.rightHip),
-                  leftHip.confidence > 0.3,
-                  rightHip.confidence > 0.3
-            else { return nil }
+        let faceLandmarks = VNDetectFaceLandmarksRequest()
+        let bodyRects = VNDetectHumanRectanglesRequest()
+        bodyRects.upperBodyOnly = false
+        let bodyPose = VNDetectHumanBodyPoseRequest()
 
-            // Normalized 0..1, Y-up coordinates — same as bounding boxes.
-            let cx = (leftHip.location.x + rightHip.location.x) / 2
-            let cy = (leftHip.location.y + rightHip.location.y) / 2
-            let hipDistance = max(abs(rightHip.location.x - leftHip.location.x), 0.04)
-
-            // Rect padded 1.5x hip width, offset downward (lower Y in Y-up
-            // coords) so the box covers the pelvis below the hip landmarks.
-            let w = hipDistance * 1.5
-            let h = hipDistance * 1.0
-            let yOffset = -hipDistance * 0.35
-            let normalized = CGRect(
-                x: cx - w / 2,
-                y: cy - h / 2 + yOffset,
-                width: w,
-                height: h
-            )
-            return denormalize(normalized, in: extent)
-        }
-    }
-
-    /// Derive chest rectangles from body-pose shoulder + hip joints. One
-    /// rect per person whose all four landmarks exceed the confidence floor.
-    /// Covers the upper ~55% of the shoulder-to-hip span — clearly the
-    /// 'chest' rather than the full torso — with a small top padding above
-    /// the shoulder line so the collarbone / neckline is included.
-    private func detectChests(in image: CIImage) -> [CGRect] {
-        guard let cgImage = ciContext.createCGImage(image, from: image.extent) else {
-            return []
-        }
-        let request = VNDetectHumanBodyPoseRequest()
         let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
         do {
-            try handler.perform([request])
+            try handler.perform([faceLandmarks, bodyRects, bodyPose])
         } catch {
-            return []
+            return VisionResults()
         }
-        guard let observations = request.results as? [VNHumanBodyPoseObservation] else { return [] }
-        let extent = image.extent
 
-        return observations.compactMap { obs -> CGRect? in
-            guard let leftShoulder = try? obs.recognizedPoint(.leftShoulder),
-                  let rightShoulder = try? obs.recognizedPoint(.rightShoulder),
-                  let leftHip = try? obs.recognizedPoint(.leftHip),
-                  let rightHip = try? obs.recognizedPoint(.rightHip),
-                  leftShoulder.confidence > 0.3,
-                  rightShoulder.confidence > 0.3,
-                  leftHip.confidence > 0.3,
-                  rightHip.confidence > 0.3
-            else { return nil }
+        var results = VisionResults()
 
-            // Vision coords are Y-up: shoulders sit at a larger y than hips.
-            let shoulderY = (leftShoulder.location.y + rightShoulder.location.y) / 2
-            let hipY = (leftHip.location.y + rightHip.location.y) / 2
-            let centerX = (leftShoulder.location.x + rightShoulder.location.x) / 2
-            let shoulderSpan = max(abs(rightShoulder.location.x - leftShoulder.location.x), 0.05)
-
-            let torsoHeight = max(shoulderY - hipY, 0.05)
-            let chestHeight = torsoHeight * 0.55
-            let topPad = chestHeight * 0.15
-
-            // Bottom edge in Y-up = shoulderY - chestHeight, height reaches
-            // up past the shoulders by `topPad` to cover the collarbone.
-            let w = shoulderSpan * 1.15
-            let normalized = CGRect(
-                x: centerX - w / 2,
-                y: shoulderY - chestHeight,
-                width: w,
-                height: chestHeight + topPad
-            )
-            return denormalize(normalized, in: extent)
-        }
-    }
-
-    /// Derive one oriented eye bar per detected face. Measures the tilt
-    /// from the left-eye center to the right-eye center and returns a bar
-    /// centered on the midpoint, sized proportionally to the eye-to-eye
-    /// distance, and rotated to match the head tilt.
-    private func detectEyes(in image: CIImage) -> [EyeBar] {
-        guard let cgImage = ciContext.createCGImage(image, from: image.extent) else {
-            return []
-        }
-        let request = VNDetectFaceLandmarksRequest()
-        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-        do {
-            try handler.perform([request])
-        } catch {
-            return []
-        }
-        guard let observations = request.results as? [VNFaceObservation] else { return [] }
-        let extent = image.extent
-
-        return observations.compactMap { obs -> EyeBar? in
-            guard let landmarks = obs.landmarks,
-                  let leftEye = landmarks.leftEye,
-                  let rightEye = landmarks.rightEye
-            else { return nil }
-
-            let faceRect = denormalize(obs.boundingBox, in: extent)
-
-            // Lift landmark points from face-bbox-normalized space to image
-            // extent coordinates.
-            func lift(_ region: VNFaceLandmarkRegion2D) -> [CGPoint] {
-                region.normalizedPoints.map { p in
-                    CGPoint(
-                        x: faceRect.minX + p.x * faceRect.width,
-                        y: faceRect.minY + p.y * faceRect.height
-                    )
+        // Face rects + eye bars from the single landmarks request.
+        if let faces = faceLandmarks.results as? [VNFaceObservation] {
+            for obs in faces {
+                results.faces.append(Self.denormalize(obs.boundingBox, in: extent))
+                if let bar = Self.eyeBar(from: obs, in: extent) {
+                    results.eyes.append(bar)
                 }
             }
-            let leftPoints = lift(leftEye)
-            let rightPoints = lift(rightEye)
-            guard !leftPoints.isEmpty, !rightPoints.isEmpty else { return nil }
-
-            func centroid(_ points: [CGPoint]) -> CGPoint {
-                let n = CGFloat(points.count)
-                let sx = points.map(\.x).reduce(0, +)
-                let sy = points.map(\.y).reduce(0, +)
-                return CGPoint(x: sx / n, y: sy / n)
-            }
-            let leftCenter = centroid(leftPoints)
-            let rightCenter = centroid(rightPoints)
-
-            let dx = rightCenter.x - leftCenter.x
-            let dy = rightCenter.y - leftCenter.y
-            let eyeDistance = hypot(dx, dy)
-            guard eyeDistance > 0 else { return nil }
-            let angle = atan2(dy, dx)
-
-            // Width covers both eyes plus padding; height proportional so the
-            // bar reads as a proper redaction strip rather than a hair-thin line.
-            let barWidth = eyeDistance * 1.75
-            let barHeight = eyeDistance * 0.33
-
-            let center = CGPoint(
-                x: (leftCenter.x + rightCenter.x) / 2,
-                y: (leftCenter.y + rightCenter.y) / 2
-            )
-
-            return EyeBar(
-                center: center,
-                size: CGSize(width: barWidth, height: barHeight),
-                angleRadians: angle
-            )
         }
+
+        // Full-body rectangles.
+        if let bodies = bodyRects.results as? [VNHumanObservation] {
+            results.bodies = bodies.map { Self.denormalize($0.boundingBox, in: extent) }
+        }
+
+        // Groin + chest from the shared pose observations.
+        if let poses = bodyPose.results as? [VNHumanBodyPoseObservation] {
+            for obs in poses {
+                if let g = Self.groinRect(from: obs, in: extent) { results.groins.append(g) }
+                if let c = Self.chestRect(from: obs, in: extent) { results.chests.append(c) }
+            }
+        }
+        return results
     }
 
-    /// Vision boundingBoxes are normalized 0..1 with Y-up — the same
-    /// convention as CIImage extent — so the conversion is just scale +
-    /// translate by the source image's origin.
-    private func denormalize(_ box: CGRect, in extent: CGRect) -> CGRect {
+    /// Derive one oriented eye bar from a face landmarks observation.
+    /// Centered on the midpoint between eye centroids, rotated to the head's
+    /// tilt, sized proportional to the eye-to-eye distance.
+    private static func eyeBar(from obs: VNFaceObservation, in extent: CGRect) -> EyeBar? {
+        guard let landmarks = obs.landmarks,
+              let leftEye = landmarks.leftEye,
+              let rightEye = landmarks.rightEye
+        else { return nil }
+
+        // Face rect in image extent coords; eye-landmark points are
+        // face-bbox-normalized, so scale by the face rect to lift them.
+        let fx = extent.minX + obs.boundingBox.minX * extent.width
+        let fy = extent.minY + obs.boundingBox.minY * extent.height
+        let fw = obs.boundingBox.width * extent.width
+        let fh = obs.boundingBox.height * extent.height
+
+        func centroid(_ region: VNFaceLandmarkRegion2D) -> CGPoint? {
+            let pts = region.normalizedPoints
+            guard !pts.isEmpty else { return nil }
+            var sx: CGFloat = 0, sy: CGFloat = 0
+            for p in pts { sx += p.x; sy += p.y }
+            let n = CGFloat(pts.count)
+            // Lift from face-bbox space to image extent.
+            return CGPoint(x: fx + (sx / n) * fw, y: fy + (sy / n) * fh)
+        }
+        guard let leftC = centroid(leftEye), let rightC = centroid(rightEye) else { return nil }
+
+        let dx = rightC.x - leftC.x
+        let dy = rightC.y - leftC.y
+        let eyeDistance = hypot(dx, dy)
+        guard eyeDistance > 0 else { return nil }
+
+        return EyeBar(
+            center: CGPoint(x: (leftC.x + rightC.x) / 2, y: (leftC.y + rightC.y) / 2),
+            size: CGSize(width: eyeDistance * 1.75, height: eyeDistance * 0.33),
+            angleRadians: atan2(dy, dx)
+        )
+    }
+
+    /// Derive a pelvis rect from a body-pose observation's hip joints.
+    /// Nil when either hip is below the confidence floor.
+    private static func groinRect(from obs: VNHumanBodyPoseObservation, in extent: CGRect) -> CGRect? {
+        guard let leftHip = try? obs.recognizedPoint(.leftHip),
+              let rightHip = try? obs.recognizedPoint(.rightHip),
+              leftHip.confidence > 0.3,
+              rightHip.confidence > 0.3
+        else { return nil }
+
+        let cx = (leftHip.location.x + rightHip.location.x) / 2
+        let cy = (leftHip.location.y + rightHip.location.y) / 2
+        let hipDistance = max(abs(rightHip.location.x - leftHip.location.x), 0.04)
+        let w = hipDistance * 1.5
+        let h = hipDistance * 1.0
+        let yOffset = -hipDistance * 0.35
+        let normalized = CGRect(
+            x: cx - w / 2,
+            y: cy - h / 2 + yOffset,
+            width: w,
+            height: h
+        )
+        return denormalize(normalized, in: extent)
+    }
+
+    /// Derive a chest rect from a body-pose observation's shoulder + hip
+    /// joints. Nil when any of the four required landmarks are low-confidence.
+    private static func chestRect(from obs: VNHumanBodyPoseObservation, in extent: CGRect) -> CGRect? {
+        guard let leftShoulder = try? obs.recognizedPoint(.leftShoulder),
+              let rightShoulder = try? obs.recognizedPoint(.rightShoulder),
+              let leftHip = try? obs.recognizedPoint(.leftHip),
+              let rightHip = try? obs.recognizedPoint(.rightHip),
+              leftShoulder.confidence > 0.3,
+              rightShoulder.confidence > 0.3,
+              leftHip.confidence > 0.3,
+              rightHip.confidence > 0.3
+        else { return nil }
+
+        let shoulderY = (leftShoulder.location.y + rightShoulder.location.y) / 2
+        let hipY = (leftHip.location.y + rightHip.location.y) / 2
+        let centerX = (leftShoulder.location.x + rightShoulder.location.x) / 2
+        let shoulderSpan = max(abs(rightShoulder.location.x - leftShoulder.location.x), 0.05)
+        let torsoHeight = max(shoulderY - hipY, 0.05)
+        let chestHeight = torsoHeight * 0.55
+        let topPad = chestHeight * 0.15
+        let w = shoulderSpan * 1.15
+        let normalized = CGRect(
+            x: centerX - w / 2,
+            y: shoulderY - chestHeight,
+            width: w,
+            height: chestHeight + topPad
+        )
+        return denormalize(normalized, in: extent)
+    }
+
+    /// Static shape-transform helper so the per-observation extractors above
+    /// can live at type scope (no implicit self capture).
+    private static func denormalize(_ box: CGRect, in extent: CGRect) -> CGRect {
         CGRect(
             x: extent.minX + box.minX * extent.width,
             y: extent.minY + box.minY * extent.height,

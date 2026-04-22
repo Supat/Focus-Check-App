@@ -465,7 +465,11 @@ final class FocusRenderer {
         ])
     }
 
-    private static func viridis(_ image: CIImage) -> CIImage {
+    /// 16³ RGBA Float cube for `CIFilter.colorCube`. Precomputed once at
+    /// first access — the LUT depends only on compile-time constants, so
+    /// rebuilding it every heatmap frame (4096 iterations + 64 KB alloc)
+    /// was wasted work.
+    private static let viridisCubeData: Data = {
         let size = 16
         var cube = [Float](repeating: 0, count: size * size * size * 4)
         for b in 0..<size {
@@ -482,9 +486,14 @@ final class FocusRenderer {
                 }
             }
         }
+        return cube.withUnsafeBufferPointer { Data(buffer: $0) }
+    }()
+    private static let viridisCubeDimension: Float = 16
+
+    private static func viridis(_ image: CIImage) -> CIImage {
         let filter = CIFilter.colorCube()
-        filter.cubeDimension = Float(size)
-        filter.cubeData = cube.withUnsafeBufferPointer { Data(buffer: $0) }
+        filter.cubeDimension = viridisCubeDimension
+        filter.cubeData = viridisCubeData
         filter.inputImage = image
         return filter.outputImage ?? image
     }
