@@ -510,11 +510,14 @@ final class FocusRenderer {
         return (stops.last!.1, stops.last!.2, stops.last!.3)
     }
 
-    /// Pixelate the whole source. Block size is `longer_side / 64`.
+    /// Pixelate the whole source. Block size is `longer_side / 64 × 1.5`
+    /// — 50% larger than the per-region cap so whole-image mosaic reads as
+    /// coarser and more unmistakable.
     private func wholeMosaic(source: CIImage) -> CIImage {
         let pixelate = CIFilter.pixellate()
         pixelate.inputImage = source.clampedToExtent()
-        pixelate.scale = Float(max(source.extent.width, source.extent.height) / 64)
+        let longerSide = max(source.extent.width, source.extent.height)
+        pixelate.scale = Float(longerSide / 64 * 1.5)
         pixelate.center = CGPoint(x: source.extent.midX, y: source.extent.midY)
         return (pixelate.outputImage ?? source).cropped(to: source.extent)
     }
