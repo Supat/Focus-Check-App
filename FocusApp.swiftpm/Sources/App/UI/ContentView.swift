@@ -83,7 +83,13 @@ struct ContentView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .overlay(alignment: .top) { motionBlurBadge }
-            .overlay(alignment: .bottomLeading) { exposureBadge }
+            .overlay(alignment: .bottomLeading) {
+                HStack(spacing: 8) {
+                    exposureBadge
+                    sensitiveContentBadge
+                }
+                .padding([.leading, .bottom], 12)
+            }
 
             Divider()
 
@@ -111,8 +117,25 @@ struct ContentView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
                 .background(.regularMaterial, in: Capsule())
-                .padding([.leading, .bottom], 12)
             }
+        }
+    }
+
+    /// Shown whenever the classifier flagged the image, independent of the
+    /// mosaic toggle — lets the user know the image was flagged even when
+    /// they've chosen to view it uncovered.
+    @ViewBuilder
+    private var sensitiveContentBadge: some View {
+        if viewModel.isSensitive == true, viewModel.sourceImage != nil {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.shield.fill")
+                Text("Explicit")
+                    .font(.caption)
+            }
+            .foregroundStyle(.orange)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(.regularMaterial, in: Capsule())
         }
     }
 
