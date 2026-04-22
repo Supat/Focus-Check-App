@@ -83,12 +83,32 @@ struct ContentView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .overlay(alignment: .top) { motionBlurBadge }
+            .overlay(alignment: .bottomLeading) { exposureBadge }
 
             Divider()
 
             OverlayControls(viewModel: viewModel)
                 .padding()
                 .background(.bar)
+        }
+    }
+
+    @ViewBuilder
+    private var exposureBadge: some View {
+        if let info = viewModel.exposureInfo,
+           viewModel.sourceImage != nil {
+            let parts = [info.formattedFocalLength, info.formattedShutter].compactMap { $0 }
+            if !parts.isEmpty {
+                HStack(spacing: 6) {
+                    Image(systemName: "camera.aperture")
+                    Text(parts.joined(separator: " · "))
+                        .font(.caption.monospacedDigit())
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(.regularMaterial, in: Capsule())
+                .padding([.leading, .bottom], 12)
+            }
         }
     }
 

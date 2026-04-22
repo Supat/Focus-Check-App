@@ -140,6 +140,7 @@ final class FocusViewModel: ObservableObject {
     @Published var focalPlane: Float?
     @Published var motionBlur: MotionBlurReport?
     @Published var motionOverlay: CIImage?
+    @Published var exposureInfo: ExposureInfo?
     @Published var isAnalyzing: Bool = false
     @Published var errorMessage: String?
     @Published var depthAvailable: Bool = false
@@ -194,6 +195,7 @@ final class FocusViewModel: ObservableObject {
         focalPlane = nil
         motionBlur = nil
         motionOverlay = nil
+        exposureInfo = ExposureInfo.read(from: url)
         sourceName = name
 
         let mode = self.mode
@@ -237,6 +239,7 @@ final class FocusViewModel: ObservableObject {
         focalPlane = nil
         motionBlur = nil
         motionOverlay = nil
+        exposureInfo = nil
         errorMessage = nil
         isAnalyzing = false
         zoomScale = 1.0
