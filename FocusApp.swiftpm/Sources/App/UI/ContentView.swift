@@ -82,11 +82,14 @@ struct ContentView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .overlay(alignment: .top) { motionBlurBadge }
+            .overlay(alignment: .top) {
+                sensitiveContentBadge
+                    .padding(.top, 8)
+            }
             .overlay(alignment: .bottomLeading) {
                 HStack(spacing: 8) {
                     exposureBadge
-                    sensitiveContentBadge
+                    motionBlurBadge
                 }
                 .padding([.leading, .bottom], 12)
             }
@@ -165,8 +168,6 @@ struct ContentView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .background(.regularMaterial, in: Capsule())
-            .padding(.top, 8)
-            .transition(.move(edge: .top).combined(with: .opacity))
         }
     }
 
