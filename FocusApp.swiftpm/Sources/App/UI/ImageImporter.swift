@@ -7,16 +7,18 @@ struct ImageImporter: View {
     let onPick: (URL) -> Void
 
     @State private var photoItem: PhotosPickerItem?
+    @State private var showingPhotosPicker = false
     @State private var showingFileImporter = false
     @State private var isLoading = false
 
     var body: some View {
         Menu {
-            PhotosPicker(
-                selection: $photoItem,
-                matching: .images,
-                preferredItemEncoding: .current
-            ) {
+            // `PhotosPicker` nested inside a `Menu` is a known SwiftUI bug:
+            // the menu dismisses on tap but the picker sheet never presents.
+            // Flip a flag here and present via `.photosPicker(isPresented:...)` below.
+            Button {
+                showingPhotosPicker = true
+            } label: {
                 Label("Photo Library", systemImage: "photo.stack")
             }
 
@@ -32,6 +34,12 @@ struct ImageImporter: View {
                 Label("Import", systemImage: "square.and.arrow.down")
             }
         }
+        .photosPicker(
+            isPresented: $showingPhotosPicker,
+            selection: $photoItem,
+            matching: .images,
+            preferredItemEncoding: .current
+        )
         .fileImporter(
             isPresented: $showingFileImporter,
             allowedContentTypes: [.image, .rawImage],
