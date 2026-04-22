@@ -70,6 +70,7 @@ struct OverlayControls: View {
 
             depthInstallRow
             mosaicToggleRow
+            nsfwInstallRow
         }
         #if os(iOS)
         .onPencilSqueeze { phase in
@@ -145,6 +146,57 @@ struct OverlayControls: View {
                 Button("Retry") { viewModel.downloadDepthModel() }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
+            }
+        }
+    }
+
+    /// NSFW fallback install row. Only visible when SCA is not .simpleInterventions
+    /// or .descriptiveInterventions — there's no point prompting for the fallback
+    /// model if the primary classifier is already available.
+    @ViewBuilder
+    private var nsfwInstallRow: some View {
+        let sca = viewModel.sensitiveContentAvailability
+        let scaActive = sca == .simpleInterventions || sca == .descriptiveInterventions
+        if !scaActive {
+            switch viewModel.nsfwInstall {
+            case .installed:
+                EmptyView()
+
+            case .notInstalled:
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.down.circle")
+                        .foregroundStyle(.secondary)
+                    Text("NSFW fallback model not installed.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Download") { viewModel.downloadNSFWModel() }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                }
+
+            case .downloading(let progress):
+                HStack(spacing: 8) {
+                    ProgressView(value: progress)
+                    Text("\(Int(progress * 100))%")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .frame(width: 44, alignment: .trailing)
+                }
+
+            case .failed(let message):
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                    Text(message)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                    Spacer()
+                    Button("Retry") { viewModel.downloadNSFWModel() }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                }
             }
         }
     }

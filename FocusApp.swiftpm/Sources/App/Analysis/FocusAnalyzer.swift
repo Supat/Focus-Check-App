@@ -34,6 +34,7 @@ actor FocusAnalyzer {
     private let sensitiveContent = SensitiveContentChecker()
     private var depthEstimator: DepthEstimator?
     private let downloader = DepthModelDownloader()
+    private let nsfwDownloader = NSFWModelDownloader()
 
     private var source: CIImage?
 
@@ -92,6 +93,14 @@ actor FocusAnalyzer {
     /// callers should query this each time they want to know the state.
     var sensitiveContentAvailability: SensitiveContentAvailability {
         sensitiveContent.availability
+    }
+
+    /// True when the NSFW fallback Core ML model is already installed.
+    var isNSFWModelInstalled: Bool { NSFWModelDownloader.isInstalled() }
+
+    /// Download + install the NSFW fallback model, mirroring installDepthModel.
+    func installNSFWModel(progress: @Sendable @escaping (Double) -> Void) async throws {
+        try await nsfwDownloader.install(progress: progress)
     }
 
     /// Run the analysis pipeline for the given mode. Returns display-ready overlay images

@@ -146,6 +146,9 @@ final class FocusViewModel: ObservableObject {
     /// sensitive content isn't displayed until the user explicitly opts in.
     @Published var mosaicEnabled: Bool = true
     @Published var sensitiveContentAvailability: SensitiveContentAvailability = .frameworkMissing
+    /// Install state for the NSFW fallback model. Reuses DepthInstallState —
+    /// the shape (notInstalled / downloading / installed / failed) is generic.
+    @Published var nsfwInstall: DepthInstallState = .notInstalled
     @Published var isAnalyzing: Bool = false
     @Published var errorMessage: String?
     @Published var depthAvailable: Bool = false
@@ -154,6 +157,7 @@ final class FocusViewModel: ObservableObject {
     let analyzer: FocusAnalyzer
     private var currentTask: Task<Void, Never>?
     private var installTask: Task<Void, Never>?
+    private var nsfwInstallTask: Task<Void, Never>?
 
     init() {
         self.analyzer = FocusAnalyzer()
@@ -161,10 +165,12 @@ final class FocusViewModel: ObservableObject {
         Task { [weak self] in
             let depth = await analyzer.isDepthAvailable
             let sensitive = await analyzer.sensitiveContentAvailability
+            let nsfwInstalled = await analyzer.isNSFWModelInstalled
             await MainActor.run { [weak self] in
                 self?.depthAvailable = depth
                 self?.depthInstall = depth ? .installed : .notInstalled
                 self?.sensitiveContentAvailability = sensitive
+                self?.nsfwInstall = nsfwInstalled ? .installed : .notInstalled
             }
         }
     }
@@ -179,6 +185,34 @@ final class FocusViewModel: ObservableObject {
             await MainActor.run { [weak self] in
                 self?.sensitiveContentAvailability = sensitive
             }
+        }
+    }
+
+    /// Download the NSFW fallback model. Mirrors downloadDepthModel so the
+    /// UI layer can reuse the same install-state rendering.
+    func downloadNSFWModel() {
+        guard nsfwInstallTask == nil else { return }
+        nsfwInstall = .downloading(progress: 0)
+        let analyzer = self.analyzer
+        nsfwInstallTask = Task { [weak self] in
+            do {
+                try await analyzer.installNSFWModel { p in
+                    Task { @MainActor [weak self] in
+                        self?.nsfwInstall = .downloading(progress: p)
+                    }
+                }
+                await MainActor.run { [weak self] in
+                    self?.nsfwInstall = .installed
+                    // Re-query SCA availability so the row reflects that
+                    // the NSFW fallback is now usable.
+                    self?.refreshSensitiveContentAvailability()
+                }
+            } catch {
+                await MainActor.run { [weak self] in
+                    self?.nsfwInstall = .failed(error.localizedDescription)
+                }
+            }
+            await MainActor.run { [weak self] in self?.nsfwInstallTask = nil }
         }
     }
 
