@@ -41,10 +41,10 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "App",
-            path: "Sources/App",
             dependencies: [
                 .product(name: "ZIPFoundation", package: "ZIPFoundation")
-            ]
+            ],
+            path: "Sources/App"
         )
     ]
 )
