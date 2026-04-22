@@ -1,0 +1,11 @@
+# XcodeGen output — regenerated from project.yml on demand.
+FocusApp.xcodeproj/
+
+# User-specific Xcode state.
+xcuserdata/
+*.xcuserstate
+DerivedData/
+
+# Swift Package Manager checkout cache for the dependency.
+.build/
+.swiftpm/
