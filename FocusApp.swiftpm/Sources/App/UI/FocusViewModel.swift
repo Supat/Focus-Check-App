@@ -128,6 +128,7 @@ final class FocusViewModel: ObservableObject {
 
     // Source + derived state published for renderer consumption.
     @Published var sourceImage: CIImage?
+    @Published var sourceName: String?
     @Published var sharpnessOverlay: CIImage?
     @Published var depthOverlay: CIImage?
     @Published var focalPlane: Float?
@@ -176,13 +177,14 @@ final class FocusViewModel: ObservableObject {
         }
     }
 
-    func load(url: URL) {
+    func load(url: URL, name: String) {
         currentTask?.cancel()
         isAnalyzing = true
         errorMessage = nil
         sharpnessOverlay = nil
         depthOverlay = nil
         focalPlane = nil
+        sourceName = name
 
         let mode = self.mode
         let analyzer = self.analyzer
@@ -217,6 +219,7 @@ final class FocusViewModel: ObservableObject {
         zoomAnimationTask?.cancel()
         zoomAnimationTask = nil
         sourceImage = nil
+        sourceName = nil
         sharpnessOverlay = nil
         depthOverlay = nil
         focalPlane = nil

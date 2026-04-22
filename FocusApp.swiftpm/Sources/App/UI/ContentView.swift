@@ -6,7 +6,7 @@ struct ContentView: View {
     var body: some View {
         NavigationStack {
             content
-                .navigationTitle("Focus Check")
+                .navigationTitle(viewModel.sourceName ?? "Focus Check")
                 #if os(iOS)
                 .navigationBarTitleDisplayMode(.inline)
                 #endif
@@ -21,8 +21,8 @@ struct ContentView: View {
                         }
                     }
                     ToolbarItem(placement: .primaryAction) {
-                        ImageImporter { url in
-                            viewModel.load(url: url)
+                        ImageImporter { url, name in
+                            viewModel.load(url: url, name: name)
                         }
                     }
                 }
@@ -96,7 +96,7 @@ struct ContentView: View {
         .contentShape(Rectangle())
         .dropDestination(for: URL.self) { urls, _ in
             guard let url = urls.first else { return false }
-            viewModel.load(url: url)
+            viewModel.load(url: url, name: url.lastPathComponent)
             return true
         }
     }

@@ -4,7 +4,10 @@ import UniformTypeIdentifiers
 
 /// Toolbar control offering both PhotosPicker (library) and fileImporter (Files / disk) entry points.
 struct ImageImporter: View {
-    let onPick: (URL) -> Void
+    /// Passes the local tmp URL and a human-readable display name (original filename
+    /// for file imports; a `Photo.<ext>` fallback for library picks since PhotosPicker
+    /// doesn't expose the original filename without a PhotoKit permission flow).
+    let onPick: (URL, String) -> Void
 
     @State private var photoItem: PhotosPickerItem?
     @State private var showingPhotosPicker = false
@@ -83,7 +86,8 @@ struct ImageImporter: View {
                     .appendingPathComponent(UUID().uuidString)
                     .appendingPathExtension(ext)
                 try data.write(to: tmp, options: .atomic)
-                await MainActor.run { onPick(tmp) }
+                let displayName = "Photo.\(ext)"
+                await MainActor.run { onPick(tmp, displayName) }
             } catch {
                 // Silent failure — the view model surfaces analysis errors.
             }
@@ -100,7 +104,7 @@ struct ImageImporter: View {
                 .appendingPathComponent(UUID().uuidString)
                 .appendingPathExtension(url.pathExtension)
             try FileManager.default.copyItem(at: url, to: tmp)
-            onPick(tmp)
+            onPick(tmp, url.lastPathComponent)
         } catch {
             // swallow
         }
