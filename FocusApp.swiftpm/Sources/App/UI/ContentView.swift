@@ -145,7 +145,10 @@ struct ContentView: View {
             .foregroundStyle(isHighConfidence ? Color.red : Color.orange)
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
-            .background(.ultraThinMaterial, in: Capsule())
+            // .ultraThinMaterial still renders mostly opaque on this layer;
+            // swap for an explicit 40%-black fill so the image clearly shows
+            // through the capsule while the coloured text stays legible.
+            .background(Color.black.opacity(0.4), in: Capsule())
         }
     }
 
