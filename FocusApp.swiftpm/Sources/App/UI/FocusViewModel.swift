@@ -50,6 +50,7 @@ enum DepthInstallState: Equatable {
 enum MosaicMode: String, CaseIterable, Identifiable {
     case eyes  = "Eyes"
     case face  = "Face"
+    case chest = "Chest"
     case groin = "Groin"
     case body  = "Body"
     case whole = "Whole"
@@ -159,6 +160,7 @@ final class FocusViewModel: ObservableObject {
     @Published var bodyRectangles: [CGRect] = []
     @Published var groinRectangles: [CGRect] = []
     @Published var eyeRectangles: [CGRect] = []
+    @Published var chestRectangles: [CGRect] = []
     /// User-controlled mosaic toggle. Defaults on — protective default so
     /// sensitive content isn't displayed until the user explicitly opts in.
     @Published var mosaicEnabled: Bool = true
@@ -295,6 +297,7 @@ final class FocusViewModel: ObservableObject {
                     self?.bodyRectangles = overlays.bodyRectangles
                     self?.groinRectangles = overlays.groinRectangles
                     self?.eyeRectangles = overlays.eyeRectangles
+                    self?.chestRectangles = overlays.chestRectangles
                     self?.isAnalyzing = false
                 }
             } catch is CancellationError {
@@ -327,6 +330,7 @@ final class FocusViewModel: ObservableObject {
         bodyRectangles = []
         groinRectangles = []
         eyeRectangles = []
+        chestRectangles = []
         exposureInfo = nil
         errorMessage = nil
         isAnalyzing = false
@@ -357,6 +361,7 @@ final class FocusViewModel: ObservableObject {
                     self?.bodyRectangles = overlays.bodyRectangles
                     self?.groinRectangles = overlays.groinRectangles
                     self?.eyeRectangles = overlays.eyeRectangles
+                    self?.chestRectangles = overlays.chestRectangles
                     self?.isAnalyzing = false
                 }
             } catch is CancellationError {

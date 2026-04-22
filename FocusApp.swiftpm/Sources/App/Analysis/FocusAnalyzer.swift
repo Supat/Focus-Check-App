@@ -44,6 +44,9 @@ actor FocusAnalyzer {
         /// Eye-bar rectangles derived from face-landmark eye points, in
         /// source-extent coordinates. Used for the .eyes black-bar mode.
         var eyeRectangles: [CGRect] = []
+        /// Upper-torso rectangles derived from body-pose shoulder + hip
+        /// joints, in source-extent coordinates. Used for the .chest mode.
+        var chestRectangles: [CGRect] = []
     }
 
     private let device: MTLDevice
@@ -155,6 +158,7 @@ actor FocusAnalyzer {
         let bodyRectangles = detectBodies(in: source)
         let groinRectangles = detectGroins(in: source)
         let eyeRectangles = detectEyes(in: source)
+        let chestRectangles = detectChests(in: source)
 
         switch mode {
         case .sharpness:
@@ -190,7 +194,8 @@ actor FocusAnalyzer {
             faceRectangles: faceRectangles,
             bodyRectangles: bodyRectangles,
             groinRectangles: groinRectangles,
-            eyeRectangles: eyeRectangles
+            eyeRectangles: eyeRectangles,
+            chestRectangles: chestRectangles
         )
     }
 
@@ -271,6 +276,59 @@ actor FocusAnalyzer {
                 y: cy - h / 2 + yOffset,
                 width: w,
                 height: h
+            )
+            return denormalize(normalized, in: extent)
+        }
+    }
+
+    /// Derive chest rectangles from body-pose shoulder + hip joints. One
+    /// rect per person whose all four landmarks exceed the confidence floor.
+    /// Covers the upper ~55% of the shoulder-to-hip span — clearly the
+    /// 'chest' rather than the full torso — with a small top padding above
+    /// the shoulder line so the collarbone / neckline is included.
+    private func detectChests(in image: CIImage) -> [CGRect] {
+        guard let cgImage = ciContext.createCGImage(image, from: image.extent) else {
+            return []
+        }
+        let request = VNDetectHumanBodyPoseRequest()
+        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+        do {
+            try handler.perform([request])
+        } catch {
+            return []
+        }
+        guard let observations = request.results as? [VNHumanBodyPoseObservation] else { return [] }
+        let extent = image.extent
+
+        return observations.compactMap { obs -> CGRect? in
+            guard let leftShoulder = try? obs.recognizedPoint(.leftShoulder),
+                  let rightShoulder = try? obs.recognizedPoint(.rightShoulder),
+                  let leftHip = try? obs.recognizedPoint(.leftHip),
+                  let rightHip = try? obs.recognizedPoint(.rightHip),
+                  leftShoulder.confidence > 0.3,
+                  rightShoulder.confidence > 0.3,
+                  leftHip.confidence > 0.3,
+                  rightHip.confidence > 0.3
+            else { return nil }
+
+            // Vision coords are Y-up: shoulders sit at a larger y than hips.
+            let shoulderY = (leftShoulder.location.y + rightShoulder.location.y) / 2
+            let hipY = (leftHip.location.y + rightHip.location.y) / 2
+            let centerX = (leftShoulder.location.x + rightShoulder.location.x) / 2
+            let shoulderSpan = max(abs(rightShoulder.location.x - leftShoulder.location.x), 0.05)
+
+            let torsoHeight = max(shoulderY - hipY, 0.05)
+            let chestHeight = torsoHeight * 0.55
+            let topPad = chestHeight * 0.15
+
+            // Bottom edge in Y-up = shoulderY - chestHeight, height reaches
+            // up past the shoulders by `topPad` to cover the collarbone.
+            let w = shoulderSpan * 1.15
+            let normalized = CGRect(
+                x: centerX - w / 2,
+                y: shoulderY - chestHeight,
+                width: w,
+                height: chestHeight + topPad
             )
             return denormalize(normalized, in: extent)
         }

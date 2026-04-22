@@ -85,7 +85,7 @@ final class FocusRenderer {
                        sharpness: CIImage?, depth: CIImage?, motion: CIImage?,
                        overlayHidden: Bool, mosaic: Bool, mosaicMode: MosaicMode,
                        faces: [CGRect], bodies: [CGRect], groins: [CGRect],
-                       eyes: [CGRect]) =
+                       eyes: [CGRect], chests: [CGRect]) =
             MainActor.assumeIsolated {
                 let applyMosaic = (viewModel.isSensitive == true) && viewModel.mosaicEnabled
                 return (viewModel.sourceImage, viewModel.style, viewModel.threshold,
@@ -95,7 +95,8 @@ final class FocusRenderer {
                         viewModel.motionOverlay,
                         viewModel.overlayHidden, applyMosaic, viewModel.mosaicMode,
                         viewModel.faceRectangles, viewModel.bodyRectangles,
-                        viewModel.groinRectangles, viewModel.eyeRectangles)
+                        viewModel.groinRectangles, viewModel.eyeRectangles,
+                        viewModel.chestRectangles)
             }
 
         guard let source = snapshot.source else {
@@ -115,6 +116,9 @@ final class FocusRenderer {
             case .face:
                 guard !snapshot.faces.isEmpty else { return source }
                 return regionMosaic(source: source, regions: snapshot.faces, capDivisor: 32)
+            case .chest:
+                guard !snapshot.chests.isEmpty else { return source }
+                return regionMosaic(source: source, regions: snapshot.chests, capDivisor: 48)
             case .groin:
                 guard !snapshot.groins.isEmpty else { return source }
                 return regionMosaic(source: source, regions: snapshot.groins, capDivisor: 32)
