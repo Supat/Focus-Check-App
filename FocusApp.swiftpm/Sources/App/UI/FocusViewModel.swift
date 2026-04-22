@@ -46,7 +46,9 @@ enum DepthInstallState: Equatable {
 }
 
 /// Which region the mosaic covers when the user has the mosaic toggle on.
+/// .eyes uses a solid black bar rather than pixelate; the others pixelate.
 enum MosaicMode: String, CaseIterable, Identifiable {
+    case eyes  = "Eyes"
     case face  = "Face"
     case groin = "Groin"
     case body  = "Body"
@@ -156,6 +158,7 @@ final class FocusViewModel: ObservableObject {
     @Published var faceRectangles: [CGRect] = []
     @Published var bodyRectangles: [CGRect] = []
     @Published var groinRectangles: [CGRect] = []
+    @Published var eyeRectangles: [CGRect] = []
     /// User-controlled mosaic toggle. Defaults on — protective default so
     /// sensitive content isn't displayed until the user explicitly opts in.
     @Published var mosaicEnabled: Bool = true
@@ -291,6 +294,7 @@ final class FocusViewModel: ObservableObject {
                     self?.faceRectangles = overlays.faceRectangles
                     self?.bodyRectangles = overlays.bodyRectangles
                     self?.groinRectangles = overlays.groinRectangles
+                    self?.eyeRectangles = overlays.eyeRectangles
                     self?.isAnalyzing = false
                 }
             } catch is CancellationError {
@@ -322,6 +326,7 @@ final class FocusViewModel: ObservableObject {
         faceRectangles = []
         bodyRectangles = []
         groinRectangles = []
+        eyeRectangles = []
         exposureInfo = nil
         errorMessage = nil
         isAnalyzing = false
@@ -351,6 +356,7 @@ final class FocusViewModel: ObservableObject {
                     self?.faceRectangles = overlays.faceRectangles
                     self?.bodyRectangles = overlays.bodyRectangles
                     self?.groinRectangles = overlays.groinRectangles
+                    self?.eyeRectangles = overlays.eyeRectangles
                     self?.isAnalyzing = false
                 }
             } catch is CancellationError {

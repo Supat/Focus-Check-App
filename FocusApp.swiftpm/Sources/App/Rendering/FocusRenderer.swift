@@ -84,7 +84,8 @@ final class FocusRenderer {
                        zoomScale: CGFloat, zoomAnchor: CGPoint,
                        sharpness: CIImage?, depth: CIImage?, motion: CIImage?,
                        overlayHidden: Bool, mosaic: Bool, mosaicMode: MosaicMode,
-                       faces: [CGRect], bodies: [CGRect], groins: [CGRect]) =
+                       faces: [CGRect], bodies: [CGRect], groins: [CGRect],
+                       eyes: [CGRect]) =
             MainActor.assumeIsolated {
                 let applyMosaic = (viewModel.isSensitive == true) && viewModel.mosaicEnabled
                 return (viewModel.sourceImage, viewModel.style, viewModel.threshold,
@@ -94,7 +95,7 @@ final class FocusRenderer {
                         viewModel.motionOverlay,
                         viewModel.overlayHidden, applyMosaic, viewModel.mosaicMode,
                         viewModel.faceRectangles, viewModel.bodyRectangles,
-                        viewModel.groinRectangles)
+                        viewModel.groinRectangles, viewModel.eyeRectangles)
             }
 
         guard let source = snapshot.source else {
@@ -108,6 +109,9 @@ final class FocusRenderer {
         let baseSource: CIImage = {
             guard snapshot.mosaic else { return source }
             switch snapshot.mosaicMode {
+            case .eyes:
+                guard !snapshot.eyes.isEmpty else { return source }
+                return blackBarOverlay(source: source, regions: snapshot.eyes)
             case .face:
                 guard !snapshot.faces.isEmpty else { return source }
                 return regionMosaic(source: source, regions: snapshot.faces, capDivisor: 32)
@@ -512,6 +516,22 @@ final class FocusRenderer {
             }
         }
         return (stops.last!.1, stops.last!.2, stops.last!.3)
+    }
+
+    /// Composite opaque black rectangles over the supplied regions. Used
+    /// for the Eyes mode — classic "celebrity anonymity" black bar rather
+    /// than a pixelate effect. Each rect is layered via sourceOverCompositing
+    /// so multiple faces get independent bars.
+    private func blackBarOverlay(source: CIImage, regions: [CGRect]) -> CIImage {
+        var result = source
+        for region in regions {
+            let bar = CIImage(color: CIColor.black).cropped(to: region)
+            let over = CIFilter.sourceOverCompositing()
+            over.inputImage = bar
+            over.backgroundImage = result
+            result = over.outputImage ?? result
+        }
+        return result.cropped(to: source.extent)
     }
 
     /// Pixelate the whole source. Block size is `longer_side / 64 × 1.5`

@@ -41,6 +41,9 @@ actor FocusAnalyzer {
         /// Groin rectangles derived from body-pose hip joints, in source-
         /// extent coordinates. Used for the .groin mosaic mode.
         var groinRectangles: [CGRect] = []
+        /// Eye-bar rectangles derived from face-landmark eye points, in
+        /// source-extent coordinates. Used for the .eyes black-bar mode.
+        var eyeRectangles: [CGRect] = []
     }
 
     private let device: MTLDevice
@@ -151,6 +154,7 @@ actor FocusAnalyzer {
         let faceRectangles = detectFaces(in: source)
         let bodyRectangles = detectBodies(in: source)
         let groinRectangles = detectGroins(in: source)
+        let eyeRectangles = detectEyes(in: source)
 
         switch mode {
         case .sharpness:
@@ -185,7 +189,8 @@ actor FocusAnalyzer {
             sensitiveConfidence: sensitiveConfidence,
             faceRectangles: faceRectangles,
             bodyRectangles: bodyRectangles,
-            groinRectangles: groinRectangles
+            groinRectangles: groinRectangles,
+            eyeRectangles: eyeRectangles
         )
     }
 
@@ -268,6 +273,60 @@ actor FocusAnalyzer {
                 height: h
             )
             return denormalize(normalized, in: extent)
+        }
+    }
+
+    /// Derive a single eye-bar rect per detected face. VNDetectFaceLandmarks
+    /// gives eye landmark points in face-bbox-normalized coordinates; we
+    /// convert to image-extent space and take the bounding rect of both
+    /// eyes plus small horizontal padding and expanded height so the bar
+    /// reads as a classic privacy redaction rather than a hairline strip.
+    private func detectEyes(in image: CIImage) -> [CGRect] {
+        guard let cgImage = ciContext.createCGImage(image, from: image.extent) else {
+            return []
+        }
+        let request = VNDetectFaceLandmarksRequest()
+        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+        do {
+            try handler.perform([request])
+        } catch {
+            return []
+        }
+        guard let observations = request.results as? [VNFaceObservation] else { return [] }
+        let extent = image.extent
+
+        return observations.compactMap { obs -> CGRect? in
+            guard let landmarks = obs.landmarks,
+                  let leftEye = landmarks.leftEye,
+                  let rightEye = landmarks.rightEye
+            else { return nil }
+
+            // Face rect in image extent coords; landmark points are face-bbox-
+            // normalized, so multiply by faceRect to lift them into extent space.
+            let faceRect = denormalize(obs.boundingBox, in: extent)
+            let eyePoints = (leftEye.normalizedPoints + rightEye.normalizedPoints).map { p in
+                CGPoint(
+                    x: faceRect.minX + p.x * faceRect.width,
+                    y: faceRect.minY + p.y * faceRect.height
+                )
+            }
+            guard !eyePoints.isEmpty else { return nil }
+            let xs = eyePoints.map(\.x)
+            let ys = eyePoints.map(\.y)
+            guard let minX = xs.min(), let maxX = xs.max(),
+                  let minY = ys.min(), let maxY = ys.max() else { return nil }
+
+            let eyeWidth = maxX - minX
+            let eyeHeight = maxY - minY
+            let padW = eyeWidth * 0.2
+            let barHeight = max(eyeHeight * 2.0, eyeWidth * 0.15)
+
+            return CGRect(
+                x: minX - padW,
+                y: (minY + maxY) / 2 - barHeight / 2,
+                width: eyeWidth + 2 * padW,
+                height: barHeight
+            )
         }
     }
 
