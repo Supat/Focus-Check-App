@@ -4,8 +4,8 @@ import Metal
 
 enum OverlayStyle: String, CaseIterable, Identifiable {
     case peaking    = "Peaking"
-    case heatmap    = "Heatmap"
     case mask       = "Mask"
+    case heatmap    = "Heatmap"
     case focusError = "Error"
 
     var id: String { rawValue }
@@ -13,8 +13,8 @@ enum OverlayStyle: String, CaseIterable, Identifiable {
     var systemImage: String {
         switch self {
         case .peaking:    return "sparkles"
-        case .heatmap:    return "thermometer.sun"
         case .mask:       return "square.fill.on.square"
+        case .heatmap:    return "thermometer.sun"
         case .focusError: return "scope"
         }
     }
