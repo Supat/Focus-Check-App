@@ -3,17 +3,27 @@ import CoreImage
 import Metal
 
 enum OverlayStyle: String, CaseIterable, Identifiable {
-    case peaking = "Peaking"
-    case heatmap = "Heatmap"
-    case mask    = "Mask"
+    case peaking    = "Peaking"
+    case heatmap    = "Heatmap"
+    case mask       = "Mask"
+    case focusError = "Error"
 
     var id: String { rawValue }
 
     var systemImage: String {
         switch self {
-        case .peaking: return "sparkles"
-        case .heatmap: return "thermometer.sun"
-        case .mask:    return "square.fill.on.square"
+        case .peaking:    return "sparkles"
+        case .heatmap:    return "thermometer.sun"
+        case .mask:       return "square.fill.on.square"
+        case .focusError: return "scope"
+        }
+    }
+
+    /// `.focusError` needs both sharpness and depth to estimate the focal plane.
+    var requiresDepth: Bool {
+        switch self {
+        case .focusError: return true
+        default:          return false
         }
     }
 }
@@ -38,7 +48,16 @@ final class FocusViewModel: ObservableObject {
     // Scrubbable display state — cheap, no re-analysis.
     @Published var threshold: Float = 0.35
     @Published var overlayColor: Color = .red
-    @Published var style: OverlayStyle = .peaking
+    @Published var style: OverlayStyle = .peaking {
+        didSet {
+            // Focus Error needs depth data. Auto-promote to hybrid analysis so
+            // the user doesn't have to toggle two controls.
+            if style.requiresDepth && mode != .hybrid && depthAvailable {
+                mode = .hybrid
+                reanalyze()
+            }
+        }
+    }
 
     // Analysis configuration — change triggers re-analysis.
     @Published var mode: AnalysisMode = .sharpness
@@ -47,6 +66,7 @@ final class FocusViewModel: ObservableObject {
     @Published var sourceImage: CIImage?
     @Published var sharpnessOverlay: CIImage?
     @Published var depthOverlay: CIImage?
+    @Published var focalPlane: Float?
     @Published var isAnalyzing: Bool = false
     @Published var errorMessage: String?
     @Published var depthAvailable: Bool = false
@@ -98,6 +118,7 @@ final class FocusViewModel: ObservableObject {
         errorMessage = nil
         sharpnessOverlay = nil
         depthOverlay = nil
+        focalPlane = nil
 
         let mode = self.mode
         let analyzer = self.analyzer
@@ -112,6 +133,7 @@ final class FocusViewModel: ObservableObject {
                     self?.sourceImage = image
                     self?.sharpnessOverlay = overlays.sharpness
                     self?.depthOverlay = overlays.depth
+                    self?.focalPlane = overlays.focalPlane
                     self?.isAnalyzing = false
                 }
             } catch is CancellationError {
@@ -131,6 +153,7 @@ final class FocusViewModel: ObservableObject {
         sourceImage = nil
         sharpnessOverlay = nil
         depthOverlay = nil
+        focalPlane = nil
         errorMessage = nil
         isAnalyzing = false
     }
@@ -148,6 +171,7 @@ final class FocusViewModel: ObservableObject {
                 await MainActor.run {
                     self?.sharpnessOverlay = overlays.sharpness
                     self?.depthOverlay = overlays.depth
+                    self?.focalPlane = overlays.focalPlane
                     self?.isAnalyzing = false
                 }
             } catch is CancellationError {

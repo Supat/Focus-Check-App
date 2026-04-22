@@ -79,9 +79,11 @@ final class FocusRenderer {
 
     private func buildFrame(drawableSize: CGSize) -> CIImage {
         // MTKView delegate callbacks run on main — safe to read the view model directly.
-        let snapshot: (source: CIImage?, style: OverlayStyle, threshold: Float, color: Color) =
+        let snapshot: (source: CIImage?, style: OverlayStyle, threshold: Float,
+                       color: Color, focalPlane: Float?) =
             MainActor.assumeIsolated {
-                (viewModel.sourceImage, viewModel.style, viewModel.threshold, viewModel.overlayColor)
+                (viewModel.sourceImage, viewModel.style, viewModel.threshold,
+                 viewModel.overlayColor, viewModel.focalPlane)
             }
 
         guard let source = snapshot.source else {
@@ -105,6 +107,10 @@ final class FocusRenderer {
         case .mask:
             return maskComposite(base: fitted, sharpness: sharpnessOverlay, depth: depthOverlay,
                                  threshold: threshold, tint: tint)
+        case .focusError:
+            return focusErrorComposite(base: fitted, depth: depthOverlay,
+                                       focalPlane: snapshot.focalPlane,
+                                       threshold: threshold)
         }
     }
 
@@ -227,6 +233,78 @@ final class FocusRenderer {
         blend.backgroundImage = base
         blend.maskImage = mask
         return blend.outputImage ?? base
+    }
+
+    /// Two-color focus-error overlay:
+    /// - Red where depth > focalPlane + ε (too close, foreground blur)
+    /// - Blue where depth < focalPlane − ε (too far, background blur)
+    /// - Untinted where |depth − focalPlane| < ε (within the user-tuned DoF band)
+    ///
+    /// DA v2's convention: higher depth value = closer to the camera.
+    private func focusErrorComposite(base: CIImage, depth: CIImage?,
+                                     focalPlane: Float?, threshold: CGFloat) -> CIImage {
+        guard let depth, let focalPlane else { return base }
+
+        // The threshold slider controls the DoF tolerance band. Larger threshold → wider
+        // tolerance → less red/blue coverage. 0.05 .. 0.25 feels sensible for DA v2's
+        // 0..1 relative-depth output.
+        let epsilon: CGFloat = 0.05 + 0.20 * threshold
+        let gain: CGFloat = 6.0
+
+        // Normalize depth to a grayscale where R = G = B = depth magnitude. Handles both
+        // BGRA (from model's image output) and L8 (from MLMultiArray path).
+        let gray = depth.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": CIVector(x: 1, y: 0, z: 0, w: 0),
+            "inputGVector": CIVector(x: 1, y: 0, z: 0, w: 0),
+            "inputBVector": CIVector(x: 1, y: 0, z: 0, w: 0),
+            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1)
+        ])
+
+        // close mask = clamp((depth − (focal + ε)) * gain, 0, 1)
+        let closeBias = -gain * (CGFloat(focalPlane) + epsilon)
+        let closeMask = gray
+            .applyingFilter("CIColorMatrix", parameters: [
+                "inputRVector": CIVector(x: gain, y: 0, z: 0, w: 0),
+                "inputGVector": CIVector(x: gain, y: 0, z: 0, w: 0),
+                "inputBVector": CIVector(x: gain, y: 0, z: 0, w: 0),
+                "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1),
+                "inputBiasVector": CIVector(x: closeBias, y: closeBias, z: closeBias, w: 0)
+            ])
+            .applyingFilter("CIColorClamp", parameters: [
+                "inputMinComponents": CIVector(x: 0, y: 0, z: 0, w: 0),
+                "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1)
+            ])
+
+        // far mask = clamp(((focal − ε) − depth) * gain, 0, 1)
+        let farBias = gain * (CGFloat(focalPlane) - epsilon)
+        let farMask = gray
+            .applyingFilter("CIColorMatrix", parameters: [
+                "inputRVector": CIVector(x: -gain, y: 0, z: 0, w: 0),
+                "inputGVector": CIVector(x: -gain, y: 0, z: 0, w: 0),
+                "inputBVector": CIVector(x: -gain, y: 0, z: 0, w: 0),
+                "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1),
+                "inputBiasVector": CIVector(x: farBias, y: farBias, z: farBias, w: 0)
+            ])
+            .applyingFilter("CIColorClamp", parameters: [
+                "inputMinComponents": CIVector(x: 0, y: 0, z: 0, w: 0),
+                "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1)
+            ])
+
+        // Red tint where too-close, composited over base.
+        let red = CIImage(color: CIColor(red: 1, green: 0.1, blue: 0.1)).cropped(to: base.extent)
+        let redStep = CIFilter.blendWithMask()
+        redStep.inputImage = red
+        redStep.backgroundImage = base
+        redStep.maskImage = closeMask
+        let afterClose = redStep.outputImage ?? base
+
+        // Blue tint where too-far, stacked on top.
+        let blue = CIImage(color: CIColor(red: 0.1, green: 0.4, blue: 1)).cropped(to: base.extent)
+        let blueStep = CIFilter.blendWithMask()
+        blueStep.inputImage = blue
+        blueStep.backgroundImage = afterClose
+        blueStep.maskImage = farMask
+        return blueStep.outputImage ?? afterClose
     }
 
     // MARK: - Mask derivation

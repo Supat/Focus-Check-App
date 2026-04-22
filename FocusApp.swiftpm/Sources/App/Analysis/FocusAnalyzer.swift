@@ -9,6 +9,11 @@ actor FocusAnalyzer {
     struct Overlays {
         var sharpness: CIImage?
         var depth: CIImage?
+        /// Median depth value over the high-sharpness pixels. `nil` unless hybrid
+        /// analysis was requested and both signals were produced. Used by the
+        /// Focus Error renderer to classify out-of-focus pixels as too-close vs.
+        /// too-far relative to this scalar focal plane.
+        var focalPlane: Float?
     }
 
     private let device: MTLDevice
@@ -78,6 +83,7 @@ actor FocusAnalyzer {
 
         var sharpness: CIImage?
         var depth: CIImage?
+        var focalPlane: Float?
 
         switch mode {
         case .sharpness:
@@ -95,10 +101,72 @@ actor FocusAnalyzer {
             if let estimator = depthEstimator {
                 let map = try estimator.depthMap(for: source, ciContext: ciContext)
                 depth = upscale(image: map, toExtentOf: source)
+                if let s = sharpness, let d = depth {
+                    focalPlane = computeFocalPlane(sharpness: s, depth: d)
+                }
             }
         }
 
-        return Overlays(sharpness: sharpness, depth: depth)
+        return Overlays(sharpness: sharpness, depth: depth, focalPlane: focalPlane)
+    }
+
+    /// Estimate the focal plane depth as the median of depth values at high-sharpness pixels.
+    /// Reads both signals back to the CPU at a small analysis resolution (64×64) — median
+    /// on GPU requires sorting and isn't worth the complexity for a once-per-analysis scalar.
+    private func computeFocalPlane(sharpness: CIImage, depth: CIImage) -> Float? {
+        let side = 64
+        let rect = CGRect(x: 0, y: 0, width: side, height: side)
+        let linearSRGB = CGColorSpace(name: CGColorSpace.linearSRGB)!
+
+        // Normalize both images to the same small extent so the i-th pixel in each
+        // array describes the same spatial location.
+        let sharpSmall = shrinkToOrigin(sharpness, size: CGSize(width: side, height: side))
+        let depthSmall = shrinkToOrigin(depth,     size: CGSize(width: side, height: side))
+
+        var sharpBuf = [Float](repeating: 0, count: side * side)
+        var depthBuf = [Float](repeating: 0, count: side * side)
+
+        sharpBuf.withUnsafeMutableBytes { ptr in
+            ciContext.render(sharpSmall,
+                             toBitmap: ptr.baseAddress!,
+                             rowBytes: side * MemoryLayout<Float>.size,
+                             bounds: rect,
+                             format: .Rf,
+                             colorSpace: linearSRGB)
+        }
+        depthBuf.withUnsafeMutableBytes { ptr in
+            ciContext.render(depthSmall,
+                             toBitmap: ptr.baseAddress!,
+                             rowBytes: side * MemoryLayout<Float>.size,
+                             bounds: rect,
+                             format: .Rf,
+                             colorSpace: linearSRGB)
+        }
+
+        // Collect depths where sharpness is above a cutoff. The cutoff is deliberately
+        // loose — we want enough textured in-focus pixels to dominate the median, not
+        // only the absolute peaks (which are noisy).
+        let cutoff: Float = 0.1
+        var selected: [Float] = []
+        selected.reserveCapacity(side * side)
+        for i in 0..<(side * side) where sharpBuf[i] > cutoff {
+            selected.append(depthBuf[i])
+        }
+        guard selected.count >= 10 else { return nil }
+        selected.sort()
+        return selected[selected.count / 2]
+    }
+
+    /// Non-uniform stretch to `size` with origin at (0,0). Matches the CPU readback bounds.
+    private func shrinkToOrigin(_ image: CIImage, size: CGSize) -> CIImage {
+        let sx = size.width / image.extent.width
+        let sy = size.height / image.extent.height
+        let normalized = image.transformed(
+            by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY)
+        )
+        return normalized
+            .transformed(by: CGAffineTransform(scaleX: sx, y: sy))
+            .cropped(to: CGRect(origin: .zero, size: size))
     }
 
     // MARK: - Helpers
