@@ -160,7 +160,7 @@ final class FocusViewModel: ObservableObject {
     @Published var faceRectangles: [CGRect] = []
     @Published var bodyRectangles: [CGRect] = []
     @Published var groinRectangles: [CGRect] = []
-    @Published var eyeRectangles: [CGRect] = []
+    @Published var eyeBars: [EyeBar] = []
     @Published var chestRectangles: [CGRect] = []
     /// User-controlled mosaic toggle. Defaults on — protective default so
     /// sensitive content isn't displayed until the user explicitly opts in.
@@ -297,7 +297,7 @@ final class FocusViewModel: ObservableObject {
                     self?.faceRectangles = overlays.faceRectangles
                     self?.bodyRectangles = overlays.bodyRectangles
                     self?.groinRectangles = overlays.groinRectangles
-                    self?.eyeRectangles = overlays.eyeRectangles
+                    self?.eyeBars = overlays.eyeBars
                     self?.chestRectangles = overlays.chestRectangles
                     self?.isAnalyzing = false
                 }
@@ -330,7 +330,7 @@ final class FocusViewModel: ObservableObject {
         faceRectangles = []
         bodyRectangles = []
         groinRectangles = []
-        eyeRectangles = []
+        eyeBars = []
         chestRectangles = []
         exposureInfo = nil
         errorMessage = nil
@@ -361,7 +361,7 @@ final class FocusViewModel: ObservableObject {
                     self?.faceRectangles = overlays.faceRectangles
                     self?.bodyRectangles = overlays.bodyRectangles
                     self?.groinRectangles = overlays.groinRectangles
-                    self?.eyeRectangles = overlays.eyeRectangles
+                    self?.eyeBars = overlays.eyeBars
                     self?.chestRectangles = overlays.chestRectangles
                     self?.isAnalyzing = false
                 }

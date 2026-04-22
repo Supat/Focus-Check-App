@@ -85,7 +85,7 @@ final class FocusRenderer {
                        sharpness: CIImage?, depth: CIImage?, motion: CIImage?,
                        overlayHidden: Bool, mosaic: Bool, mosaicMode: MosaicMode,
                        faces: [CGRect], bodies: [CGRect], groins: [CGRect],
-                       eyes: [CGRect], chests: [CGRect]) =
+                       eyes: [EyeBar], chests: [CGRect]) =
             MainActor.assumeIsolated {
                 let applyMosaic = (viewModel.isSensitive == true) && viewModel.mosaicEnabled
                 return (viewModel.sourceImage, viewModel.style, viewModel.threshold,
@@ -95,7 +95,7 @@ final class FocusRenderer {
                         viewModel.motionOverlay,
                         viewModel.overlayHidden, applyMosaic, viewModel.mosaicMode,
                         viewModel.faceRectangles, viewModel.bodyRectangles,
-                        viewModel.groinRectangles, viewModel.eyeRectangles,
+                        viewModel.groinRectangles, viewModel.eyeBars,
                         viewModel.chestRectangles)
             }
 
@@ -117,7 +117,7 @@ final class FocusRenderer {
                 // detections, no cover is applied (user can pick Body/Whole).
                 var result = source
                 if !snapshot.eyes.isEmpty {
-                    result = blackBarOverlay(source: result, regions: snapshot.eyes)
+                    result = blackBarOverlay(source: result, bars: snapshot.eyes)
                 }
                 if !snapshot.groins.isEmpty {
                     result = regionMosaic(source: result, regions: snapshot.groins, capDivisor: 32)
@@ -125,7 +125,7 @@ final class FocusRenderer {
                 return result
             case .eyes:
                 guard !snapshot.eyes.isEmpty else { return source }
-                return blackBarOverlay(source: source, regions: snapshot.eyes)
+                return blackBarOverlay(source: source, bars: snapshot.eyes)
             case .face:
                 guard !snapshot.faces.isEmpty else { return source }
                 return regionMosaic(source: source, regions: snapshot.faces, capDivisor: 32)
@@ -535,16 +535,32 @@ final class FocusRenderer {
         return (stops.last!.1, stops.last!.2, stops.last!.3)
     }
 
-    /// Composite opaque black rectangles over the supplied regions. Used
-    /// for the Eyes mode — classic "celebrity anonymity" black bar rather
-    /// than a pixelate effect. Each rect is layered via sourceOverCompositing
-    /// so multiple faces get independent bars.
-    private func blackBarOverlay(source: CIImage, regions: [CGRect]) -> CIImage {
+    /// Composite opaque black bars over the supplied eye pairs. Each bar is
+    /// rotated to match the head tilt: we draw an axis-aligned black rect
+    /// centered on the origin, then concatenate (re-center → rotate →
+    /// translate-to-eye-midpoint) to land it at the right spot with the
+    /// right tilt. Rectangles produced by CIImage(color:).cropped(to:)
+    /// have `origin = (0,0)` plus the requested size; applying the combined
+    /// transform rotates the rect around its center, not the corner.
+    private func blackBarOverlay(source: CIImage, bars: [EyeBar]) -> CIImage {
         var result = source
-        for region in regions {
-            let bar = CIImage(color: CIColor.black).cropped(to: region)
+        for bar in bars {
+            let axisAligned = CIImage(color: CIColor.black).cropped(
+                to: CGRect(origin: .zero, size: bar.size)
+            )
+            let transform = CGAffineTransform(
+                translationX: -bar.size.width / 2,
+                y: -bar.size.height / 2
+            )
+            .concatenating(CGAffineTransform(rotationAngle: bar.angleRadians))
+            .concatenating(CGAffineTransform(
+                translationX: bar.center.x,
+                y: bar.center.y
+            ))
+            let oriented = axisAligned.transformed(by: transform)
+
             let over = CIFilter.sourceOverCompositing()
-            over.inputImage = bar
+            over.inputImage = oriented
             over.backgroundImage = result
             result = over.outputImage ?? result
         }

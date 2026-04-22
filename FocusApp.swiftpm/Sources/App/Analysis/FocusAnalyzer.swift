@@ -4,6 +4,15 @@ import CoreImage.CIFilterBuiltins
 import ImageIO
 import Vision
 
+/// An oriented black-bar redaction over a detected pair of eyes. Center +
+/// size + tilt angle (radians) — lets the renderer rotate the bar to follow
+/// a tilted head instead of drawing a jarring axis-aligned strip.
+struct EyeBar: Equatable {
+    var center: CGPoint
+    var size: CGSize
+    var angleRadians: CGFloat
+}
+
 /// Owns all heavyweight GPU/ML resources and serializes access through actor isolation.
 /// CLAUDE.md rule: MPS / CIContext / MLModel calls live on this actor.
 actor FocusAnalyzer {
@@ -41,9 +50,10 @@ actor FocusAnalyzer {
         /// Groin rectangles derived from body-pose hip joints, in source-
         /// extent coordinates. Used for the .groin mosaic mode.
         var groinRectangles: [CGRect] = []
-        /// Eye-bar rectangles derived from face-landmark eye points, in
-        /// source-extent coordinates. Used for the .eyes black-bar mode.
-        var eyeRectangles: [CGRect] = []
+        /// Oriented eye bars (center + size + tilt angle) derived from face-
+        /// landmark eye points, in source-extent coordinates. Used for the
+        /// Eyes black-bar mode and the Tabloid combined mode.
+        var eyeBars: [EyeBar] = []
         /// Upper-torso rectangles derived from body-pose shoulder + hip
         /// joints, in source-extent coordinates. Used for the .chest mode.
         var chestRectangles: [CGRect] = []
@@ -157,7 +167,7 @@ actor FocusAnalyzer {
         let faceRectangles = detectFaces(in: source)
         let bodyRectangles = detectBodies(in: source)
         let groinRectangles = detectGroins(in: source)
-        let eyeRectangles = detectEyes(in: source)
+        let eyeBars = detectEyes(in: source)
         let chestRectangles = detectChests(in: source)
 
         switch mode {
@@ -194,7 +204,7 @@ actor FocusAnalyzer {
             faceRectangles: faceRectangles,
             bodyRectangles: bodyRectangles,
             groinRectangles: groinRectangles,
-            eyeRectangles: eyeRectangles,
+            eyeBars: eyeBars,
             chestRectangles: chestRectangles
         )
     }
@@ -334,12 +344,11 @@ actor FocusAnalyzer {
         }
     }
 
-    /// Derive a single eye-bar rect per detected face. VNDetectFaceLandmarks
-    /// gives eye landmark points in face-bbox-normalized coordinates; we
-    /// convert to image-extent space and take the bounding rect of both
-    /// eyes plus small horizontal padding and expanded height so the bar
-    /// reads as a classic privacy redaction rather than a hairline strip.
-    private func detectEyes(in image: CIImage) -> [CGRect] {
+    /// Derive one oriented eye bar per detected face. Measures the tilt
+    /// from the left-eye center to the right-eye center and returns a bar
+    /// centered on the midpoint, sized proportionally to the eye-to-eye
+    /// distance, and rotated to match the head tilt.
+    private func detectEyes(in image: CIImage) -> [EyeBar] {
         guard let cgImage = ciContext.createCGImage(image, from: image.extent) else {
             return []
         }
@@ -353,37 +362,57 @@ actor FocusAnalyzer {
         guard let observations = request.results as? [VNFaceObservation] else { return [] }
         let extent = image.extent
 
-        return observations.compactMap { obs -> CGRect? in
+        return observations.compactMap { obs -> EyeBar? in
             guard let landmarks = obs.landmarks,
                   let leftEye = landmarks.leftEye,
                   let rightEye = landmarks.rightEye
             else { return nil }
 
-            // Face rect in image extent coords; landmark points are face-bbox-
-            // normalized, so multiply by faceRect to lift them into extent space.
             let faceRect = denormalize(obs.boundingBox, in: extent)
-            let eyePoints = (leftEye.normalizedPoints + rightEye.normalizedPoints).map { p in
-                CGPoint(
-                    x: faceRect.minX + p.x * faceRect.width,
-                    y: faceRect.minY + p.y * faceRect.height
-                )
+
+            // Lift landmark points from face-bbox-normalized space to image
+            // extent coordinates.
+            func lift(_ region: VNFaceLandmarkRegion2D) -> [CGPoint] {
+                region.normalizedPoints.map { p in
+                    CGPoint(
+                        x: faceRect.minX + p.x * faceRect.width,
+                        y: faceRect.minY + p.y * faceRect.height
+                    )
+                }
             }
-            guard !eyePoints.isEmpty else { return nil }
-            let xs = eyePoints.map(\.x)
-            let ys = eyePoints.map(\.y)
-            guard let minX = xs.min(), let maxX = xs.max(),
-                  let minY = ys.min(), let maxY = ys.max() else { return nil }
+            let leftPoints = lift(leftEye)
+            let rightPoints = lift(rightEye)
+            guard !leftPoints.isEmpty, !rightPoints.isEmpty else { return nil }
 
-            let eyeWidth = maxX - minX
-            let eyeHeight = maxY - minY
-            let padW = eyeWidth * 0.2
-            let barHeight = max(eyeHeight * 2.0, eyeWidth * 0.15)
+            func centroid(_ points: [CGPoint]) -> CGPoint {
+                let n = CGFloat(points.count)
+                let sx = points.map(\.x).reduce(0, +)
+                let sy = points.map(\.y).reduce(0, +)
+                return CGPoint(x: sx / n, y: sy / n)
+            }
+            let leftCenter = centroid(leftPoints)
+            let rightCenter = centroid(rightPoints)
 
-            return CGRect(
-                x: minX - padW,
-                y: (minY + maxY) / 2 - barHeight / 2,
-                width: eyeWidth + 2 * padW,
-                height: barHeight
+            let dx = rightCenter.x - leftCenter.x
+            let dy = rightCenter.y - leftCenter.y
+            let eyeDistance = hypot(dx, dy)
+            guard eyeDistance > 0 else { return nil }
+            let angle = atan2(dy, dx)
+
+            // Width covers both eyes plus padding; height proportional so the
+            // bar reads as a proper redaction strip rather than a hair-thin line.
+            let barWidth = eyeDistance * 1.4
+            let barHeight = eyeDistance * 0.3
+
+            let center = CGPoint(
+                x: (leftCenter.x + rightCenter.x) / 2,
+                y: (leftCenter.y + rightCenter.y) / 2
+            )
+
+            return EyeBar(
+                center: center,
+                size: CGSize(width: barWidth, height: barHeight),
+                angleRadians: angle
             )
         }
     }
