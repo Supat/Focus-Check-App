@@ -60,7 +60,9 @@ struct OverlayControls: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                .disabled(viewModel.sourceImage == nil)
+                // Error style requires both signals — lock the picker to Hybrid so
+                // the user can't accidentally strand the overlay without depth data.
+                .disabled(viewModel.sourceImage == nil || viewModel.style.requiresDepth)
                 .onChange(of: viewModel.mode) { _, _ in
                     viewModel.reanalyze()
                 }
