@@ -111,8 +111,15 @@ final class FocusRenderer {
                 guard !snapshot.faces.isEmpty else { return source }
                 return regionMosaic(source: source, regions: snapshot.faces, capDivisor: 32)
             case .body:
-                guard !snapshot.bodies.isEmpty else { return source }
-                return regionMosaic(source: source, regions: snapshot.bodies, capDivisor: 64)
+                // Prefer full-body regions; if Vision didn't find any, fall
+                // back to face rects so flagged content still gets some cover.
+                if !snapshot.bodies.isEmpty {
+                    return regionMosaic(source: source, regions: snapshot.bodies, capDivisor: 64)
+                }
+                if !snapshot.faces.isEmpty {
+                    return regionMosaic(source: source, regions: snapshot.faces, capDivisor: 32)
+                }
+                return source
             case .whole:
                 return wholeMosaic(source: source)
             }
