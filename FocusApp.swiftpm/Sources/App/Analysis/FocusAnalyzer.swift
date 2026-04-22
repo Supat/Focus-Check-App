@@ -28,6 +28,9 @@ actor FocusAnalyzer {
         /// Top class label from whichever backend answered ("Nudity" from
         /// SCA, or a class name like "NSFW" from the fallback model).
         var sensitiveLabel: String?
+        /// Top class probability in [0, 1]. Only populated by the NSFW
+        /// fallback; SCA doesn't expose a confidence number.
+        var sensitiveConfidence: Float?
         /// Face bounding boxes in source-extent coordinates (CIImage Y-up).
         /// Empty array when no faces detected. Used by the renderer to mosaic
         /// only face regions when sensitive content is flagged.
@@ -138,6 +141,7 @@ actor FocusAnalyzer {
         let sensitiveResult = await sensitiveContent.check(image: source, ciContext: ciContext)
         let isSensitive = sensitiveResult?.isSensitive
         let sensitiveLabel = sensitiveResult?.topLabel
+        let sensitiveConfidence = sensitiveResult?.confidence
 
         // Face rectangles — used by the mosaic renderer. Detect on every
         // analysis so the data is ready when the user toggles mosaic on.
@@ -174,6 +178,7 @@ actor FocusAnalyzer {
             motionOverlay: motionOverlay,
             isSensitive: isSensitive,
             sensitiveLabel: sensitiveLabel,
+            sensitiveConfidence: sensitiveConfidence,
             faceRectangles: faceRectangles,
             bodyRectangles: bodyRectangles
         )

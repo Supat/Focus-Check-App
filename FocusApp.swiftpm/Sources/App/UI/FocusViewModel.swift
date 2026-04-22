@@ -151,6 +151,7 @@ final class FocusViewModel: ObservableObject {
     @Published var exposureInfo: ExposureInfo?
     @Published var isSensitive: Bool?
     @Published var sensitiveLabel: String?
+    @Published var sensitiveConfidence: Float?
     @Published var faceRectangles: [CGRect] = []
     @Published var bodyRectangles: [CGRect] = []
     /// User-controlled mosaic toggle. Defaults on — protective default so
@@ -284,6 +285,7 @@ final class FocusViewModel: ObservableObject {
                     self?.motionOverlay = overlays.motionOverlay
                     self?.isSensitive = overlays.isSensitive
                     self?.sensitiveLabel = overlays.sensitiveLabel
+                    self?.sensitiveConfidence = overlays.sensitiveConfidence
                     self?.faceRectangles = overlays.faceRectangles
                     self?.bodyRectangles = overlays.bodyRectangles
                     self?.isAnalyzing = false
@@ -313,6 +315,7 @@ final class FocusViewModel: ObservableObject {
         motionOverlay = nil
         isSensitive = nil
         sensitiveLabel = nil
+        sensitiveConfidence = nil
         faceRectangles = []
         bodyRectangles = []
         exposureInfo = nil
@@ -340,6 +343,7 @@ final class FocusViewModel: ObservableObject {
                     self?.motionOverlay = overlays.motionOverlay
                     self?.isSensitive = overlays.isSensitive
                     self?.sensitiveLabel = overlays.sensitiveLabel
+                    self?.sensitiveConfidence = overlays.sensitiveConfidence
                     self?.faceRectangles = overlays.faceRectangles
                     self?.bodyRectangles = overlays.bodyRectangles
                     self?.isAnalyzing = false

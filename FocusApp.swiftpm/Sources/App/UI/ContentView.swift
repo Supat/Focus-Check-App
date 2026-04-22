@@ -125,15 +125,19 @@ struct ContentView: View {
     /// mosaic toggle — lets the user know the image was flagged even when
     /// they've chosen to view it uncovered. Uses the top class label from
     /// the classifier (e.g. "Nudity" from SCA, "NSFW" from the fallback).
+    /// Red when the NSFW classifier's confidence exceeds 0.6 — a stronger
+    /// visual signal for high-confidence matches. Orange for borderline
+    /// cases or SCA results (which don't expose a numeric confidence).
     @ViewBuilder
     private var sensitiveContentBadge: some View {
         if viewModel.isSensitive == true, viewModel.sourceImage != nil {
+            let isHighConfidence = (viewModel.sensitiveConfidence ?? 0) > 0.6
             HStack(spacing: 6) {
                 Image(systemName: "exclamationmark.shield.fill")
                 Text(viewModel.sensitiveLabel ?? "Sensitive")
                     .font(.caption)
             }
-            .foregroundStyle(.orange)
+            .foregroundStyle(isHighConfidence ? Color.red : Color.orange)
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .background(.regularMaterial, in: Capsule())

@@ -44,11 +44,15 @@ enum SensitiveContentAvailability: Equatable {
 }
 
 /// Combined result of a single sensitivity classification: whether the
-/// image is flagged plus the top-confidence class label from the underlying
-/// model (used by the UI badge so users can see *what* the classifier said).
+/// image is flagged plus the top-confidence class label and probability
+/// from the underlying model (used by the UI badge so users can see
+/// *what* the classifier said and how confident it was).
 struct SensitiveContentResult: Equatable {
     let isSensitive: Bool
     let topLabel: String?
+    /// Probability of the top class in [0, 1]. SCA doesn't expose one, so
+    /// this is nil for the primary backend; the NSFW fallback populates it.
+    let confidence: Float?
 }
 
 /// On-device nudity / sensitive-imagery classifier.
@@ -107,7 +111,11 @@ struct SensitiveContentChecker {
             // a generic "Sensitive" so the badge text reads like a real
             // class label.
             let label = result.isSensitive ? "Nudity" : "Safe"
-            return SensitiveContentResult(isSensitive: result.isSensitive, topLabel: label)
+            return SensitiveContentResult(
+                isSensitive: result.isSensitive,
+                topLabel: label,
+                confidence: nil
+            )
         } catch {
             return nil
         }
@@ -124,7 +132,11 @@ struct SensitiveContentChecker {
         else { return nil }
         let isSensitive = top.label.lowercased().contains("nsfw")
             && top.probability >= nsfwConfidenceThreshold
-        return SensitiveContentResult(isSensitive: isSensitive, topLabel: top.label)
+        return SensitiveContentResult(
+            isSensitive: isSensitive,
+            topLabel: top.label,
+            confidence: top.probability
+        )
     }
 }
 
