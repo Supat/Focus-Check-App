@@ -43,6 +43,14 @@ enum SensitiveContentAvailability: Equatable {
     }
 }
 
+/// Combined result of a single sensitivity classification: whether the
+/// image is flagged plus the top-confidence class label from the underlying
+/// model (used by the UI badge so users can see *what* the classifier said).
+struct SensitiveContentResult: Equatable {
+    let isSensitive: Bool
+    let topLabel: String?
+}
+
 /// On-device nudity / sensitive-imagery classifier.
 ///
 /// Primary backend: Apple's `SensitiveContentAnalysis` framework (iOS 17+).
@@ -51,8 +59,7 @@ enum SensitiveContentAvailability: Equatable {
 ///
 /// Fallback backend: a downloaded OpenNSFW-style Core ML model installed
 /// via `NSFWModelDownloader`. Works in Playgrounds end-to-end once the
-/// user has downloaded the model. Less polished than SCA but useful
-/// enough for a dev build.
+/// user has downloaded the model.
 struct SensitiveContentChecker {
 
     /// Probability ≥ this flags the image as sensitive in the NSFW fallback.
@@ -75,9 +82,9 @@ struct SensitiveContentChecker {
         #endif
     }
 
-    /// Classify a CIImage. Returns `true`/`false` when the stack answered,
-    /// `nil` when neither backend can run.
-    func check(image: CIImage, ciContext: CIContext) async -> Bool? {
+    /// Classify a CIImage. Returns the verdict + the top class label when the
+    /// stack answered, `nil` when neither backend can run.
+    func check(image: CIImage, ciContext: CIContext) async -> SensitiveContentResult? {
         if let scaResult = await checkSCA(image: image, ciContext: ciContext) {
             return scaResult
         }
@@ -86,7 +93,7 @@ struct SensitiveContentChecker {
 
     // MARK: - SCA path
 
-    private func checkSCA(image: CIImage, ciContext: CIContext) async -> Bool? {
+    private func checkSCA(image: CIImage, ciContext: CIContext) async -> SensitiveContentResult? {
         #if canImport(SensitiveContentAnalysis)
         let analyzer = SCSensitivityAnalyzer()
         guard analyzer.analysisPolicy != .disabled else { return nil }
@@ -95,7 +102,12 @@ struct SensitiveContentChecker {
         }
         do {
             let result = try await analyzer.analyzeImage(cgImage)
-            return result.isSensitive
+            // SCA only exposes a `Sensitivity` struct (currently just .nudity)
+            // when isSensitive is true. Surface "Nudity" / "Safe" rather than
+            // a generic "Sensitive" so the badge text reads like a real
+            // class label.
+            let label = result.isSensitive ? "Nudity" : "Safe"
+            return SensitiveContentResult(isSensitive: result.isSensitive, topLabel: label)
         } catch {
             return nil
         }
@@ -106,11 +118,13 @@ struct SensitiveContentChecker {
 
     // MARK: - NSFW Core ML path
 
-    private func checkNSFW(image: CIImage, ciContext: CIContext) -> Bool? {
-        guard let classifier = NSFWClassifier.shared else { return nil }
-        let probability = classifier.nsfwProbability(for: image, ciContext: ciContext)
-        guard let probability else { return nil }
-        return probability >= nsfwConfidenceThreshold
+    private func checkNSFW(image: CIImage, ciContext: CIContext) -> SensitiveContentResult? {
+        guard let classifier = NSFWClassifier.shared,
+              let top = classifier.topClass(for: image, ciContext: ciContext)
+        else { return nil }
+        let isSensitive = top.label.lowercased().contains("nsfw")
+            && top.probability >= nsfwConfidenceThreshold
+        return SensitiveContentResult(isSensitive: isSensitive, topLabel: top.label)
     }
 }
 
@@ -153,8 +167,9 @@ private final class NSFWClassifier {
         self.inputSize = resolvedSize
     }
 
-    /// NSFW probability in [0, 1]. Returns nil on any failure.
-    func nsfwProbability(for image: CIImage, ciContext: CIContext) -> Float? {
+    /// Top-confidence class for an image: (label, probability). Returns nil
+    /// on any failure.
+    func topClass(for image: CIImage, ciContext: CIContext) -> (label: String, probability: Float)? {
         let w = Int(inputSize.width)
         let h = Int(inputSize.height)
         let resized = resize(image, to: inputSize)
@@ -173,7 +188,7 @@ private final class NSFWClassifier {
                 inputName: MLFeatureValue(pixelBuffer: pb)
             ])
             let result = try model.prediction(from: features)
-            return extractNSFWScore(from: result)
+            return extractTopClass(from: result)
         } catch {
             return nil
         }
@@ -181,29 +196,33 @@ private final class NSFWClassifier {
 
     /// CreateML image classifiers expose two outputs — `classLabel` (String)
     /// and `classLabelProbs` (Dictionary<String, Double>) — so we have to
-    /// iterate all output names to find the probability dictionary. Also
-    /// falls back to MLMultiArray outputs for non-CreateML models.
-    private func extractNSFWScore(from result: MLFeatureProvider) -> Float? {
+    /// iterate all output names to find the probability dictionary. Picks
+    /// the class with the highest probability. Falls back to MLMultiArray
+    /// outputs for non-CreateML models.
+    private func extractTopClass(from result: MLFeatureProvider) -> (label: String, probability: Float)? {
         for name in result.featureNames {
             guard let value = result.featureValue(for: name) else { continue }
-            // Class-probability dictionary path (CreateML default).
             if value.type == .dictionary {
                 let dict = value.dictionaryValue
+                var topKey: String?
+                var topProb: Float = -1
                 for (key, number) in dict {
                     let keyStr = (key as? String) ?? String(describing: key)
-                    if keyStr.lowercased().contains("nsfw") {
-                        return number.floatValue
+                    let prob = number.floatValue
+                    if prob > topProb {
+                        topProb = prob
+                        topKey = keyStr
                     }
                 }
+                if let topKey { return (topKey, topProb) }
             }
         }
-        // MLMultiArray fallback: OpenNSFW-style checkpoints emit a 2-element
-        // [SFW, NSFW] probability vector; some single-output variants emit
-        // just the NSFW probability.
+        // MLMultiArray fallback: OpenNSFW-style 2-element [SFW, NSFW] vector.
         for name in result.featureNames {
-            if let array = result.featureValue(for: name)?.multiArrayValue {
-                if array.count >= 2 { return array[1].floatValue }
-                if array.count == 1 { return array[0].floatValue }
+            if let array = result.featureValue(for: name)?.multiArrayValue, array.count >= 2 {
+                let sfw = array[0].floatValue
+                let nsfw = array[1].floatValue
+                return nsfw >= sfw ? ("NSFW", nsfw) : ("SFW", sfw)
             }
         }
         return nil

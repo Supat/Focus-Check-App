@@ -123,13 +123,14 @@ struct ContentView: View {
 
     /// Shown whenever the classifier flagged the image, independent of the
     /// mosaic toggle — lets the user know the image was flagged even when
-    /// they've chosen to view it uncovered.
+    /// they've chosen to view it uncovered. Uses the top class label from
+    /// the classifier (e.g. "Nudity" from SCA, "NSFW" from the fallback).
     @ViewBuilder
     private var sensitiveContentBadge: some View {
         if viewModel.isSensitive == true, viewModel.sourceImage != nil {
             HStack(spacing: 6) {
                 Image(systemName: "exclamationmark.shield.fill")
-                Text("Explicit")
+                Text(viewModel.sensitiveLabel ?? "Sensitive")
                     .font(.caption)
             }
             .foregroundStyle(.orange)

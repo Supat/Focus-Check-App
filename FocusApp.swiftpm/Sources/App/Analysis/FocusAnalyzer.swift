@@ -25,6 +25,9 @@ actor FocusAnalyzer {
         /// Apple's Sensitive Content Analysis result. nil when the framework
         /// is unavailable or Communication Safety is off in Screen Time.
         var isSensitive: Bool?
+        /// Top class label from whichever backend answered ("Nudity" from
+        /// SCA, or a class name like "NSFW" from the fallback model).
+        var sensitiveLabel: String?
         /// Face bounding boxes in source-extent coordinates (CIImage Y-up).
         /// Empty array when no faces detected. Used by the renderer to mosaic
         /// only face regions when sensitive content is flagged.
@@ -130,9 +133,11 @@ actor FocusAnalyzer {
             upscale(image: $0, toExtentOf: source)
         }
 
-        // Sensitive-content classification — binary, image-level. Off-main
-        // async; returns nil if Communication Safety is disabled.
-        let isSensitive = await sensitiveContent.check(image: source, ciContext: ciContext)
+        // Sensitive-content classification — binary + top class label.
+        // Off-main async; returns nil if the stack couldn't answer.
+        let sensitiveResult = await sensitiveContent.check(image: source, ciContext: ciContext)
+        let isSensitive = sensitiveResult?.isSensitive
+        let sensitiveLabel = sensitiveResult?.topLabel
 
         // Face rectangles — used by the mosaic renderer. Detect on every
         // analysis so the data is ready when the user toggles mosaic on.
@@ -168,6 +173,7 @@ actor FocusAnalyzer {
             motionBlur: motionReport,
             motionOverlay: motionOverlay,
             isSensitive: isSensitive,
+            sensitiveLabel: sensitiveLabel,
             faceRectangles: faceRectangles,
             bodyRectangles: bodyRectangles
         )
