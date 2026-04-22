@@ -97,7 +97,11 @@ struct ContentView: View {
     private var exposureBadge: some View {
         if let info = viewModel.exposureInfo,
            viewModel.sourceImage != nil {
-            let parts = [info.formattedFocalLength, info.formattedShutter].compactMap { $0 }
+            let parts = [
+                info.formattedFocalLength,
+                info.formattedShutter,
+                info.formattedFocusDistance
+            ].compactMap { $0 }
             if !parts.isEmpty {
                 HStack(spacing: 6) {
                     Image(systemName: "camera.aperture")

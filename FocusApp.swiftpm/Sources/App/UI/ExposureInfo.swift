@@ -11,6 +11,9 @@ struct ExposureInfo: Equatable {
     var exposureTimeSeconds: Float?
     var fNumber: Float?
     var iso: Int?
+    /// EXIF SubjectDistance, in metres. Rarely populated by phone cameras;
+    /// DSLRs with modern AF modules write it more reliably.
+    var subjectDistanceMeters: Float?
 
     static func read(from url: URL) -> ExposureInfo? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
@@ -27,6 +30,7 @@ struct ExposureInfo: Equatable {
            let first = iso.first {
             info.iso = first.intValue
         }
+        info.subjectDistanceMeters = (exif[kCGImagePropertyExifSubjectDistance] as? NSNumber)?.floatValue
         return info.isEmpty ? nil : info
     }
 
@@ -50,12 +54,22 @@ struct ExposureInfo: Equatable {
         return nil
     }
 
+    /// "1.2 m" for close subjects, "12 m" past 10 m, "∞" for far/infinity
+    /// markers (some cameras encode infinity as a very large number).
+    var formattedFocusDistance: String? {
+        guard let d = subjectDistanceMeters, d > 0 else { return nil }
+        if d >= 1000 { return "∞" }
+        if d >= 10 { return "\(Int(d.rounded())) m" }
+        return String(format: "%.1f m", d)
+    }
+
     /// True when no EXIF fields at all were populated.
     private var isEmpty: Bool {
         focalLengthMM == nil &&
         focalLengthEquivalent35MM == nil &&
         exposureTimeSeconds == nil &&
         fNumber == nil &&
-        iso == nil
+        iso == nil &&
+        subjectDistanceMeters == nil
     }
 }
