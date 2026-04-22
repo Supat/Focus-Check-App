@@ -34,9 +34,6 @@ struct OverlayControls: View {
                 Slider(value: $viewModel.threshold, in: 0...1)
                 TextField("", text: $thresholdText)
                     .focused($thresholdFocused)
-                    #if os(iOS)
-                    .keyboardType(.decimalPad)
-                    #endif
                     .multilineTextAlignment(.trailing)
                     .font(.caption.monospacedDigit())
                     .textFieldStyle(.roundedBorder)
