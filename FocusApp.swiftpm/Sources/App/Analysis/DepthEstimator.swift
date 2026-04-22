@@ -40,27 +40,28 @@ struct DepthEstimator {
     /// Predict a relative monocular depth map at the model's native resolution.
     /// Output is a grayscale `CIImage` where brighter = closer.
     func depthMap(for image: CIImage, ciContext: CIContext) throws -> CIImage {
-        // Depth Anything v2 expects 518×518 RGB input. The exact feature name comes from the model;
-        // we probe the description so this stays model-agnostic if Apple ships a relabeled variant.
         let inputName = model.modelDescription.inputDescriptionsByName.keys.first ?? "image"
         let outputName = model.modelDescription.outputDescriptionsByName.keys.first ?? "depth"
 
-        let side: CGFloat = 518
-        let fit = image
-            .transformed(by: fitTransform(for: image.extent, target: CGSize(width: side, height: side)))
-            .cropped(to: CGRect(x: 0, y: 0, width: side, height: side))
+        // Query the actual allowed input size — Apple's Core ML export of Depth Anything v2
+        // enumerates specific sizes (not a range), and hardcoding 518×518 was wrong.
+        let inputSize = preferredInputSize(for: inputName)
+        let w = Int(inputSize.width)
+        let h = Int(inputSize.height)
+
+        // Aspect-fill + center-crop so the whole allowed input is covered.
+        let filled = aspectFill(image, into: inputSize)
 
         var pixelBuffer: CVPixelBuffer?
         let attrs: [CFString: Any] = [
             kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary
         ]
-        CVPixelBufferCreate(kCFAllocatorDefault,
-                            Int(side), Int(side),
+        CVPixelBufferCreate(kCFAllocatorDefault, w, h,
                             kCVPixelFormatType_32BGRA,
                             attrs as CFDictionary,
                             &pixelBuffer)
         guard let pb = pixelBuffer else { throw AnalysisError.coreImageFailure }
-        ciContext.render(fit, to: pb)
+        ciContext.render(filled, to: pb)
 
         let features = try MLDictionaryFeatureProvider(dictionary: [
             inputName: MLFeatureValue(pixelBuffer: pb)
@@ -76,11 +77,46 @@ struct DepthEstimator {
         throw AnalysisError.coreImageFailure
     }
 
-    private func fitTransform(for extent: CGRect, target: CGSize) -> CGAffineTransform {
-        let sx = target.width / extent.width
-        let sy = target.height / extent.height
-        let s = min(sx, sy)
-        return CGAffineTransform(scaleX: s, y: s)
+    /// Inspect the model's image input constraint and pick an allowed size. Handles
+    /// enumerated, range, and unspecified size-constraint types — falling back to the
+    /// constraint's default (`pixelsWide`/`pixelsHigh`) when nothing more specific fits.
+    private func preferredInputSize(for inputName: String) -> CGSize {
+        guard let desc = model.modelDescription.inputDescriptionsByName[inputName],
+              let constraint = desc.imageConstraint else {
+            return CGSize(width: 512, height: 512)
+        }
+
+        let sizes = constraint.sizeConstraint
+        switch sizes.type {
+        case .enumerated:
+            // Prefer the largest enumerated size for best depth detail.
+            let enumerated = sizes.enumeratedImageSizes
+            if let largest = enumerated.max(by: { $0.pixelsWide < $1.pixelsWide }) {
+                return CGSize(width: largest.pixelsWide, height: largest.pixelsHigh)
+            }
+        case .range:
+            // Use the default (constraint.pixelsWide/High falls within the range).
+            break
+        case .unspecified:
+            break
+        @unknown default:
+            break
+        }
+        return CGSize(width: constraint.pixelsWide, height: constraint.pixelsHigh)
+    }
+
+    /// Scale `image` so it fully covers `target`, then center-crop to exactly `target`.
+    /// This avoids the black-letterbox borders that aspect-fit produced.
+    private func aspectFill(_ image: CIImage, into target: CGSize) -> CIImage {
+        let sx = target.width / image.extent.width
+        let sy = target.height / image.extent.height
+        let s = max(sx, sy)
+        let scaled = image.transformed(by: CGAffineTransform(scaleX: s, y: s))
+        let dx = (scaled.extent.width - target.width) / 2 + scaled.extent.minX
+        let dy = (scaled.extent.height - target.height) / 2 + scaled.extent.minY
+        return scaled
+            .transformed(by: CGAffineTransform(translationX: -dx, y: -dy))
+            .cropped(to: CGRect(origin: .zero, size: target))
     }
 
     /// Pack a Float32/Float16 MLMultiArray [H,W] into a luminance CIImage, normalized to [0,1].
