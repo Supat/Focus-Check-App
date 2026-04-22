@@ -132,15 +132,41 @@ final class FocusRenderer {
 
     private func peakingComposite(base: CIImage, sharpness: CIImage?, depth: CIImage?,
                                   threshold: CGFloat, tint: CIColor) -> CIImage {
-        guard let mask = maskForMode(sharpness: sharpness, depth: depth, threshold: threshold)
+        guard let focusMask = maskForMode(sharpness: sharpness, depth: depth, threshold: threshold)
         else { return base }
 
-        // Solid tint image masked by the focus map.
+        // Real camera-style peaking: extract Sobel edges from the source at display
+        // resolution, then gate by the in-focus mask so only edges the analyzer
+        // considers sharp glow through. `Mask` remains the flood-filled variant.
+        let sobel = CIFilter.edges()
+        sobel.inputImage = base.clampedToExtent()
+        sobel.intensity = 6.0
+        let edgeImage = (sobel.outputImage ?? base).cropped(to: base.extent)
+
+        // Luma → grayscale edge magnitude, then clamp to [0,1].
+        let edgeMask = edgeImage
+            .applyingFilter("CIColorMatrix", parameters: [
+                "inputRVector": CIVector(x: 0.2126, y: 0.7152, z: 0.0722, w: 0),
+                "inputGVector": CIVector(x: 0.2126, y: 0.7152, z: 0.0722, w: 0),
+                "inputBVector": CIVector(x: 0.2126, y: 0.7152, z: 0.0722, w: 0),
+                "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1)
+            ])
+            .applyingFilter("CIColorClamp", parameters: [
+                "inputMinComponents": CIVector(x: 0, y: 0, z: 0, w: 0),
+                "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1)
+            ])
+
+        // Intersect with in-focus mask: per-pixel product of edge strength and focus confidence.
+        let gated = CIFilter.multiplyCompositing()
+        gated.inputImage = edgeMask
+        gated.backgroundImage = focusMask
+        let combined = gated.outputImage ?? edgeMask
+
         let colored = CIImage(color: tint).cropped(to: base.extent)
         let blend = CIFilter.blendWithMask()
         blend.inputImage = colored
         blend.backgroundImage = base
-        blend.maskImage = mask
+        blend.maskImage = combined
         return blend.outputImage ?? base
     }
 
