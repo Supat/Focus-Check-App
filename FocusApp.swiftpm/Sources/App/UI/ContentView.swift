@@ -133,7 +133,9 @@ struct ContentView: View {
     /// cases or SCA results (which don't expose a numeric confidence).
     @ViewBuilder
     private var sensitiveContentBadge: some View {
-        if viewModel.isSensitive == true, viewModel.sourceImage != nil {
+        if viewModel.isSensitive == true,
+           viewModel.sourceImage != nil,
+           !viewModel.overlayHidden {
             let isHighConfidence = (viewModel.sensitiveConfidence ?? 0) > 0.6
             HStack(spacing: 6) {
                 Image(systemName: "exclamationmark.shield.fill")
