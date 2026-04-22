@@ -48,12 +48,13 @@ enum DepthInstallState: Equatable {
 /// Which region the mosaic covers when the user has the mosaic toggle on.
 /// .eyes uses a solid black bar rather than pixelate; the others pixelate.
 enum MosaicMode: String, CaseIterable, Identifiable {
-    case eyes  = "Eyes"
-    case face  = "Face"
-    case chest = "Chest"
-    case groin = "Groin"
-    case body  = "Body"
-    case whole = "Whole"
+    case tabloid = "Tabloid"
+    case eyes    = "Eyes"
+    case face    = "Face"
+    case chest   = "Chest"
+    case groin   = "Groin"
+    case body    = "Body"
+    case whole   = "Whole"
     var id: String { rawValue }
 }
 

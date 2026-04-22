@@ -110,6 +110,19 @@ final class FocusRenderer {
         let baseSource: CIImage = {
             guard snapshot.mosaic else { return source }
             switch snapshot.mosaicMode {
+            case .tabloid:
+                // Combine the Eyes bar + Groin mosaic. Apply the bar first
+                // and pixelate on top — the groin region doesn't overlap the
+                // eye region, so the bars survive intact. If neither set has
+                // detections, no cover is applied (user can pick Body/Whole).
+                var result = source
+                if !snapshot.eyes.isEmpty {
+                    result = blackBarOverlay(source: result, regions: snapshot.eyes)
+                }
+                if !snapshot.groins.isEmpty {
+                    result = regionMosaic(source: result, regions: snapshot.groins, capDivisor: 32)
+                }
+                return result
             case .eyes:
                 guard !snapshot.eyes.isEmpty else { return source }
                 return blackBarOverlay(source: source, regions: snapshot.eyes)
