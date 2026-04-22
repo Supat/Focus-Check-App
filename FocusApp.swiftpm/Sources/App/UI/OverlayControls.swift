@@ -25,10 +25,22 @@ struct OverlayControls: View {
                 Image(systemName: "slider.horizontal.below.sun.max")
                     .foregroundStyle(.secondary)
                 Slider(value: $viewModel.threshold, in: 0...1)
-                Text(String(format: "%.2f", viewModel.threshold))
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .frame(width: 40, alignment: .trailing)
+                TextField(
+                    "",
+                    value: $viewModel.threshold,
+                    format: .number.precision(.fractionLength(2))
+                )
+                #if os(iOS)
+                .keyboardType(.decimalPad)
+                #endif
+                .multilineTextAlignment(.trailing)
+                .font(.caption.monospacedDigit())
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 64)
+                .onChange(of: viewModel.threshold) { _, new in
+                    let clamped = min(max(new, 0), 1)
+                    if clamped != new { viewModel.threshold = clamped }
+                }
             }
 
             HStack {
