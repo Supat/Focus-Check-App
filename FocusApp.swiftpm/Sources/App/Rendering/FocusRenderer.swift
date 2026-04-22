@@ -231,18 +231,26 @@ final class FocusRenderer {
     }
 
     private func thresholded(_ image: CIImage, at t: CGFloat) -> CIImage {
-        // Normalize via a gamma bend, then threshold with a color matrix.
-        // 0..t → 0, t..1 → smooth ramp to 1.
-        let gamma = CIFilter.gammaAdjust()
-        gamma.inputImage = image
-        gamma.power = Float(max(0.05, 1.0 - t))
+        // mask = clamp((input * preGain - t) * steepness, 0, 1) per channel
+        //      = clamp(input * scale - bias, 0, 1)
+        //
+        // preGain lifts raw Laplacian magnitudes (~0..0.2) into a usable 0..1 range;
+        // steepness controls how hard the threshold edge is. Combined into a single
+        // colorMatrix. We also broadcast R → R,G,B so CIBlendWithMask (which reads
+        // the red channel) sees the same intensity as the rest of the pipeline.
+        let preGain: CGFloat = 6.0
+        let steepness: CGFloat = 4.0
+        let scale = preGain * steepness
+        let bias = -steepness * t
+
         let matrix = CIFilter.colorMatrix()
-        matrix.inputImage = gamma.outputImage
-        let contrast: CGFloat = 4.0
-        matrix.rVector = CIVector(x: contrast, y: 0, z: 0, w: 0)
-        matrix.gVector = CIVector(x: contrast, y: 0, z: 0, w: 0)
-        matrix.bVector = CIVector(x: contrast, y: 0, z: 0, w: 0)
-        matrix.biasVector = CIVector(x: -contrast * t, y: -contrast * t, z: -contrast * t, w: 0)
+        matrix.inputImage = image
+        matrix.rVector = CIVector(x: scale, y: 0, z: 0, w: 0)
+        matrix.gVector = CIVector(x: scale, y: 0, z: 0, w: 0)
+        matrix.bVector = CIVector(x: scale, y: 0, z: 0, w: 0)
+        matrix.aVector = CIVector(x: 0, y: 0, z: 0, w: 1)
+        matrix.biasVector = CIVector(x: bias, y: bias, z: bias, w: 0)
+
         return (matrix.outputImage ?? image).applyingFilter("CIColorClamp", parameters: [
             "inputMinComponents": CIVector(x: 0, y: 0, z: 0, w: 0),
             "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1)
