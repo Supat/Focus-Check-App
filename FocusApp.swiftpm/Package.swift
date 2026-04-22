@@ -28,7 +28,7 @@ let package = Package(
                 .portraitUpsideDown(.when(deviceFamilies: [.pad]))
             ],
             capabilities: [
-                .photoLibrary(purposeString: "Select photos to analyze focus regions."),
+                .photoLibrary(purposeString: "Select photos to analyze focus regions and display their filename."),
                 .fileAccess(.userSelectedFiles, mode: .readOnly)
             ]
         )

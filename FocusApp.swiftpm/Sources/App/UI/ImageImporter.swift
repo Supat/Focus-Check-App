@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import Photos
 import UniformTypeIdentifiers
 
 /// Toolbar control offering both PhotosPicker (library) and fileImporter (Files / disk) entry points.
@@ -86,12 +87,41 @@ struct ImageImporter: View {
                     .appendingPathComponent(UUID().uuidString)
                     .appendingPathExtension(ext)
                 try data.write(to: tmp, options: .atomic)
-                let displayName = "Photo.\(ext)"
+                let displayName = await resolvedFilename(for: item, fallback: "Photo.\(ext)")
                 await MainActor.run { onPick(tmp, displayName) }
             } catch {
                 // Silent failure — the view model surfaces analysis errors.
             }
         }
+    }
+
+    /// Look up the Photo asset's original filename via PhotoKit. Requires read access
+    /// to the library — prompts on first call if authorization is undetermined. Falls
+    /// back to the provided generic name whenever anything about the chain is
+    /// unavailable (no itemIdentifier, denied access, asset missing, no resources).
+    private func resolvedFilename(for item: PhotosPickerItem, fallback: String) async -> String {
+        guard let id = item.itemIdentifier else { return fallback }
+
+        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        let authorized: Bool
+        switch status {
+        case .authorized, .limited:
+            authorized = true
+        case .notDetermined:
+            let granted = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
+            authorized = (granted == .authorized || granted == .limited)
+        default:
+            authorized = false
+        }
+        guard authorized else { return fallback }
+
+        let fetch = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil)
+        guard let asset = fetch.firstObject else { return fallback }
+
+        // PHAssetResource.assetResources is synchronous but can return multiple
+        // resources (photo + adjustment data); the first one is the original.
+        let resources = PHAssetResource.assetResources(for: asset)
+        return resources.first?.originalFilename ?? fallback
     }
 
     private func deliver(url: URL, fromScoped: Bool) {
