@@ -246,9 +246,9 @@ final class FocusRenderer {
         guard let depth, let focalPlane else { return base }
 
         // The threshold slider controls the DoF tolerance band. Larger threshold → wider
-        // tolerance → less red/blue coverage. 0.05 .. 0.25 feels sensible for DA v2's
-        // 0..1 relative-depth output.
-        let epsilon: CGFloat = 0.05 + 0.20 * threshold
+        // tolerance → less red/blue coverage. Range tuned tight so most out-of-focus
+        // pixels land in the red/blue bins at the default slider position.
+        let epsilon: CGFloat = 0.01 + 0.10 * threshold
         let gain: CGFloat = 6.0
 
         // Normalize depth to a grayscale where R = G = B = depth magnitude. Handles both
