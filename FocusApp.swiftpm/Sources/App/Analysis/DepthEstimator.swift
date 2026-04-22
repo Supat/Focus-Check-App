@@ -49,8 +49,12 @@ struct DepthEstimator {
         let w = Int(inputSize.width)
         let h = Int(inputSize.height)
 
-        // Aspect-fill + center-crop so the whole allowed input is covered.
-        let filled = aspectFill(image, into: inputSize)
+        // Stretch (not aspect-fill) to the model's expected input. Preserving exact
+        // spatial correspondence — model input ↔ source coordinates — matters more
+        // here than avoiding a few percent of aspect distortion; DA v2 is trained
+        // robustly enough to tolerate it, and it's what lets the upscaled depth
+        // map align with the source when composited.
+        let filled = resize(image, to: inputSize)
 
         var pixelBuffer: CVPixelBuffer?
         let attrs: [CFString: Any] = [
@@ -105,17 +109,17 @@ struct DepthEstimator {
         return CGSize(width: constraint.pixelsWide, height: constraint.pixelsHigh)
     }
 
-    /// Scale `image` so it fully covers `target`, then center-crop to exactly `target`.
-    /// This avoids the black-letterbox borders that aspect-fit produced.
-    private func aspectFill(_ image: CIImage, into target: CGSize) -> CIImage {
+    /// Stretch `image` to exactly `target` — non-uniform scaling, no crop, no
+    /// letterbox. Preserves the source's coordinate system into the model input
+    /// so the output depth map maps 1:1 back to the source when upscaled.
+    private func resize(_ image: CIImage, to target: CGSize) -> CIImage {
         let sx = target.width / image.extent.width
         let sy = target.height / image.extent.height
-        let s = max(sx, sy)
-        let scaled = image.transformed(by: CGAffineTransform(scaleX: s, y: s))
-        let dx = (scaled.extent.width - target.width) / 2 + scaled.extent.minX
-        let dy = (scaled.extent.height - target.height) / 2 + scaled.extent.minY
-        return scaled
-            .transformed(by: CGAffineTransform(translationX: -dx, y: -dy))
+        let normalized = image.transformed(
+            by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY)
+        )
+        return normalized
+            .transformed(by: CGAffineTransform(scaleX: sx, y: sy))
             .cropped(to: CGRect(origin: .zero, size: target))
     }
 

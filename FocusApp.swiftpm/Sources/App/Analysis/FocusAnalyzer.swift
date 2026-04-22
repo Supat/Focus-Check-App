@@ -111,13 +111,25 @@ actor FocusAnalyzer {
     }
 
     private func upscale(image: CIImage, toExtentOf source: CIImage) -> CIImage? {
-        let scale = max(source.extent.width, source.extent.height)
-                  / max(image.extent.width, image.extent.height)
+        // Non-uniform stretch: the low-res map may come from the depth estimator at
+        // the model's aspect, which differs from the source's. Uniform scaling with
+        // aspectRatio=1 placed content at source.origin but only the cropped region's
+        // data was stretched to fill the whole extent, producing a visible offset.
+        // Stretching both axes independently makes coordinates map 1:1.
+        let sx = source.extent.width / image.extent.width
+        let sy = source.extent.height / image.extent.height
+        let normalized = image.transformed(
+            by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY)
+        )
         let upscale = CIFilter.lanczosScaleTransform()
-        upscale.inputImage = image
-        upscale.scale = Float(scale)
-        upscale.aspectRatio = 1
-        return upscale.outputImage?.cropped(to: source.extent)
+        upscale.inputImage = normalized
+        upscale.scale = Float(sy)
+        // CILanczos: output = input * scale, then x-axis additionally stretched by aspectRatio.
+        upscale.aspectRatio = Float(sx / sy)
+        guard let stretched = upscale.outputImage else { return nil }
+        return stretched
+            .cropped(to: CGRect(origin: .zero, size: source.extent.size))
+            .transformed(by: CGAffineTransform(translationX: source.extent.minX, y: source.extent.minY))
     }
 
     private func isRAW(url: URL) -> Bool {
