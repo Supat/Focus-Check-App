@@ -3,6 +3,13 @@ import SwiftUI
 struct OverlayControls: View {
     @ObservedObject var viewModel: FocusViewModel
 
+    // Local mirror of the threshold as a string so the TextField is edited freely;
+    // we commit (parse + clamp) on submit / focus loss. Without this the numeric
+    // `value:format:` binding only committed on unfocus and silently dropped input
+    // from hardware keyboards.
+    @State private var thresholdText: String = ""
+    @FocusState private var thresholdFocused: Bool
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -25,22 +32,28 @@ struct OverlayControls: View {
                 Image(systemName: "slider.horizontal.below.sun.max")
                     .foregroundStyle(.secondary)
                 Slider(value: $viewModel.threshold, in: 0...1)
-                TextField(
-                    "",
-                    value: $viewModel.threshold,
-                    format: .number.precision(.fractionLength(2))
-                )
-                #if os(iOS)
-                .keyboardType(.decimalPad)
-                #endif
-                .multilineTextAlignment(.trailing)
-                .font(.caption.monospacedDigit())
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 64)
-                .onChange(of: viewModel.threshold) { _, new in
-                    let clamped = min(max(new, 0), 1)
-                    if clamped != new { viewModel.threshold = clamped }
-                }
+                TextField("", text: $thresholdText)
+                    .focused($thresholdFocused)
+                    #if os(iOS)
+                    .keyboardType(.decimalPad)
+                    #endif
+                    .multilineTextAlignment(.trailing)
+                    .font(.caption.monospacedDigit())
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 64)
+                    .submitLabel(.done)
+                    .onSubmit { commitThresholdText() }
+                    .onChange(of: thresholdFocused) { _, isFocused in
+                        if !isFocused { commitThresholdText() }
+                    }
+                    .onChange(of: viewModel.threshold) { _, new in
+                        // Keep the field text in sync when the slider moves — but only
+                        // while the field isn't actively being edited.
+                        if !thresholdFocused {
+                            thresholdText = formatted(new)
+                        }
+                    }
+                    .onAppear { thresholdText = formatted(viewModel.threshold) }
             }
 
             HStack {
@@ -66,6 +79,18 @@ struct OverlayControls: View {
             }
         }
         #endif
+    }
+
+    private func commitThresholdText() {
+        if let parsed = Float(thresholdText.trimmingCharacters(in: .whitespaces)) {
+            viewModel.threshold = min(max(parsed, 0), 1)
+        }
+        // Normalize display regardless of whether parse succeeded.
+        thresholdText = formatted(viewModel.threshold)
+    }
+
+    private func formatted(_ value: Float) -> String {
+        String(format: "%.2f", value)
     }
 
     @ViewBuilder
