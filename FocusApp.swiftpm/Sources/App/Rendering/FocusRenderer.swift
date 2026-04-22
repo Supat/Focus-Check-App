@@ -80,18 +80,21 @@ final class FocusRenderer {
     private func buildFrame(drawableSize: CGSize) -> CIImage {
         // MTKView delegate callbacks run on main — safe to read the view model directly.
         let snapshot: (source: CIImage?, style: OverlayStyle, threshold: Float,
-                       color: Color, focalPlane: Float?) =
+                       color: Color, focalPlane: Float?,
+                       zoomScale: CGFloat, zoomAnchor: CGPoint) =
             MainActor.assumeIsolated {
                 (viewModel.sourceImage, viewModel.style, viewModel.threshold,
-                 viewModel.overlayColor, viewModel.focalPlane)
+                 viewModel.overlayColor, viewModel.focalPlane,
+                 viewModel.zoomScale, viewModel.zoomAnchor)
             }
 
         guard let source = snapshot.source else {
             return CIImage(color: CIColor.black).cropped(to: CGRect(origin: .zero, size: drawableSize))
         }
 
-        // Fit source to drawable, preserving aspect ratio.
-        let fitted = fit(image: source, into: drawableSize)
+        // Fit source to drawable, then apply zoom around the tap anchor.
+        let fitted = fit(image: source, into: drawableSize,
+                         zoom: snapshot.zoomScale, anchor: snapshot.zoomAnchor)
 
         let threshold = CGFloat(snapshot.threshold)
         let tint = CIColor(color: snapshot.color) ?? CIColor(red: 1, green: 0.85, blue: 0)
@@ -406,14 +409,31 @@ final class FocusRenderer {
         return (stops.last!.1, stops.last!.2, stops.last!.3)
     }
 
-    private func fit(image: CIImage, into size: CGSize) -> CIImage {
+    private func fit(image: CIImage, into size: CGSize,
+                     zoom: CGFloat = 1.0,
+                     anchor: CGPoint = CGPoint(x: 0.5, y: 0.5)) -> CIImage {
         let sx = size.width / image.extent.width
         let sy = size.height / image.extent.height
         let s = min(sx, sy)
         let scaled = image.transformed(by: CGAffineTransform(scaleX: s, y: s))
         let offsetX = (size.width - scaled.extent.width) / 2 - scaled.extent.minX
         let offsetY = (size.height - scaled.extent.height) / 2 - scaled.extent.minY
-        return scaled.transformed(by: CGAffineTransform(translationX: offsetX, y: offsetY))
+        let fitted = scaled.transformed(by: CGAffineTransform(translationX: offsetX, y: offsetY))
+
+        guard zoom > 1.001 else { return fitted }
+
+        // Anchor is in SwiftUI view coords (Y-top, 0...1). Convert to CIImage coords
+        // (Y-bottom) in drawable space before composing the scale-about-anchor.
+        let ax = anchor.x * size.width
+        let ay = (1 - anchor.y) * size.height
+
+        // Scale about (ax, ay): T(ax, ay) · S(zoom) · T(-ax, -ay).
+        let transform = CGAffineTransform(translationX: -ax, y: -ay)
+            .concatenating(CGAffineTransform(scaleX: zoom, y: zoom))
+            .concatenating(CGAffineTransform(translationX: ax, y: ay))
+
+        return fitted.transformed(by: transform)
+            .cropped(to: CGRect(origin: .zero, size: size))
     }
 }
 

@@ -59,6 +59,22 @@ final class FocusViewModel: ObservableObject {
         }
     }
 
+    // Zoom display state — purely view-layer, no re-analysis.
+    // `zoomAnchor` is in normalized view coordinates (0...1), Y-top origin.
+    @Published var zoomScale: CGFloat = 1.0
+    @Published var zoomAnchor: CGPoint = CGPoint(x: 0.5, y: 0.5)
+
+    /// Double-tap handler: toggle between fit-to-view and 2.5x centered at `normalized`.
+    func toggleZoom(at normalized: CGPoint) {
+        if zoomScale > 1.001 {
+            zoomScale = 1.0
+            zoomAnchor = CGPoint(x: 0.5, y: 0.5)
+        } else {
+            zoomScale = 2.5
+            zoomAnchor = normalized
+        }
+    }
+
     // Analysis configuration — change triggers re-analysis.
     @Published var mode: AnalysisMode = .sharpness
 
@@ -156,6 +172,8 @@ final class FocusViewModel: ObservableObject {
         focalPlane = nil
         errorMessage = nil
         isAnalyzing = false
+        zoomScale = 1.0
+        zoomAnchor = CGPoint(x: 0.5, y: 0.5)
     }
 
     func reanalyze() {

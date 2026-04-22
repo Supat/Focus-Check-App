@@ -48,8 +48,21 @@ struct ContentView: View {
                 if viewModel.sourceImage == nil {
                     placeholder
                 } else {
-                    MetalView(viewModel: viewModel)
-                        .ignoresSafeArea(edges: .horizontal)
+                    GeometryReader { geo in
+                        MetalView(viewModel: viewModel)
+                            .ignoresSafeArea(edges: .horizontal)
+                            .contentShape(Rectangle())
+                            .gesture(
+                                SpatialTapGesture(count: 2)
+                                    .onEnded { event in
+                                        let normalized = CGPoint(
+                                            x: max(0, min(1, event.location.x / geo.size.width)),
+                                            y: max(0, min(1, event.location.y / geo.size.height))
+                                        )
+                                        viewModel.toggleZoom(at: normalized)
+                                    }
+                            )
+                    }
                 }
                 if viewModel.isAnalyzing {
                     ProgressView("Analyzing…")
