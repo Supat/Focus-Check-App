@@ -145,7 +145,7 @@ struct ContentView: View {
             .foregroundStyle(isHighConfidence ? Color.red : Color.orange)
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
-            .background(.regularMaterial, in: Capsule())
+            .background(.ultraThinMaterial, in: Capsule())
         }
     }
 
