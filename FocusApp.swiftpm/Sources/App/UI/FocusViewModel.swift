@@ -145,7 +145,7 @@ final class FocusViewModel: ObservableObject {
     /// User-controlled mosaic toggle. Defaults on — protective default so
     /// sensitive content isn't displayed until the user explicitly opts in.
     @Published var mosaicEnabled: Bool = true
-    @Published var sensitiveContentCheckAvailable: Bool = false
+    @Published var sensitiveContentAvailability: SensitiveContentAvailability = .frameworkMissing
     @Published var isAnalyzing: Bool = false
     @Published var errorMessage: String?
     @Published var depthAvailable: Bool = false
@@ -159,12 +159,23 @@ final class FocusViewModel: ObservableObject {
         self.analyzer = FocusAnalyzer()
         Task { [weak self] in
             let depth = await self?.analyzer.isDepthAvailable ?? false
-            let sensitive = await self?.analyzer.isSensitiveContentCheckAvailable ?? false
+            let sensitive = await self?.analyzer.sensitiveContentAvailability ?? .frameworkMissing
             await MainActor.run {
                 self?.depthAvailable = depth
                 self?.depthInstall = depth ? .installed : .notInstalled
-                self?.sensitiveContentCheckAvailable = sensitive
+                self?.sensitiveContentAvailability = sensitive
             }
+        }
+    }
+
+    /// Re-query the analyzer for Communication Safety state. Call on app
+    /// foreground / image load so a setting toggled while the app is running
+    /// is picked up without a restart.
+    func refreshSensitiveContentAvailability() {
+        let analyzer = self.analyzer
+        Task { [weak self] in
+            let sensitive = await analyzer.sensitiveContentAvailability
+            await MainActor.run { self?.sensitiveContentAvailability = sensitive }
         }
     }
 
@@ -205,6 +216,7 @@ final class FocusViewModel: ObservableObject {
         isSensitive = nil
         exposureInfo = ExposureInfo.read(from: url)
         sourceName = name
+        refreshSensitiveContentAvailability()
 
         let mode = self.mode
         let analyzer = self.analyzer

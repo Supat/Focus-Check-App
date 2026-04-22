@@ -5,24 +5,51 @@ import CoreImage
 import SensitiveContentAnalysis
 #endif
 
-/// On-device nudity / sensitive-imagery classifier, wrapped behind a thin
+/// Current availability of Apple's Sensitive Content Analysis framework on
+/// this device and session. Tracked as a richer enum than a simple Bool so
+/// the UI can explain *why* the feature is unavailable.
+enum SensitiveContentAvailability: Equatable {
+    /// Framework couldn't be imported (SDK / platform mismatch).
+    case frameworkMissing
+    /// Framework present but Communication Safety is off in Screen Time.
+    case disabled
+    /// Ready — system returns simple-intervention policy.
+    case simpleInterventions
+    /// Ready — system returns descriptive-intervention policy.
+    case descriptiveInterventions
+
+    var isReady: Bool {
+        self == .simpleInterventions || self == .descriptiveInterventions
+    }
+
+    var debugLabel: String {
+        switch self {
+        case .frameworkMissing:         return "SCA not compiled into build"
+        case .disabled:                 return "analysisPolicy = .disabled"
+        case .simpleInterventions:      return "analysisPolicy = .simpleInterventions"
+        case .descriptiveInterventions: return "analysisPolicy = .descriptiveInterventions"
+        }
+    }
+}
+
+/// On-device nudity / sensitive-imagery classifier wrapped behind a thin
 /// Swift interface. Uses Apple's `SensitiveContentAnalysis` framework
 /// (iOS 17+) which returns a binary `isSensitive` signal — no bounding
 /// boxes, no anatomy-specific labels.
-///
-/// The framework only runs when the user has enabled "Communication
-/// Safety" in Settings → Screen Time. If that's off, `check(...)` returns
-/// nil and the caller should treat the image as not-sensitive.
 struct SensitiveContentChecker {
 
-    /// Returns true if the framework is present and Communication Safety is
-    /// enabled on this device. Callers can use this to hide the mosaic
-    /// toggle entirely when the feature would be a no-op.
-    var isAvailable: Bool {
+    /// Re-query the analyzer each call — Communication Safety can be toggled
+    /// while the app is running and we want to pick that up without a restart.
+    var availability: SensitiveContentAvailability {
         #if canImport(SensitiveContentAnalysis)
-        return SCSensitivityAnalyzer().analysisPolicy != .disabled
+        switch SCSensitivityAnalyzer().analysisPolicy {
+        case .disabled:                 return .disabled
+        case .simpleInterventions:      return .simpleInterventions
+        case .descriptiveInterventions: return .descriptiveInterventions
+        @unknown default:               return .disabled
+        }
         #else
-        return false
+        return .frameworkMissing
         #endif
     }
 

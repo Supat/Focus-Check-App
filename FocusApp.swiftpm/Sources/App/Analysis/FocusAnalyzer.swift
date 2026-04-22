@@ -88,9 +88,11 @@ actor FocusAnalyzer {
         return image
     }
 
-    /// Exposed so the view model can hide the mosaic toggle when the framework
-    /// or Communication Safety isn't available on this device.
-    var isSensitiveContentCheckAvailable: Bool { sensitiveContent.isAvailable }
+    /// Live availability — Communication Safety can be toggled at runtime so
+    /// callers should query this each time they want to know the state.
+    var sensitiveContentAvailability: SensitiveContentAvailability {
+        sensitiveContent.availability
+    }
 
     /// Run the analysis pipeline for the given mode. Returns display-ready overlay images
     /// already upscaled to the source's extent.
