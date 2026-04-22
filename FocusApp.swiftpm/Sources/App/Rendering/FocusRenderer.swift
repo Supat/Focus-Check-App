@@ -79,11 +79,9 @@ final class FocusRenderer {
 
     private func buildFrame(drawableSize: CGSize) -> CIImage {
         // MTKView delegate callbacks run on main — safe to read the view model directly.
-        let snapshot: (source: CIImage?, style: OverlayStyle, threshold: Float,
-                       color: Color, split: Float) =
+        let snapshot: (source: CIImage?, style: OverlayStyle, threshold: Float, color: Color) =
             MainActor.assumeIsolated {
-                (viewModel.sourceImage, viewModel.style, viewModel.threshold,
-                 viewModel.overlayColor, viewModel.splitPosition)
+                (viewModel.sourceImage, viewModel.style, viewModel.threshold, viewModel.overlayColor)
             }
 
         guard let source = snapshot.source else {
@@ -93,13 +91,12 @@ final class FocusRenderer {
         // Fit source to drawable, preserving aspect ratio.
         let fitted = fit(image: source, into: drawableSize)
 
-        let style = snapshot.style
         let threshold = CGFloat(snapshot.threshold)
         let tint = CIColor(color: snapshot.color) ?? CIColor(red: 1, green: 0.85, blue: 0)
 
         let (sharpnessOverlay, depthOverlay) = overlays(for: fitted)
 
-        switch style {
+        switch snapshot.style {
         case .peaking:
             return peakingComposite(base: fitted, sharpness: sharpnessOverlay, depth: depthOverlay,
                                     threshold: threshold, tint: tint)
@@ -108,10 +105,6 @@ final class FocusRenderer {
         case .mask:
             return maskComposite(base: fitted, sharpness: sharpnessOverlay, depth: depthOverlay,
                                  threshold: threshold, tint: tint)
-        case .split:
-            let overlay = peakingComposite(base: fitted, sharpness: sharpnessOverlay, depth: depthOverlay,
-                                           threshold: threshold, tint: tint)
-            return splitComposite(left: fitted, right: overlay, at: CGFloat(snapshot.split))
         }
     }
 
@@ -195,18 +188,6 @@ final class FocusRenderer {
         blend.backgroundImage = base
         blend.maskImage = mask
         return blend.outputImage ?? base
-    }
-
-    private func splitComposite(left: CIImage, right: CIImage, at fraction: CGFloat) -> CIImage {
-        let x = left.extent.minX + left.extent.width * fraction
-        let leftMask = CIImage(color: CIColor.white)
-            .cropped(to: CGRect(x: left.extent.minX, y: left.extent.minY,
-                                width: x - left.extent.minX, height: left.extent.height))
-        let blend = CIFilter.blendWithMask()
-        blend.inputImage = left
-        blend.backgroundImage = right
-        blend.maskImage = leftMask
-        return blend.outputImage ?? left
     }
 
     // MARK: - Mask derivation

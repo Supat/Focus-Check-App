@@ -11,6 +11,15 @@ struct ContentView: View {
                 .navigationBarTitleDisplayMode(.inline)
                 #endif
                 .toolbar {
+                    if viewModel.sourceImage != nil {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button(role: .destructive) {
+                                viewModel.clear()
+                            } label: {
+                                Label("Remove photo", systemImage: "xmark.circle")
+                            }
+                        }
+                    }
                     ToolbarItem(placement: .primaryAction) {
                         ImageImporter { url in
                             viewModel.load(url: url)

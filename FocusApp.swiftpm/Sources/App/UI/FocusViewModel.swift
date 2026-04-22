@@ -6,7 +6,6 @@ enum OverlayStyle: String, CaseIterable, Identifiable {
     case peaking = "Peaking"
     case heatmap = "Heatmap"
     case mask    = "Mask"
-    case split   = "Split"
 
     var id: String { rawValue }
 
@@ -15,7 +14,6 @@ enum OverlayStyle: String, CaseIterable, Identifiable {
         case .peaking: return "sparkles"
         case .heatmap: return "thermometer.sun"
         case .mask:    return "square.fill.on.square"
-        case .split:   return "rectangle.split.2x1"
         }
     }
 }
@@ -34,7 +32,6 @@ final class FocusViewModel: ObservableObject {
     @Published var threshold: Float = 0.35
     @Published var overlayColor: Color = .yellow
     @Published var style: OverlayStyle = .peaking
-    @Published var splitPosition: Float = 0.5
 
     // Analysis configuration — change triggers re-analysis.
     @Published var mode: AnalysisMode = .sharpness
@@ -89,6 +86,16 @@ final class FocusViewModel: ObservableObject {
                 }
             }
         }
+    }
+
+    func clear() {
+        currentTask?.cancel()
+        currentTask = nil
+        sourceImage = nil
+        sharpnessOverlay = nil
+        depthOverlay = nil
+        errorMessage = nil
+        isAnalyzing = false
     }
 
     func reanalyze() {
