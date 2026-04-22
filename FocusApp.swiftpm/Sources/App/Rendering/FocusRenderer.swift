@@ -82,12 +82,14 @@ final class FocusRenderer {
         let snapshot: (source: CIImage?, style: OverlayStyle, threshold: Float,
                        color: Color, focalPlane: Float?,
                        zoomScale: CGFloat, zoomAnchor: CGPoint,
-                       sharpness: CIImage?, depth: CIImage?) =
+                       sharpness: CIImage?, depth: CIImage?,
+                       overlayHidden: Bool) =
             MainActor.assumeIsolated {
                 (viewModel.sourceImage, viewModel.style, viewModel.threshold,
                  viewModel.overlayColor, viewModel.focalPlane,
                  viewModel.zoomScale, viewModel.zoomAnchor,
-                 viewModel.sharpnessOverlay, viewModel.depthOverlay)
+                 viewModel.sharpnessOverlay, viewModel.depthOverlay,
+                 viewModel.overlayHidden)
             }
 
         guard let source = snapshot.source else {
@@ -100,6 +102,10 @@ final class FocusRenderer {
         let zoom = snapshot.zoomScale
         let anchor = snapshot.zoomAnchor
         let fitted = fit(image: source, into: drawableSize, zoom: zoom, anchor: anchor)
+
+        // Press-and-hold compare mode: return the base photo only.
+        if snapshot.overlayHidden { return fitted }
+
         let sharpnessOverlay = snapshot.sharpness.map {
             fit(image: $0, into: drawableSize, zoom: zoom, anchor: anchor)
         }

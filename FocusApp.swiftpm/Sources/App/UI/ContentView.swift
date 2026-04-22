@@ -62,6 +62,17 @@ struct ContentView: View {
                                         viewModel.toggleZoom(at: normalized)
                                     }
                             )
+                            // Press-and-hold hides the overlay so the user can
+                            // compare against the original photo; release
+                            // re-reveals it.
+                            .onLongPressGesture(
+                                minimumDuration: 0.2,
+                                maximumDistance: 100,
+                                perform: {},
+                                onPressingChanged: { pressing in
+                                    viewModel.overlayHidden = pressing
+                                }
+                            )
                     }
                 }
                 if viewModel.isAnalyzing {

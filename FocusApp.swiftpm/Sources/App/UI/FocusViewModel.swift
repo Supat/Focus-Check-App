@@ -64,6 +64,10 @@ final class FocusViewModel: ObservableObject {
     @Published var zoomScale: CGFloat = 1.0
     @Published var zoomAnchor: CGPoint = CGPoint(x: 0.5, y: 0.5)
 
+    /// Press-and-hold to compare against the original photo. While true, the
+    /// renderer skips all overlay compositing and draws just the fitted source.
+    @Published var overlayHidden: Bool = false
+
     private var zoomAnimationTask: Task<Void, Never>?
 
     /// Double-tap handler: toggle between fit-to-view and 2.5x centered at `normalized`,
