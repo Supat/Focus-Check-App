@@ -52,6 +52,9 @@ struct OverlayControls: View {
                     }
                     .onAppear { thresholdText = formatted(viewModel.threshold) }
             }
+            // Slider + numeric field drive overlay compositing only; None mode
+            // renders the original image untouched so there's nothing to scrub.
+            .disabled(viewModel.style.isOff)
 
             HStack {
                 Picker("Mode", selection: $viewModel.mode) {
@@ -62,7 +65,12 @@ struct OverlayControls: View {
                 .pickerStyle(.segmented)
                 // Error style requires both signals — lock the picker to Hybrid so
                 // the user can't accidentally strand the overlay without depth data.
-                .disabled(viewModel.sourceImage == nil || viewModel.style.requiresDepth)
+                // None mode has no overlay, so analysis mode choice is moot.
+                .disabled(
+                    viewModel.sourceImage == nil ||
+                    viewModel.style.requiresDepth ||
+                    viewModel.style.isOff
+                )
                 .onChange(of: viewModel.mode) { _, _ in
                     viewModel.reanalyze()
                 }

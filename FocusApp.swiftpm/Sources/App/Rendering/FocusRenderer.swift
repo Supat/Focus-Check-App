@@ -216,6 +216,8 @@ final class FocusRenderer {
         let tint = inputs.tint
 
         switch inputs.style {
+        case .off:
+            return fitted
         case .peaking:
             return peakingComposite(base: fitted, sharpness: sharpnessOverlay, depth: depthOverlay,
                                     threshold: threshold, tint: tint)

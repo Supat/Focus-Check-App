@@ -3,6 +3,8 @@ import CoreImage
 import Metal
 
 enum OverlayStyle: String, CaseIterable, Identifiable {
+    // `.off` rather than `.none` so we don't shadow Optional.none in call sites.
+    case off        = "None"
     case peaking    = "Peaking"
     case mask       = "Mask"
     case heatmap    = "Heatmap"
@@ -13,6 +15,7 @@ enum OverlayStyle: String, CaseIterable, Identifiable {
 
     var systemImage: String {
         switch self {
+        case .off:        return "circle.slash"
         case .peaking:    return "sparkles"
         case .mask:       return "square.fill.on.square"
         case .heatmap:    return "thermometer.sun"
@@ -28,6 +31,11 @@ enum OverlayStyle: String, CaseIterable, Identifiable {
         default:          return false
         }
     }
+
+    /// When true, the renderer skips all overlay compositing and the UI
+    /// disables any control that would otherwise be routed through the
+    /// analysis pipeline (threshold slider, analysis-mode picker).
+    var isOff: Bool { self == .off }
 }
 
 enum AnalysisMode: String, CaseIterable, Identifiable {
