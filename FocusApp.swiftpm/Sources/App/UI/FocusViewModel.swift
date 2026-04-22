@@ -7,6 +7,7 @@ enum OverlayStyle: String, CaseIterable, Identifiable {
     case mask       = "Mask"
     case heatmap    = "Heatmap"
     case focusError = "Error"
+    case motion     = "Motion"
 
     var id: String { rawValue }
 
@@ -16,6 +17,7 @@ enum OverlayStyle: String, CaseIterable, Identifiable {
         case .mask:       return "square.fill.on.square"
         case .heatmap:    return "thermometer.sun"
         case .focusError: return "scope"
+        case .motion:     return "wind"
         }
     }
 
@@ -137,6 +139,7 @@ final class FocusViewModel: ObservableObject {
     @Published var depthOverlay: CIImage?
     @Published var focalPlane: Float?
     @Published var motionBlur: MotionBlurReport?
+    @Published var motionOverlay: CIImage?
     @Published var isAnalyzing: Bool = false
     @Published var errorMessage: String?
     @Published var depthAvailable: Bool = false
@@ -190,6 +193,7 @@ final class FocusViewModel: ObservableObject {
         depthOverlay = nil
         focalPlane = nil
         motionBlur = nil
+        motionOverlay = nil
         sourceName = name
 
         let mode = self.mode
@@ -207,6 +211,7 @@ final class FocusViewModel: ObservableObject {
                     self?.depthOverlay = overlays.depth
                     self?.focalPlane = overlays.focalPlane
                     self?.motionBlur = overlays.motionBlur
+                    self?.motionOverlay = overlays.motionOverlay
                     self?.isAnalyzing = false
                 }
             } catch is CancellationError {
@@ -231,6 +236,7 @@ final class FocusViewModel: ObservableObject {
         depthOverlay = nil
         focalPlane = nil
         motionBlur = nil
+        motionOverlay = nil
         errorMessage = nil
         isAnalyzing = false
         zoomScale = 1.0
@@ -252,6 +258,7 @@ final class FocusViewModel: ObservableObject {
                     self?.depthOverlay = overlays.depth
                     self?.focalPlane = overlays.focalPlane
                     self?.motionBlur = overlays.motionBlur
+                    self?.motionOverlay = overlays.motionOverlay
                     self?.isAnalyzing = false
                 }
             } catch is CancellationError {

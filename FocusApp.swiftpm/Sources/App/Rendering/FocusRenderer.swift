@@ -82,13 +82,14 @@ final class FocusRenderer {
         let snapshot: (source: CIImage?, style: OverlayStyle, threshold: Float,
                        color: Color, focalPlane: Float?,
                        zoomScale: CGFloat, zoomAnchor: CGPoint,
-                       sharpness: CIImage?, depth: CIImage?,
+                       sharpness: CIImage?, depth: CIImage?, motion: CIImage?,
                        overlayHidden: Bool) =
             MainActor.assumeIsolated {
                 (viewModel.sourceImage, viewModel.style, viewModel.threshold,
                  viewModel.overlayColor, viewModel.focalPlane,
                  viewModel.zoomScale, viewModel.zoomAnchor,
                  viewModel.sharpnessOverlay, viewModel.depthOverlay,
+                 viewModel.motionOverlay,
                  viewModel.overlayHidden)
             }
 
@@ -112,6 +113,9 @@ final class FocusRenderer {
         let depthOverlay = snapshot.depth.map {
             fit(image: $0, into: drawableSize, zoom: zoom, anchor: anchor)
         }
+        let motionOverlay = snapshot.motion.map {
+            fit(image: $0, into: drawableSize, zoom: zoom, anchor: anchor)
+        }
 
         let threshold = CGFloat(snapshot.threshold)
         let tint = CIColor(color: snapshot.color) ?? CIColor(red: 1, green: 0.85, blue: 0)
@@ -129,6 +133,9 @@ final class FocusRenderer {
             return focusErrorComposite(base: fitted, depth: depthOverlay,
                                        focalPlane: snapshot.focalPlane,
                                        threshold: threshold)
+        case .motion:
+            return motionComposite(base: fitted, motion: motionOverlay,
+                                   threshold: threshold, tint: tint)
         }
     }
 
@@ -224,6 +231,26 @@ final class FocusRenderer {
         let adjusted = threshold * 0.7
         guard let mask = maskForMode(sharpness: sharpness, depth: depth, threshold: adjusted)
         else { return base }
+        let coloredTint = CIColor(red: tint.red, green: tint.green, blue: tint.blue, alpha: 0.5)
+        let colored = CIImage(color: coloredTint).cropped(to: base.extent)
+        let blend = CIFilter.blendWithMask()
+        blend.inputImage = colored
+        blend.backgroundImage = base
+        blend.maskImage = mask
+        return blend.outputImage ?? base
+    }
+
+    /// Tint regions where the per-patch motion-blur confidence exceeds the
+    /// threshold. Uses the user-chosen overlay color; 50% alpha so the
+    /// underlying photo detail stays readable under the tint.
+    private func motionComposite(base: CIImage, motion: CIImage?,
+                                 threshold: CGFloat, tint: CIColor) -> CIImage {
+        guard let motion else { return base }
+
+        // Reuse the existing threshold helper. preGain (6) × steepness (4) matches
+        // the mask pipeline; values above threshold saturate toward 1 quickly.
+        let mask = thresholded(motion, at: threshold)
+
         let coloredTint = CIColor(red: tint.red, green: tint.green, blue: tint.blue, alpha: 0.5)
         let colored = CIImage(color: coloredTint).cropped(to: base.extent)
         let blend = CIFilter.blendWithMask()

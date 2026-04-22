@@ -17,6 +17,10 @@ actor FocusAnalyzer {
         /// Global motion-blur signature from FFT analysis. `nil` if detection
         /// failed or the image is sharp / isotropically blurred.
         var motionBlur: MotionBlurReport?
+        /// Per-patch motion-blur confidence grid upscaled to source extent.
+        /// Used by the `.motion` overlay style to highlight *where* motion
+        /// blur is concentrated rather than just reporting a global scalar.
+        var motionOverlay: CIImage?
     }
 
     private let device: MTLDevice
@@ -93,6 +97,12 @@ actor FocusAnalyzer {
         // run it every time so the info badge stays accurate after mode changes.
         let motionReport = motionBlur.detect(in: source)
 
+        // Per-patch motion blur map (~100 ms). Upscaled so downstream compositing
+        // treats it the same as sharpness/depth overlays.
+        let motionOverlay = motionBlur.detectMap(in: source).flatMap {
+            upscale(image: $0, toExtentOf: source)
+        }
+
         switch mode {
         case .sharpness:
             let tex = try laplacian.sharpnessMap(from: source, ciContext: ciContext)
@@ -119,7 +129,8 @@ actor FocusAnalyzer {
             sharpness: sharpness,
             depth: depth,
             focalPlane: focalPlane,
-            motionBlur: motionReport
+            motionBlur: motionReport,
+            motionOverlay: motionOverlay
         )
     }
 
