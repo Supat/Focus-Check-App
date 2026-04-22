@@ -157,10 +157,11 @@ final class FocusViewModel: ObservableObject {
 
     init() {
         self.analyzer = FocusAnalyzer()
+        let analyzer = self.analyzer
         Task { [weak self] in
-            let depth = await self?.analyzer.isDepthAvailable ?? false
-            let sensitive = await self?.analyzer.sensitiveContentAvailability ?? .frameworkMissing
-            await MainActor.run {
+            let depth = await analyzer.isDepthAvailable
+            let sensitive = await analyzer.sensitiveContentAvailability
+            await MainActor.run { [weak self] in
                 self?.depthAvailable = depth
                 self?.depthInstall = depth ? .installed : .notInstalled
                 self?.sensitiveContentAvailability = sensitive
@@ -175,7 +176,9 @@ final class FocusViewModel: ObservableObject {
         let analyzer = self.analyzer
         Task { [weak self] in
             let sensitive = await analyzer.sensitiveContentAvailability
-            await MainActor.run { self?.sensitiveContentAvailability = sensitive }
+            await MainActor.run { [weak self] in
+                self?.sensitiveContentAvailability = sensitive
+            }
         }
     }
 
@@ -187,20 +190,20 @@ final class FocusViewModel: ObservableObject {
             do {
                 try await analyzer.installDepthModel { p in
                     // Progress callback may arrive on any thread — hop to main.
-                    Task { @MainActor in
+                    Task { @MainActor [weak self] in
                         self?.depthInstall = .downloading(progress: p)
                     }
                 }
-                await MainActor.run {
+                await MainActor.run { [weak self] in
                     self?.depthAvailable = true
                     self?.depthInstall = .installed
                 }
             } catch {
-                await MainActor.run {
+                await MainActor.run { [weak self] in
                     self?.depthInstall = .failed(error.localizedDescription)
                 }
             }
-            await MainActor.run { self?.installTask = nil }
+            await MainActor.run { [weak self] in self?.installTask = nil }
         }
     }
 
@@ -227,7 +230,7 @@ final class FocusViewModel: ObservableObject {
                 try Task.checkCancellation()
                 let overlays = try await analyzer.analyze(mode: mode)
                 try Task.checkCancellation()
-                await MainActor.run {
+                await MainActor.run { [weak self] in
                     self?.sourceImage = image
                     self?.sharpnessOverlay = overlays.sharpness
                     self?.depthOverlay = overlays.depth
@@ -240,7 +243,7 @@ final class FocusViewModel: ObservableObject {
             } catch is CancellationError {
                 // Superseded by a newer load — stay silent.
             } catch {
-                await MainActor.run {
+                await MainActor.run { [weak self] in
                     self?.errorMessage = error.localizedDescription
                     self?.isAnalyzing = false
                 }
@@ -278,7 +281,7 @@ final class FocusViewModel: ObservableObject {
             do {
                 let overlays = try await analyzer.analyze(mode: mode)
                 try Task.checkCancellation()
-                await MainActor.run {
+                await MainActor.run { [weak self] in
                     self?.sharpnessOverlay = overlays.sharpness
                     self?.depthOverlay = overlays.depth
                     self?.focalPlane = overlays.focalPlane
@@ -290,7 +293,7 @@ final class FocusViewModel: ObservableObject {
             } catch is CancellationError {
                 // Swallow — a newer analyze is in flight.
             } catch {
-                await MainActor.run {
+                await MainActor.run { [weak self] in
                     self?.errorMessage = error.localizedDescription
                     self?.isAnalyzing = false
                 }

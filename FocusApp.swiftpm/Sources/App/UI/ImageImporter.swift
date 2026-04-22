@@ -123,9 +123,11 @@ private struct PHPickerSheet: UIViewControllerRepresentable {
             result.itemProvider.loadFileRepresentation(forTypeIdentifier: uti) { tempURL, _ in
                 guard let tempURL else { return }
                 do {
-                    let ext = UTType(uti)?.preferredFilenameExtension
-                        ?? tempURL.pathExtension
-                        ?? "img"
+                    // URL.pathExtension is a non-optional String ("" when absent),
+                    // so chain via a local fallback rather than `??` with a String literal.
+                    let utiExt = UTType(uti)?.preferredFilenameExtension
+                    let urlExt = tempURL.pathExtension
+                    let ext = utiExt ?? (urlExt.isEmpty ? "img" : urlExt)
                     let tmp = FileManager.default.temporaryDirectory
                         .appendingPathComponent(UUID().uuidString)
                         .appendingPathExtension(ext)
