@@ -90,22 +90,35 @@ final class FocusViewModel: ObservableObject {
         let stepNS = UInt64(stepDuration * 1_000_000_000)
 
         zoomAnimationTask = Task { @MainActor [weak self] in
-            guard let self else { return }
             for step in 1...steps {
                 if Task.isCancelled { return }
-                let t = Double(step) / Double(steps)
-                // Symmetric quadratic ease-in-out.
-                let eased = CGFloat(t < 0.5 ? 2 * t * t : 1 - 2 * (1 - t) * (1 - t))
-                self.zoomScale = startScale + (target - startScale) * eased
-                self.zoomAnchor = CGPoint(
-                    x: startAnchor.x + (targetAnchor.x - startAnchor.x) * eased,
-                    y: startAnchor.y + (targetAnchor.y - startAnchor.y) * eased
-                )
+
+                // Broken into locals so the type checker doesn't have to solve
+                // one big mixed-type expression, and so Swift 6's concurrency
+                // checker doesn't flag a strongly-bound `self` inside a Sendable
+                // closure.
+                let progress = Double(step) / Double(steps)
+                let easedValue: Double
+                if progress < 0.5 {
+                    easedValue = 2.0 * progress * progress
+                } else {
+                    let u = 1.0 - progress
+                    easedValue = 1.0 - 2.0 * u * u
+                }
+                let eased = CGFloat(easedValue)
+
+                let newScale = startScale + (target - startScale) * eased
+                let ax = startAnchor.x + (targetAnchor.x - startAnchor.x) * eased
+                let ay = startAnchor.y + (targetAnchor.y - startAnchor.y) * eased
+
+                self?.zoomScale = newScale
+                self?.zoomAnchor = CGPoint(x: ax, y: ay)
+
                 try? await Task.sleep(nanoseconds: stepNS)
             }
             if !Task.isCancelled {
-                self.zoomScale = target
-                self.zoomAnchor = targetAnchor
+                self?.zoomScale = target
+                self?.zoomAnchor = targetAnchor
             }
         }
     }
