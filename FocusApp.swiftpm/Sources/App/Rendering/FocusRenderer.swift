@@ -493,12 +493,8 @@ final class FocusRenderer {
 
 extension CIColor {
     convenience init?(color: Color) {
-        #if canImport(AppKit)
-        let platformColor = NSColor(color).usingColorSpace(.displayP3) ?? NSColor(color)
-        self.init(color: platformColor)
-        #else
-        let platformColor = UIColor(color)
-        self.init(color: platformColor)
-        #endif
+        // iOSApplication product — UIKit is always the runtime view system,
+        // even when running on macOS via Designed for iPad.
+        self.init(color: UIColor(color))
     }
 }

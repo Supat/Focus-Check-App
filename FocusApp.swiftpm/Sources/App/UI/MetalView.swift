@@ -1,18 +1,16 @@
 import SwiftUI
 import MetalKit
 
-#if canImport(AppKit)
-typealias PlatformViewRepresentable = NSViewRepresentable
-#else
-typealias PlatformViewRepresentable = UIViewRepresentable
-#endif
-
-/// Bridges an `MTKView` into SwiftUI for both iPadOS and macOS.
+/// Bridges an `MTKView` into SwiftUI.
 ///
-/// The renderer is held strongly on the coordinator so its lifetime tracks the view.
-/// Drawable-size changes during Stage Manager resize only trigger a renderer update
-/// when the delta exceeds 1 pixel (CLAUDE.md rule).
-struct MetalView: PlatformViewRepresentable {
+/// This app's product type is `.iOSApplication`, so UIKit is always the runtime
+/// view system — even when the app runs on macOS via "Designed for iPad".
+/// No AppKit branch is needed or correct.
+///
+/// The renderer is held strongly on the coordinator so its lifetime tracks the
+/// view. Drawable-size changes during Stage Manager resize only trigger a
+/// renderer update when the delta exceeds 1 pixel (CLAUDE.md rule).
+struct MetalView: UIViewRepresentable {
     @ObservedObject var viewModel: FocusViewModel
 
     final class Coordinator: NSObject, MTKViewDelegate {
@@ -39,15 +37,7 @@ struct MetalView: PlatformViewRepresentable {
         Coordinator(renderer: FocusRenderer(viewModel: viewModel))
     }
 
-    #if canImport(AppKit)
-    func makeNSView(context: Context) -> MTKView { makeMTKView(context: context) }
-    func updateNSView(_ nsView: MTKView, context: Context) { updateMTKView(nsView) }
-    #else
-    func makeUIView(context: Context) -> MTKView { makeMTKView(context: context) }
-    func updateUIView(_ uiView: MTKView, context: Context) { updateMTKView(uiView) }
-    #endif
-
-    private func makeMTKView(context: Context) -> MTKView {
+    func makeUIView(context: Context) -> MTKView {
         let view = MTKView(frame: .zero, device: MTLCreateSystemDefaultDevice())
         view.framebufferOnly = false
         view.autoResizeDrawable = true
@@ -64,7 +54,7 @@ struct MetalView: PlatformViewRepresentable {
         return view
     }
 
-    private func updateMTKView(_ view: MTKView) {
+    func updateUIView(_ uiView: MTKView, context: Context) {
         // Renderer observes the view model directly. Loop runs at 60 fps via `isPaused = false`.
     }
 }
