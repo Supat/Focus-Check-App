@@ -95,13 +95,39 @@ struct OverlayControls: View {
 
     @ViewBuilder
     private var mosaicToggleRow: some View {
-        if viewModel.sensitiveContentCheckAvailable {
+        VStack(alignment: .leading, spacing: 4) {
             Toggle(isOn: $viewModel.mosaicEnabled) {
                 Label("Mosaic sensitive content", systemImage: "eye.slash")
                     .font(.caption)
             }
             .toggleStyle(.switch)
             .controlSize(.small)
+            .disabled(!viewModel.sensitiveContentCheckAvailable)
+
+            if !viewModel.sensitiveContentCheckAvailable {
+                // Apple's SCSensitivityAnalyzer returns .disabled until the user
+                // enables Communication Safety. Surface the requirement so the
+                // feature doesn't look broken.
+                Text("Turn on Settings → Screen Time → Communication Safety to enable.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else if viewModel.sourceImage != nil {
+                // Show the classifier's verdict so users can see whether the
+                // image was flagged, independent of whether they have the
+                // toggle enabled.
+                switch viewModel.isSensitive {
+                case .some(true):
+                    Label("Classified as sensitive", systemImage: "exclamationmark.shield.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                case .some(false):
+                    Label("Classified as safe", systemImage: "checkmark.shield")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                case .none:
+                    EmptyView()
+                }
+            }
         }
     }
 
