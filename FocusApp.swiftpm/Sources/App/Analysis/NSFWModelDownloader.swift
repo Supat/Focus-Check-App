@@ -1,28 +1,35 @@
 import Foundation
 import ZIPFoundation
 
-/// Downloads and installs an OpenNSFW-style Core ML classifier at runtime.
+/// Downloads and installs a Core ML NSFW classifier at runtime.
 ///
-/// Parallel to `DepthModelDownloader` — the reason we can't just add
-/// `lovoo/NSFWDetector` as an SPM dependency is the same reason the depth
-/// model uses this flow: Swift Playgrounds doesn't compile `.mlmodel` /
-/// `.mlpackage` assets, so the artifact must already be in `.mlmodelc` form
-/// when we fetch it.
+/// Parallel to `DepthModelDownloader` — Swift Playgrounds doesn't compile
+/// `.mlmodel` / `.mlpackage` assets, so the artifact must already be in
+/// `.mlmodelc` form when we fetch it.
 ///
-/// Maintainer sets up once on a Mac:
-///   xcrun coremlcompiler compile OpenNSFW.mlmodel /tmp/
-///   ditto -c -k --sequesterRsrc --keepParent /tmp/OpenNSFW.mlmodelc \
-///                                            OpenNSFW.mlmodelc.zip
-///   gh release create nsfw-model-v1 OpenNSFW.mlmodelc.zip
+/// Recommended source model: lovoo/NSFWDetector (BSD-licensed, 17 KB,
+/// CreateML-trained binary SFW/NSFW classifier).
+///
+///   Download URL:
+///     https://github.com/lovoo/NSFWDetector/releases/download/1.1.0/NSFW.mlmodel
+///
+/// Maintainer setup (one-time, Mac required):
+///   curl -L -o NSFW.mlmodel \
+///     https://github.com/lovoo/NSFWDetector/releases/download/1.1.0/NSFW.mlmodel
+///   xcrun coremlcompiler compile NSFW.mlmodel /tmp/
+///   ditto -c -k --sequesterRsrc --keepParent \
+///         /tmp/NSFW.mlmodelc NSFW.mlmodelc.zip
+///   gh release create nsfw-model-v1 NSFW.mlmodelc.zip \
+///       --repo Supat/Focus-Check-App
 actor NSFWModelDownloader {
 
-    static let modelDirectoryName = "OpenNSFW.mlmodelc"
+    static let modelDirectoryName = "NSFW.mlmodelc"
 
-    /// Where the compiled model is hosted. Parallel to the depth-model release.
-    /// Maintainer creates `nsfw-model-v1` on `Supat/Focus-Check-App` and
-    /// attaches `OpenNSFW.mlmodelc.zip` as an asset.
+    /// Where the compiled model is hosted. Maintainer creates release tag
+    /// `nsfw-model-v1` on `Supat/Focus-Check-App` and attaches
+    /// `NSFW.mlmodelc.zip` as an asset.
     static let defaultZIPURL = URL(string:
-        "https://github.com/Supat/Focus-Check-App/releases/download/nsfw-model-v1/OpenNSFW.mlmodelc.zip"
+        "https://github.com/Supat/Focus-Check-App/releases/download/nsfw-model-v1/NSFW.mlmodelc.zip"
     )!
 
     /// Persistent destination: `Application Support/OpenNSFW.mlmodelc`.
