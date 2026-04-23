@@ -118,6 +118,7 @@ final class FocusRenderer {
         var overlayHidden: Bool
         var zoomScale: CGFloat
         var zoomAnchor: CGPoint
+        var zoomPan: CGSize
     }
 
     private func buildFrame(drawableSize: CGSize) -> CIImage {
@@ -127,7 +128,8 @@ final class FocusRenderer {
                     inputs: nil,
                     overlayHidden: viewModel.overlayHidden,
                     zoomScale: viewModel.zoomScale,
-                    zoomAnchor: viewModel.zoomAnchor
+                    zoomAnchor: viewModel.zoomAnchor,
+                    zoomPan: viewModel.zoomPanOffset
                 )
             }
             // Mosaic fires when the classifier flagged the image AND the
@@ -161,7 +163,8 @@ final class FocusRenderer {
                 inputs: inputs,
                 overlayHidden: viewModel.overlayHidden,
                 zoomScale: viewModel.zoomScale,
-                zoomAnchor: viewModel.zoomAnchor
+                zoomAnchor: viewModel.zoomAnchor,
+                zoomPan: viewModel.zoomPanOffset
             )
         }
 
@@ -173,7 +176,8 @@ final class FocusRenderer {
             drawableSize: drawableSize,
             overlayHidden: snapshot.overlayHidden,
             zoomScale: snapshot.zoomScale,
-            zoomAnchor: snapshot.zoomAnchor
+            zoomAnchor: snapshot.zoomAnchor,
+            zoomPan: snapshot.zoomPan
         )
     }
 
@@ -189,7 +193,8 @@ final class FocusRenderer {
         drawableSize: CGSize,
         overlayHidden: Bool = false,
         zoomScale: CGFloat = 1,
-        zoomAnchor: CGPoint = CGPoint(x: 0.5, y: 0.5)
+        zoomAnchor: CGPoint = CGPoint(x: 0.5, y: 0.5),
+        zoomPan: CGSize = .zero
     ) -> CIImage {
         // Mosaic is applied at source resolution before fit/zoom, so the fit
         // transform handles the rest without rect-coordinate gymnastics.
@@ -297,17 +302,17 @@ final class FocusRenderer {
         }()
 
         let fitted = fit(image: baseSource, into: drawableSize,
-                         zoom: zoomScale, anchor: zoomAnchor)
+                         zoom: zoomScale, anchor: zoomAnchor, pan: zoomPan)
         if overlayHidden { return fitted }
 
         let sharpnessOverlay = inputs.sharpness.map {
-            fit(image: $0, into: drawableSize, zoom: zoomScale, anchor: zoomAnchor)
+            fit(image: $0, into: drawableSize, zoom: zoomScale, anchor: zoomAnchor, pan: zoomPan)
         }
         let depthOverlay = inputs.depth.map {
-            fit(image: $0, into: drawableSize, zoom: zoomScale, anchor: zoomAnchor)
+            fit(image: $0, into: drawableSize, zoom: zoomScale, anchor: zoomAnchor, pan: zoomPan)
         }
         let motionOverlay = inputs.motion.map {
-            fit(image: $0, into: drawableSize, zoom: zoomScale, anchor: zoomAnchor)
+            fit(image: $0, into: drawableSize, zoom: zoomScale, anchor: zoomAnchor, pan: zoomPan)
         }
 
         let threshold = CGFloat(inputs.threshold)
@@ -768,7 +773,8 @@ final class FocusRenderer {
 
     private static func fit(image: CIImage, into size: CGSize,
                             zoom: CGFloat = 1.0,
-                            anchor: CGPoint = CGPoint(x: 0.5, y: 0.5)) -> CIImage {
+                            anchor: CGPoint = CGPoint(x: 0.5, y: 0.5),
+                            pan: CGSize = .zero) -> CIImage {
         let sx = size.width / image.extent.width
         let sy = size.height / image.extent.height
         let s = min(sx, sy)
@@ -781,9 +787,12 @@ final class FocusRenderer {
 
         let ax = anchor.x * size.width
         let ay = (1 - anchor.y) * size.height
+        // Pan arrives in view-coords (SwiftUI Y-down); flip Y so it
+        // composes with CIImage Y-up after the anchor-centred zoom.
         let transform = CGAffineTransform(translationX: -ax, y: -ay)
             .concatenating(CGAffineTransform(scaleX: zoom, y: zoom))
             .concatenating(CGAffineTransform(translationX: ax, y: ay))
+            .concatenating(CGAffineTransform(translationX: pan.width, y: -pan.height))
 
         return fitted.transformed(by: transform)
             .cropped(to: CGRect(origin: .zero, size: size))

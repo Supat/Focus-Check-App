@@ -9,6 +9,10 @@ struct ContentView: View {
     @StateObject private var viewModel = FocusViewModel()
     @State private var exportedImage: ExportedImage?
     @State private var isExporting = false
+    /// Drag-baseline for the pan gesture — captures the VM's pan at
+    /// gesture start so successive drags accumulate rather than snap
+    /// back to zero. Re-seeded on zoom toggle.
+    @State private var panStart: CGSize = .zero
 
     var body: some View {
         NavigationStack {
@@ -85,6 +89,30 @@ struct ContentView: View {
                                             viewModel.toggleZoom(at: normalized)
                                         }
                                 )
+                                // Drag to pan when zoomed in. Gesture is
+                                // recognized simultaneously with the tap /
+                                // long-press so double-tap still fires and
+                                // short drags don't hijack the compare
+                                // hold. Only updates the VM's pan offset
+                                // while zoomScale > 1 — a no-op at 1x so
+                                // the unzoomed view isn't translatable.
+                                .simultaneousGesture(
+                                    DragGesture(minimumDistance: 6)
+                                        .onChanged { value in
+                                            guard viewModel.zoomScale > 1.001 else { return }
+                                            let proposed = CGSize(
+                                                width: panStart.width + value.translation.width,
+                                                height: panStart.height + value.translation.height
+                                            )
+                                            viewModel.zoomPanOffset = clampedPan(
+                                                proposed,
+                                                viewSize: geo.size
+                                            )
+                                        }
+                                        .onEnded { _ in
+                                            panStart = viewModel.zoomPanOffset
+                                        }
+                                )
                                 // Press-and-hold hides the overlay so the user can
                                 // compare against the original photo; release
                                 // re-reveals it.
@@ -98,6 +126,13 @@ struct ContentView: View {
                                 )
                             nudityLabelOverlay(in: geo.size)
                             nudeSubjectHeadBadges(in: geo.size)
+                        }
+                        .onChange(of: viewModel.zoomScale) { _, newScale in
+                            // Re-seed the drag baseline any time the zoom
+                            // toggles — otherwise the next drag picks up
+                            // from a stale prior-zoom pan.
+                            if newScale <= 1.001 { panStart = .zero }
+                            else { panStart = viewModel.zoomPanOffset }
                         }
                     }
                 }
@@ -308,19 +343,62 @@ struct ContentView: View {
 
         // Apply the same zoom transform the Metal view uses. The anchor
         // is stored in normalized view coordinates with Y-down origin,
-        // so no flip needed here.
+        // so no flip needed here. The pan offset is in SwiftUI view
+        // coords already — add it directly after the scale.
         let zoom = viewModel.zoomScale
         if zoom > 1.001 {
             let ax = viewModel.zoomAnchor.x * viewSize.width
             let ay = viewModel.zoomAnchor.y * viewSize.height
             rect = CGRect(
-                x: (rect.minX - ax) * zoom + ax,
-                y: (rect.minY - ay) * zoom + ay,
+                x: (rect.minX - ax) * zoom + ax + viewModel.zoomPanOffset.width,
+                y: (rect.minY - ay) * zoom + ay + viewModel.zoomPanOffset.height,
                 width: rect.width * zoom,
                 height: rect.height * zoom
             )
         }
         return rect
+    }
+
+    /// Constrain a proposed pan offset so the zoomed image still covers
+    /// the viewport — prevents dragging into the letterbox void. The
+    /// clamp derives the image's post-zoom bounds from the fit scale
+    /// and the current zoom anchor, then caps pan so `image-min + pan
+    /// ≤ 0` and `image-max + pan ≥ viewSize`. When the image is
+    /// narrower / shorter than the view in a given axis (possible when
+    /// zoomScale * fit < view size), pan for that axis is pinned to 0.
+    private func clampedPan(_ pan: CGSize, viewSize: CGSize) -> CGSize {
+        guard let extent = viewModel.sourceImage?.extent,
+              extent.width > 0, extent.height > 0
+        else { return .zero }
+        let zoom = viewModel.zoomScale
+        guard zoom > 1.001 else { return .zero }
+
+        let fit = min(viewSize.width / extent.width,
+                      viewSize.height / extent.height)
+        let fittedW = extent.width * fit
+        let fittedH = extent.height * fit
+        let ax = viewModel.zoomAnchor.x * viewSize.width
+        let ay = viewModel.zoomAnchor.y * viewSize.height
+
+        // Image bounds in view coords after the anchor-centred zoom,
+        // before the pan is added.
+        let imageMinX = ax * (1 - zoom) + zoom * (viewSize.width - fittedW) / 2
+        let imageMaxX = ax * (1 - zoom) + zoom * (viewSize.width + fittedW) / 2
+        let imageMinY = ay * (1 - zoom) + zoom * (viewSize.height - fittedH) / 2
+        let imageMaxY = ay * (1 - zoom) + zoom * (viewSize.height + fittedH) / 2
+
+        // Pan limits that still fully cover the viewport. When the post-
+        // zoom image is smaller than the view in an axis, we disable pan
+        // on that axis (both bounds collapse so the clamp becomes 0).
+        let panMaxX = max(0, -imageMinX)
+        let panMinX = min(0, viewSize.width - imageMaxX)
+        let panMaxY = max(0, -imageMinY)
+        let panMinY = min(0, viewSize.height - imageMaxY)
+
+        return CGSize(
+            width: max(panMinX, min(panMaxX, pan.width)),
+            height: max(panMinY, min(panMaxY, pan.height))
+        )
     }
 
     /// Per-subject counts from NudeNet, split by level so the user can

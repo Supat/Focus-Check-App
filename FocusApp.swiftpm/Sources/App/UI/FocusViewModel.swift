@@ -85,8 +85,12 @@ final class FocusViewModel: ObservableObject {
 
     // Zoom display state — purely view-layer, no re-analysis.
     // `zoomAnchor` is in normalized view coordinates (0...1), Y-top origin.
+    // `zoomPanOffset` is an additional translation in view-pixel coords
+    // applied after the anchor-based scale, so the user can drag to
+    // explore when zoomed in without re-anchoring.
     @Published var zoomScale: CGFloat = 1.0
     @Published var zoomAnchor: CGPoint = CGPoint(x: 0.5, y: 0.5)
+    @Published var zoomPanOffset: CGSize = .zero
 
     /// Press-and-hold to compare against the original photo. While true, the
     /// renderer skips all overlay compositing and draws just the fitted source.
@@ -109,6 +113,11 @@ final class FocusViewModel: ObservableObject {
 
     private func animateZoom(toScale target: CGFloat, toAnchor targetAnchor: CGPoint) {
         zoomAnimationTask?.cancel()
+        // Starting (or ending) a new zoom wipes any pan from the prior
+        // zoomed state — otherwise the transition would interpolate
+        // scale/anchor while a stale pan offset stayed fixed, producing
+        // a visual jump at either end.
+        zoomPanOffset = .zero
 
         let startScale = zoomScale
         let startAnchor = zoomAnchor
@@ -430,6 +439,7 @@ final class FocusViewModel: ObservableObject {
         isAnalyzing = false
         zoomScale = 1.0
         zoomAnchor = CGPoint(x: 0.5, y: 0.5)
+        zoomPanOffset = .zero
     }
 
     /// Render the current image + overlays at source resolution and write
