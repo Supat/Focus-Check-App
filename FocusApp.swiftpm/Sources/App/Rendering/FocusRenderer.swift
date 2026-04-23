@@ -565,20 +565,45 @@ final class FocusRenderer {
     }
 
     /// Pixelate the source and composite it through Vision's silhouette
-    /// mask. Block size matches the .body rect mosaic so switching back to
-    /// the bbox fallback isn't jarring.
+    /// mask. The mask is also pixelated on the same grid and thresholded
+    /// so every pixelation block is either fully covered or fully clear —
+    /// otherwise the mask clips blocks mid-pixel and the silhouette edge
+    /// reads as smooth instead of block-jagged.
     private static func silhouetteMosaic(source: CIImage, mask: CIImage) -> CIImage {
-        let pixelate = CIFilter.pixellate()
-        pixelate.inputImage = source.clampedToExtent()
         let longerSide = max(source.extent.width, source.extent.height)
-        pixelate.scale = Float(longerSide / 64)
-        pixelate.center = CGPoint(x: source.extent.midX, y: source.extent.midY)
-        let pixelated = (pixelate.outputImage ?? source).cropped(to: source.extent)
+        let blockSize = Float(longerSide / 64)
+        let center = CGPoint(x: source.extent.midX, y: source.extent.midY)
+
+        let pixelateImage = CIFilter.pixellate()
+        pixelateImage.inputImage = source.clampedToExtent()
+        pixelateImage.scale = blockSize
+        pixelateImage.center = center
+        let pixelated = (pixelateImage.outputImage ?? source).cropped(to: source.extent)
+
+        let pixelateMask = CIFilter.pixellate()
+        pixelateMask.inputImage = mask.clampedToExtent()
+        pixelateMask.scale = blockSize
+        pixelateMask.center = center
+        let blockMask = (pixelateMask.outputImage ?? mask).cropped(to: source.extent)
+
+        // Hard 0.5 threshold: any block whose average mask coverage exceeds
+        // half gets fully pixelated. Gain 50 + bias -25 is a steep step
+        // function around 0.5 that clamps to 0/1 in the following filter.
+        let stepped = blockMask.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": CIVector(x: 50, y: 0, z: 0, w: 0),
+            "inputGVector": CIVector(x: 50, y: 0, z: 0, w: 0),
+            "inputBVector": CIVector(x: 50, y: 0, z: 0, w: 0),
+            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1),
+            "inputBiasVector": CIVector(x: -25, y: -25, z: -25, w: 0)
+        ]).applyingFilter("CIColorClamp", parameters: [
+            "inputMinComponents": CIVector(x: 0, y: 0, z: 0, w: 0),
+            "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1)
+        ])
 
         let blend = CIFilter.blendWithMask()
         blend.inputImage = pixelated
         blend.backgroundImage = source
-        blend.maskImage = mask
+        blend.maskImage = stepped
         return (blend.outputImage ?? source).cropped(to: source.extent)
     }
 
