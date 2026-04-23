@@ -354,11 +354,30 @@ final class FocusViewModel: ObservableObject {
         currentTask?.cancel()
         isAnalyzing = true
         errorMessage = nil
-        // Deliberately don't clear sharpnessOverlay / depthOverlay / focalPlane
-        // / motionBlur / motionOverlay / isSensitive / faceRectangles here.
-        // The old source image keeps showing until the new analysis lands,
-        // so clearing the derived state would cause the old image to briefly
-        // lose its mosaic / overlays while the new analysis runs.
+        // Clear every derived-from-image overlay immediately so SwiftUI
+        // doesn't paint the new analysis (body rects, head badges, label
+        // overlay, sensitive flag) against the *old* sourceImage while
+        // the Metal view's render loop catches up. The old image keeps
+        // showing without overlays during analysis — noticeable only
+        // briefly and always alongside the "Analyzing…" spinner — then
+        // the new image + overlays land together.
+        sharpnessOverlay = nil
+        depthOverlay = nil
+        focalPlane = nil
+        motionBlur = nil
+        motionOverlay = nil
+        isSensitive = nil
+        sensitiveLabel = nil
+        sensitiveConfidence = nil
+        faceRectangles = []
+        bodyRectangles = []
+        groinRectangles = []
+        eyeBars = []
+        chestRectangles = []
+        personMask = nil
+        nudityLevels = []
+        nudityGenders = []
+        nudityDetections = []
         exposureInfo = ExposureInfo.read(from: url)
         sourceName = name
         refreshSensitiveContentAvailability()
