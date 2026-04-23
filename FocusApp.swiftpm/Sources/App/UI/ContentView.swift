@@ -9,6 +9,10 @@ struct ContentView: View {
     @StateObject private var viewModel = FocusViewModel()
     @State private var exportedImage: ExportedImage?
     @State private var isExporting = false
+    /// Hides the toolbar + bottom control panel so the image occupies
+    /// the whole window. Toggled from the toolbar button and from the
+    /// floating close button that appears over the image while active.
+    @State private var isFullScreen = false
     /// Drag-baseline for the pan gesture — captures the VM's pan at
     /// gesture start so successive drags accumulate rather than snap
     /// back to zero. Re-seeded on zoom toggle.
@@ -31,6 +35,9 @@ struct ContentView: View {
                             }
                         }
                         ToolbarItem(placement: .primaryAction) {
+                            fullScreenButton
+                        }
+                        ToolbarItem(placement: .primaryAction) {
                             exportButton
                         }
                     }
@@ -49,6 +56,10 @@ struct ContentView: View {
                         principalTitle
                     }
                 }
+                .toolbar(isFullScreen ? .hidden : .automatic, for: .navigationBar)
+                #if os(iOS)
+                .statusBarHidden(isFullScreen)
+                #endif
                 .sheet(item: $exportedImage) { item in
                     ShareSheet(url: item.url)
                 }
@@ -159,17 +170,55 @@ struct ContentView: View {
                 .padding([.leading, .bottom], 12)
             }
 
-            Divider()
+            if !isFullScreen {
+                Divider()
 
-            OverlayControls(viewModel: viewModel)
-                .padding()
-                .background(.bar)
+                OverlayControls(viewModel: viewModel)
+                    .padding()
+                    .background(.bar)
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            // Floating dismiss control only appears while full-screen is
+            // active — the regular toolbar is hidden, so the user needs
+            // an on-image way back.
+            if isFullScreen {
+                Button {
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        isFullScreen = false
+                    }
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title)
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(.white, .black.opacity(0.45))
+                }
+                .padding(16)
+            }
         }
     }
 
     /// Triggers an async composite + PNG encode on the view model, then
     /// presents the system share sheet so the user can save to Files,
     /// Photos, or send via any registered share target.
+    /// Toggles the full-screen mode: hides the navigation bar, bottom
+    /// controls, and status bar so the image occupies the whole window.
+    /// Animates lightly so the chrome fades instead of snapping.
+    private var fullScreenButton: some View {
+        Button {
+            withAnimation(.easeOut(duration: 0.2)) {
+                isFullScreen.toggle()
+            }
+        } label: {
+            Label(
+                isFullScreen ? "Exit full screen" : "Full screen",
+                systemImage: isFullScreen
+                    ? "arrow.down.right.and.arrow.up.left"
+                    : "arrow.up.left.and.arrow.down.right"
+            )
+        }
+    }
+
     private var exportButton: some View {
         Button {
             guard !isExporting else { return }
