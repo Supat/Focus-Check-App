@@ -104,6 +104,7 @@ struct ContentView: View {
                 HStack(spacing: 8) {
                     exposureBadge
                     motionBlurBadge
+                    nudeSubjectsBadge
                 }
                 .padding([.leading, .bottom], 12)
             }
@@ -189,19 +190,10 @@ struct ContentView: View {
            viewModel.sourceImage != nil,
            !viewModel.overlayHidden {
             let isHighConfidence = (viewModel.sensitiveConfidence ?? 0) > 0.6
-            let flaggedSubjects = viewModel.nudityLevels
-                .filter { $0 >= viewModel.nudityGate }.count
             HStack(spacing: 6) {
                 Image(systemName: "exclamationmark.shield.fill")
                 Text(viewModel.sensitiveLabel ?? "Sensitive")
                     .font(.caption)
-                if !viewModel.nudityLevels.isEmpty {
-                    // NudeNet ran — show how many subjects crossed the
-                    // current per-subject gate out of how many were detected.
-                    Text("\(flaggedSubjects)/\(viewModel.nudityLevels.count)")
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.85))
-                }
             }
             .foregroundStyle(isHighConfidence ? Color.red : Color.orange)
             .padding(.horizontal, 12)
@@ -210,6 +202,27 @@ struct ContentView: View {
             // swap for an explicit 40%-black fill so the image clearly shows
             // through the capsule while the coloured text stays legible.
             .background(Color.black.opacity(0.4), in: Capsule())
+        }
+    }
+
+    /// Per-subject count from NudeNet, shown alongside the exposure and
+    /// motion-blur capsules. Hides itself when the count is zero (no
+    /// subject crossed the gate) so it doesn't clutter safe photos.
+    @ViewBuilder
+    private var nudeSubjectsBadge: some View {
+        let flagged = viewModel.nudityLevels
+            .filter { $0 >= viewModel.nudityGate }.count
+        if flagged > 0,
+           viewModel.sourceImage != nil,
+           !viewModel.overlayHidden {
+            HStack(spacing: 6) {
+                Image(systemName: "person.2.fill")
+                Text("\(flagged)/\(viewModel.nudityLevels.count)")
+                    .font(.caption.monospacedDigit())
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(.regularMaterial, in: Capsule())
         }
     }
 
