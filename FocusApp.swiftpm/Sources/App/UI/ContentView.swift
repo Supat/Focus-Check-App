@@ -420,11 +420,10 @@ struct ContentView: View {
            !viewModel.overlayHidden {
             HStack(spacing: 6) {
                 Image(systemName: "sparkle.magnifyingglass")
-                Text(top.prompt)
+                Text(Self.sentenceCased(top.prompt))
                     .font(.caption)
                     .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: 240, alignment: .leading)
+                    .fixedSize(horizontal: true, vertical: false)
                 Text("\(Int((top.similarity * 100).rounded()))%")
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.secondary)
@@ -433,6 +432,15 @@ struct ContentView: View {
             .padding(.vertical, 6)
             .liquidBadgeBackground(in: Capsule())
         }
+    }
+
+    /// Upper-case the first letter of `s` while leaving the rest
+    /// untouched — sentence case rather than title case, so prompts
+    /// like "a photograph of a nude person" read as
+    /// "A photograph of a nude person" without Title-Casing Every Word.
+    private static func sentenceCased(_ s: String) -> String {
+        guard let first = s.first else { return s }
+        return first.uppercased() + s.dropFirst()
     }
 
     /// Per-subject counts from NudeNet, split by level so the user can
