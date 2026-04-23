@@ -269,10 +269,13 @@ final class FocusRenderer {
                 // body assignment in this path; the detector's own boxes
                 // are the redaction targets. Detections are not subject to
                 // the per-subject gate — the user picked this mode to
-                // cover every flagged region.
+                // cover every flagged region. 1.5x block size vs. the
+                // other region modes so tight detections read as solidly
+                // redacted instead of still-readable pixel noise.
                 guard !inputs.nudityDetections.isEmpty else { return inputs.source }
                 let regions = inputs.nudityDetections.map(\.rect)
-                return regionMosaic(source: inputs.source, regions: regions, capDivisor: 32)
+                return regionMosaic(source: inputs.source, regions: regions,
+                                    capDivisor: 32, scaleMultiplier: 1.5)
             }
         }()
 
@@ -714,7 +717,8 @@ final class FocusRenderer {
 
     private static func regionMosaic(source: CIImage,
                                      regions: [CGRect],
-                                     capDivisor: CGFloat) -> CIImage {
+                                     capDivisor: CGFloat,
+                                     scaleMultiplier: CGFloat = 1.0) -> CIImage {
         guard let smallest = regions.min(by: {
             $0.width * $0.height < $1.width * $1.height
         }) else { return source }
@@ -723,7 +727,8 @@ final class FocusRenderer {
         pixelate.inputImage = source.clampedToExtent()
         let regionBased = min(smallest.width, smallest.height) * 0.08
         let cap = max(source.extent.width, source.extent.height) / capDivisor
-        pixelate.scale = Float(max(min(regionBased, cap), 4))
+        let base = max(min(regionBased, cap), 4)
+        pixelate.scale = Float(base * scaleMultiplier)
         pixelate.center = CGPoint(x: source.extent.midX, y: source.extent.midY)
         let pixelated = (pixelate.outputImage ?? source).cropped(to: source.extent)
 
