@@ -85,8 +85,17 @@ private final class CLIPEncoder {
 
     init() throws {
         let installRoot = try ModelArchive.clip.installedURL()
-        let modelURL = installRoot.appendingPathComponent("CLIPImageEncoder.mlmodelc")
-        guard FileManager.default.fileExists(atPath: modelURL.path) else {
+        // Probe both the canonical layout and the legacy double-nested
+        // one (created by earlier builds of ModelArchiveInstaller that
+        // didn't unwrap `__MACOSX`-polluted bundles). Either is fine at
+        // runtime; maintainer re-downloads land on the canonical path.
+        let candidates = [
+            installRoot.appendingPathComponent("CLIPImageEncoder.mlmodelc"),
+            installRoot.appendingPathComponent("CLIP/CLIPImageEncoder.mlmodelc")
+        ]
+        guard let modelURL = candidates.first(where: {
+            FileManager.default.fileExists(atPath: $0.path)
+        }) else {
             throw AnalysisError.modelMissing
         }
         let config = MLModelConfiguration()
@@ -193,8 +202,13 @@ private final class CLIPPromptStore {
 
     init() throws {
         let installRoot = try ModelArchive.clip.installedURL()
-        let promptsURL = installRoot.appendingPathComponent("clip-prompts.json")
-        guard FileManager.default.fileExists(atPath: promptsURL.path) else {
+        let candidates = [
+            installRoot.appendingPathComponent("clip-prompts.json"),
+            installRoot.appendingPathComponent("CLIP/clip-prompts.json")
+        ]
+        guard let promptsURL = candidates.first(where: {
+            FileManager.default.fileExists(atPath: $0.path)
+        }) else {
             throw AnalysisError.modelMissing
         }
         let data = try Data(contentsOf: promptsURL)
