@@ -361,7 +361,21 @@ actor FocusAnalyzer {
             width: w,
             height: h
         )
-        return denormalize(normalized, in: extent)
+        let rect = denormalize(normalized, in: extent)
+
+        // Portrait / tall-aspect sources can make the denormalized rect
+        // taller than wide even though the normalized rect isn't — that
+        // looks wrong for a groin cover, which users expect to read as
+        // horizontal. Pad width out to match height around the same
+        // center x so the rect is always at least square.
+        guard rect.width < rect.height else { return rect }
+        let extra = rect.height - rect.width
+        return CGRect(
+            x: rect.minX - extra / 2,
+            y: rect.minY,
+            width: rect.height,
+            height: rect.height
+        )
     }
 
     /// Derive a chest rect from a body-pose observation's shoulder + hip
