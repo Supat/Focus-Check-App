@@ -243,12 +243,34 @@ private final class NudityClassifier {
 
     private func parseDetections(from result: MLFeatureProvider,
                                  sourceExtent: CGRect) -> [NudityDetection] {
-        guard let coords = result.featureValue(for: coordinatesName)?.multiArrayValue,
-              let conf = result.featureValue(for: confidenceName)?.multiArrayValue
-        else { return [] }
+        // Path 1: Create ML object-detector format — the clean case, NMS
+        // already applied inside the model. Outputs are paired multi-arrays
+        // `coordinates` (Nx4, normalized [cx,cy,w,h]) + `confidence` (NxC).
+        if let coords = result.featureValue(for: coordinatesName)?.multiArrayValue,
+           let conf = result.featureValue(for: confidenceName)?.multiArrayValue,
+           coords.shape.count >= 2, conf.shape.count >= 2 {
+            return parseCreateMLDetections(coords: coords, conf: conf, sourceExtent: sourceExtent)
+        }
 
+        // Path 2: raw YOLO tensor from coremltools-converted ONNX — one
+        // multi-array output, no NMS baked in. Iterate all model outputs
+        // and accept the first one whose shape matches a YOLO layout.
+        for name in result.featureNames {
+            guard let array = result.featureValue(for: name)?.multiArrayValue else { continue }
+            if let detections = parseYOLODetections(array: array, sourceExtent: sourceExtent) {
+                return classAgnosticNMS(detections, iouThreshold: 0.45)
+            }
+        }
+        return []
+    }
+
+    // MARK: - Create ML object-detector path
+
+    private func parseCreateMLDetections(coords: MLMultiArray,
+                                         conf: MLMultiArray,
+                                         sourceExtent: CGRect) -> [NudityDetection] {
         let count = coords.shape.first?.intValue ?? 0
-        guard count > 0, coords.shape.count >= 2, conf.shape.count >= 2 else { return [] }
+        guard count > 0 else { return [] }
         let classCount = conf.shape[1].intValue
         let strideBox = coords.strides[0].intValue
         let strideConf = conf.strides[0].intValue
@@ -257,7 +279,6 @@ private final class NudityClassifier {
         detections.reserveCapacity(count)
 
         for i in 0..<count {
-            // Pick the top class for this box.
             var topClass = 0
             var topScore: Float = -1
             for c in 0..<classCount {
@@ -267,23 +288,19 @@ private final class NudityClassifier {
                     topClass = c
                 }
             }
-            guard topScore >= scoreThreshold else { continue }
-            guard topClass < labels.count else { continue }
+            guard topScore >= scoreThreshold, topClass < labels.count else { continue }
 
-            // Create ML box format: normalized [cx, cy, w, h] in image coords
-            // with Y measured from the top. Convert to the CIImage Y-up
-            // origin the rest of the pipeline uses.
+            // Create ML emits normalized [cx, cy, w, h] with Y measured
+            // from the top. CGRect uses min-y with Y-up — flip via
+            // y_ciimage_min = 1 - (cy + h/2).
             let cx = CGFloat(coords[i * strideBox + 0].floatValue)
             let cy = CGFloat(coords[i * strideBox + 1].floatValue)
             let bw = CGFloat(coords[i * strideBox + 2].floatValue)
             let bh = CGFloat(coords[i * strideBox + 3].floatValue)
 
-            let xMin = (cx - bw / 2) * sourceExtent.width + sourceExtent.minX
-            let yTop = (cy - bh / 2) * sourceExtent.height
-            let yFlipped = sourceExtent.height - yTop - bh * sourceExtent.height + sourceExtent.minY
             let rect = CGRect(
-                x: xMin,
-                y: yFlipped,
+                x: (cx - bw / 2) * sourceExtent.width + sourceExtent.minX,
+                y: (1 - cy - bh / 2) * sourceExtent.height + sourceExtent.minY,
                 width: bw * sourceExtent.width,
                 height: bh * sourceExtent.height
             )
@@ -294,5 +311,137 @@ private final class NudityClassifier {
             ))
         }
         return detections
+    }
+
+    // MARK: - Raw YOLO path
+
+    /// Decode a raw YOLOv5 or YOLOv8 output tensor. Returns nil when the
+    /// shape doesn't look like either layout; the caller then moves on
+    /// to the next output. Returns detections *before* NMS — the caller
+    /// runs `classAgnosticNMS` afterward.
+    ///
+    /// Supported layouts (shape is `[1, a, b]`):
+    ///   * YOLOv5: `[1, N, 5+C]` — per-anchor row [cx, cy, w, h, obj, cls0..clsC-1]
+    ///   * YOLOv8: `[1, 4+C, N]` — channels-first, no objectness column
+    ///
+    /// Coords are in model-input pixel space (0...inputSize); this decoder
+    /// normalizes to [0,1] and then maps to source extent.
+    private func parseYOLODetections(array: MLMultiArray,
+                                     sourceExtent: CGRect) -> [NudityDetection]? {
+        let shape = array.shape.map(\.intValue)
+        guard shape.count == 3, shape[0] == 1 else { return nil }
+
+        let classCount = labels.count
+        let v5Feats = 5 + classCount
+        let v8Feats = 4 + classCount
+
+        // Layout probing. Prefer YOLOv5 when the last dim matches, else
+        // YOLOv8 (channels-first). Reject anything else so we don't
+        // accidentally "decode" a classifier head.
+        let numAnchors: Int
+        let numFeats: Int
+        let channelsFirst: Bool
+        let hasObjectness: Bool
+        if shape[2] == v5Feats {
+            numAnchors = shape[1]; numFeats = v5Feats
+            channelsFirst = false;  hasObjectness = true
+        } else if shape[2] == v8Feats {
+            numAnchors = shape[1]; numFeats = v8Feats
+            channelsFirst = false;  hasObjectness = false
+        } else if shape[1] == v5Feats {
+            numAnchors = shape[2]; numFeats = v5Feats
+            channelsFirst = true;   hasObjectness = true
+        } else if shape[1] == v8Feats {
+            numAnchors = shape[2]; numFeats = v8Feats
+            channelsFirst = true;   hasObjectness = false
+        } else {
+            return nil
+        }
+
+        let classOffset = hasObjectness ? 5 : 4
+        let invInputW = 1 / Float(inputSize.width)
+        let invInputH = 1 / Float(inputSize.height)
+
+        // Index helper. For `[1, F, N]` (YOLOv8), stride over anchors.
+        // For `[1, N, F]` (YOLOv5), stride over features.
+        func read(anchor a: Int, feat f: Int) -> Float {
+            let flat = channelsFirst ? (f * numAnchors + a) : (a * numFeats + f)
+            return array[flat].floatValue
+        }
+
+        var detections: [NudityDetection] = []
+        detections.reserveCapacity(min(numAnchors, 256))
+
+        for a in 0..<numAnchors {
+            // Max-class scan first — many anchors have all-low class scores,
+            // so early-reject before computing the combined score avoids
+            // the objectness read for most rows. Not a huge saving but
+            // meaningful over 25k anchors.
+            var topClass = 0
+            var topScore: Float = -1
+            for c in 0..<classCount {
+                let s = read(anchor: a, feat: classOffset + c)
+                if s > topScore {
+                    topScore = s
+                    topClass = c
+                }
+            }
+            // YOLOv5: final score = obj * cls. YOLOv8: score = cls only
+            // (no objectness column). The upstream exporter is expected
+            // to have applied the sigmoids already — coremltools does this
+            // by default when the ONNX graph includes them.
+            let score: Float = {
+                if hasObjectness {
+                    let obj = read(anchor: a, feat: 4)
+                    return obj * topScore
+                }
+                return topScore
+            }()
+            guard score >= scoreThreshold, topClass < classCount else { continue }
+
+            let cx = read(anchor: a, feat: 0) * invInputW
+            let cy = read(anchor: a, feat: 1) * invInputH
+            let bw = read(anchor: a, feat: 2) * invInputW
+            let bh = read(anchor: a, feat: 3) * invInputH
+
+            // YOLO boxes are top-down; flip to CIImage Y-up.
+            let rect = CGRect(
+                x: CGFloat(cx - bw / 2) * sourceExtent.width + sourceExtent.minX,
+                y: CGFloat(1 - cy - bh / 2) * sourceExtent.height + sourceExtent.minY,
+                width: CGFloat(bw) * sourceExtent.width,
+                height: CGFloat(bh) * sourceExtent.height
+            )
+            detections.append(NudityDetection(
+                rect: rect,
+                label: labels[topClass],
+                confidence: score
+            ))
+        }
+        return detections
+    }
+
+    /// Class-agnostic non-maximum suppression. NudeNet labels often overlap
+    /// spatially (e.g. a breast detection and a body-part-exposed detection
+    /// on the same pixel); suppressing across classes keeps the result
+    /// clean when attributing back to a subject.
+    private func classAgnosticNMS(_ detections: [NudityDetection],
+                                  iouThreshold: Float) -> [NudityDetection] {
+        let sorted = detections.sorted { $0.confidence > $1.confidence }
+        var kept: [NudityDetection] = []
+        kept.reserveCapacity(sorted.count)
+        for det in sorted {
+            let overlaps = kept.contains { Self.iou(det.rect, $0.rect) > iouThreshold }
+            if !overlaps { kept.append(det) }
+        }
+        return kept
+    }
+
+    private static func iou(_ a: CGRect, _ b: CGRect) -> Float {
+        let inter = a.intersection(b)
+        guard !inter.isNull else { return 0 }
+        let interArea = inter.width * inter.height
+        let unionArea = a.width * a.height + b.width * b.height - interArea
+        guard unionArea > 0 else { return 0 }
+        return Float(interArea / unionArea)
     }
 }
