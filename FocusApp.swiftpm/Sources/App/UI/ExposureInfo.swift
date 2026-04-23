@@ -14,6 +14,10 @@ struct ExposureInfo: Equatable {
     /// EXIF SubjectDistance, in metres. Rarely populated by phone cameras;
     /// DSLRs with modern AF modules write it more reliably.
     var subjectDistanceMeters: Float?
+    /// EXIF Flash tag, bit 0 parsed: true when the flash actually fired
+    /// for the exposure. nil when the tag is missing (common on synthesized
+    /// or heavily-edited files).
+    var flashFired: Bool?
 
     static func read(from url: URL) -> ExposureInfo? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
@@ -31,6 +35,11 @@ struct ExposureInfo: Equatable {
             info.iso = first.intValue
         }
         info.subjectDistanceMeters = (exif[kCGImagePropertyExifSubjectDistance] as? NSNumber)?.floatValue
+        // EXIF Flash is a bitfield — bit 0 signals "flash fired" independent
+        // of the other bits (return status, mode, red-eye reduction, etc.).
+        if let flash = (exif[kCGImagePropertyExifFlash] as? NSNumber)?.intValue {
+            info.flashFired = (flash & 0x01) != 0
+        }
         return info.isEmpty ? nil : info
     }
 
@@ -70,6 +79,7 @@ struct ExposureInfo: Equatable {
         exposureTimeSeconds == nil &&
         fNumber == nil &&
         iso == nil &&
-        subjectDistanceMeters == nil
+        subjectDistanceMeters == nil &&
+        flashFired == nil
     }
 }

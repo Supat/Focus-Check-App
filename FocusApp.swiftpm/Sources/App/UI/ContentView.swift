@@ -155,11 +155,19 @@ struct ContentView: View {
                 info.formattedShutter,
                 info.formattedFocusDistance
             ].compactMap { $0 }
-            if !parts.isEmpty {
+            if !parts.isEmpty || info.flashFired == true {
                 HStack(spacing: 6) {
                     Image(systemName: "camera.aperture")
-                    Text(parts.joined(separator: " · "))
-                        .font(.caption.monospacedDigit())
+                    if !parts.isEmpty {
+                        Text(parts.joined(separator: " · "))
+                            .font(.caption.monospacedDigit())
+                    }
+                    // Show only when EXIF Flash tag's bit 0 was set — i.e.
+                    // the flash actually fired, not just 'flash mode auto'.
+                    if info.flashFired == true {
+                        Image(systemName: "bolt.fill")
+                            .foregroundStyle(.yellow)
+                    }
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
