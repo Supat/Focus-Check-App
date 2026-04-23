@@ -153,9 +153,13 @@ actor ModelArchiveInstaller {
         progress(1.0)
     }
 
-    /// If `root` contains exactly one top-level directory, return that
-    /// directory so the caller moves its contents to the install path
-    /// without an extra wrapping layer. Otherwise return nil.
+    /// If `root` contains exactly one top-level directory that isn't
+    /// itself a `.mlmodelc`, return that inner directory so the
+    /// caller moves its contents to the install path without an
+    /// extra wrapping layer. `hasDirectoryPath` on the URL alone
+    /// isn't reliable (depends on whether the trailing slash made it
+    /// through `contentsOfDirectory`), so we explicitly read the
+    /// `.isDirectoryKey` resource value.
     private static func collapseSingleRootDirectory(in root: URL) -> URL? {
         let entries = (try? FileManager.default.contentsOfDirectory(
             at: root, includingPropertiesForKeys: [.isDirectoryKey]
@@ -163,10 +167,10 @@ actor ModelArchiveInstaller {
         let visible = entries.filter { !$0.lastPathComponent.hasPrefix(".") }
         guard visible.count == 1,
               let only = visible.first,
-              only.hasDirectoryPath,
               only.pathExtension != "mlmodelc"
         else { return nil }
-        return only
+        let isDir = (try? only.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+        return isDir ? only : nil
     }
 
     /// Remove the installed model. Useful for a "re-download" UX or tests.
