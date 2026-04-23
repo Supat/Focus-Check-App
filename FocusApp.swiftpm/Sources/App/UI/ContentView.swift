@@ -435,12 +435,12 @@ private struct SubjectHeadBadge: View {
 
     var body: some View {
         HStack(spacing: 4) {
+            Image(systemName: "exclamationmark.shield.fill")
+                .font(.title3)
             if let symbol = gender.symbol {
                 Image(systemName: symbol)
                     .font(.footnote.weight(.semibold))
             }
-            Image(systemName: "exclamationmark.shield.fill")
-                .font(.title3)
         }
         .foregroundStyle(tint)
         .padding(.horizontal, 8)
