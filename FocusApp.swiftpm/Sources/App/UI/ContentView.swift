@@ -36,6 +36,14 @@ struct ContentView: View {
                             onError: { message in viewModel.errorMessage = message }
                         )
                     }
+                    // Custom principal title: Explicit badge (when the
+                    // classifier flagged the image) followed by the file
+                    // name. Lives in the toolbar instead of an image
+                    // overlay so press-and-hold compare doesn't hide it —
+                    // the flag state should remain visible at all times.
+                    ToolbarItem(placement: .principal) {
+                        principalTitle
+                    }
                 }
                 .sheet(item: $exportedImage) { item in
                     ShareSheet(url: item.url)
@@ -100,10 +108,6 @@ struct ContentView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .overlay(alignment: .top) {
-                sensitiveContentBadge
-                    .padding(.top, 8)
-            }
             .overlay(alignment: .bottomLeading) {
                 HStack(spacing: 8) {
                     exposureBadge
@@ -181,31 +185,32 @@ struct ContentView: View {
         }
     }
 
-    /// Shown whenever the classifier flagged the image, independent of the
-    /// mosaic toggle — lets the user know the image was flagged even when
-    /// they've chosen to view it uncovered. Uses the top class label from
-    /// the classifier (e.g. "Nudity" from SCA, "NSFW" from the fallback).
-    /// Red when the NSFW classifier's confidence exceeds 0.6 — a stronger
-    /// visual signal for high-confidence matches. Orange for borderline
-    /// cases or SCA results (which don't expose a numeric confidence).
+    /// Navigation-bar principal item: the Explicit badge (when the
+    /// classifier flagged the image) followed by the file name. Replaces
+    /// the previous top-of-image overlay so the flag stays visible
+    /// during press-and-hold compare and doesn't clutter the photo.
+    /// Colour keeps the original rule: red when NSFW confidence > 0.6,
+    /// orange otherwise (or when SCA drove the verdict, which doesn't
+    /// expose a confidence number).
     @ViewBuilder
-    private var sensitiveContentBadge: some View {
-        if viewModel.isSensitive == true,
-           viewModel.sourceImage != nil,
-           !viewModel.overlayHidden {
-            let isHighConfidence = (viewModel.sensitiveConfidence ?? 0) > 0.6
-            HStack(spacing: 6) {
-                Image(systemName: "exclamationmark.shield.fill")
-                Text(viewModel.sensitiveLabel ?? "Sensitive")
-                    .font(.caption)
+    private var principalTitle: some View {
+        HStack(spacing: 8) {
+            if viewModel.isSensitive == true {
+                let isHighConfidence = (viewModel.sensitiveConfidence ?? 0) > 0.6
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.shield.fill")
+                    Text(viewModel.sensitiveLabel ?? "Sensitive")
+                        .font(.caption)
+                }
+                .foregroundStyle(isHighConfidence ? Color.red : Color.orange)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .liquidBadgeBackground(tint: Color.black.opacity(0.4), in: Capsule())
             }
-            .foregroundStyle(isHighConfidence ? Color.red : Color.orange)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            // .ultraThinMaterial still renders mostly opaque on this layer;
-            // swap for an explicit 40%-black fill so the image clearly shows
-            // through the capsule while the coloured text stays legible.
-            .liquidBadgeBackground(tint: Color.black.opacity(0.4), in: Capsule())
+            Text(viewModel.sourceName ?? "Focus Check")
+                .font(.headline)
+                .lineLimit(1)
+                .truncationMode(.middle)
         }
     }
 
