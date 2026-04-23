@@ -3,6 +3,7 @@ import CoreImage
 import CoreImage.CIFilterBuiltins
 import ImageIO
 import Vision
+import simd
 
 /// An oriented black-bar redaction over a detected pair of eyes. Center +
 /// size + tilt angle (radians) — lets the renderer rotate the bar to follow
@@ -267,10 +268,14 @@ actor FocusAnalyzer {
         let bodyRects = VNDetectHumanRectanglesRequest()
         bodyRects.upperBodyOnly = false
         let bodyPose = VNDetectHumanBodyPoseRequest()
+        // 3D body pose (iOS 17+) — used for body-orientation inference so
+        // we can widen the groin mosaic when the subject is turned
+        // sideways. Runs alongside the 2D pose request; same CGImage.
+        let bodyPose3D = VNDetectHumanBodyPose3DRequest()
 
         let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
         do {
-            try handler.perform([faceLandmarks, bodyRects, bodyPose])
+            try handler.perform([faceLandmarks, bodyRects, bodyPose, bodyPose3D])
         } catch {
             return VisionResults()
         }
@@ -293,9 +298,15 @@ actor FocusAnalyzer {
             results.bodies.append(Self.denormalize(obs.boundingBox, in: extent))
         }
 
-        // Groin + chest from the shared pose observations.
-        for obs in bodyPose.results ?? [] {
-            if let g = Self.groinRect(from: obs, in: extent) { results.groins.append(g) }
+        // Groin + chest from the shared pose observations. Pair each 2D
+        // observation with the corresponding 3D one by index so the
+        // sideways-expansion can use 3D hip positions when available.
+        let poses3D = bodyPose3D.results ?? []
+        for (index, obs) in (bodyPose.results ?? []).enumerated() {
+            let pose3D = index < poses3D.count ? poses3D[index] : nil
+            if let g = Self.groinRect(from: obs, pose3D: pose3D, in: extent) {
+                results.groins.append(g)
+            }
             if let c = Self.chestRect(from: obs, in: extent) { results.chests.append(c) }
         }
         return results
@@ -341,8 +352,15 @@ actor FocusAnalyzer {
     }
 
     /// Derive a pelvis rect from a body-pose observation's hip joints.
-    /// Nil when either hip is below the confidence floor.
-    private static func groinRect(from obs: VNHumanBodyPoseObservation, in extent: CGRect) -> CGRect? {
+    /// Nil when either hip is below the confidence floor. When a 3D pose
+    /// observation is supplied, uses the hip joints' depth spread to
+    /// detect sideways body orientation and widen the rect — the 2D hip
+    /// distance collapses toward zero as the person turns away from the
+    /// camera, but the groin area is still projected into roughly the
+    /// same spatial band and needs the extra cover.
+    private static func groinRect(from obs: VNHumanBodyPoseObservation,
+                                  pose3D: VNHumanBodyPose3DObservation?,
+                                  in extent: CGRect) -> CGRect? {
         guard let leftHip = try? obs.recognizedPoint(.leftHip),
               let rightHip = try? obs.recognizedPoint(.rightHip),
               leftHip.confidence > 0.3,
@@ -361,14 +379,30 @@ actor FocusAnalyzer {
             width: w,
             height: h
         )
-        let rect = denormalize(normalized, in: extent)
+        var rect = denormalize(normalized, in: extent)
 
-        // Portrait / tall-aspect sources can make the denormalized rect
-        // taller than wide even though the normalized rect isn't — that
-        // looks wrong for a groin cover, which users expect to read as
-        // a horizontal strip. When width < height, pad the width out to
-        // 3x the height around the same center x so the rect becomes a
-        // wide band rather than a square or tall box.
+        // Sideways expansion — when the subject faces the camera, the
+        // hip vector lies mostly along the image X axis; when turned
+        // sideways, it rotates into the Z (depth) axis. Scale width by
+        // (1 + 2 * sidewaysFactor) so a full profile gets up to 3x the
+        // original width, a three-quarter view gets ~2x, and a frontal
+        // pose is unchanged.
+        let sideways = Self.sidewaysFactor(from: pose3D)
+        if sideways > 0.01 {
+            let expandedWidth = rect.width * (1 + 2 * sideways)
+            let extra = expandedWidth - rect.width
+            rect = CGRect(
+                x: rect.minX - extra / 2,
+                y: rect.minY,
+                width: expandedWidth,
+                height: rect.height
+            )
+        }
+
+        // Portrait / tall-aspect sources can still make the denormalized
+        // rect taller than wide even after the sideways expansion. Pad to
+        // 3x height around the same center x so the rect always reads as
+        // a horizontal strip.
         guard rect.width < rect.height else { return rect }
         let newWidth = rect.height * 3
         let extra = newWidth - rect.width
@@ -378,6 +412,28 @@ actor FocusAnalyzer {
             width: newWidth,
             height: rect.height
         )
+    }
+
+    /// 0 = fully frontal, 1 = fully sideways. Computed from the 3D hip
+    /// positions: frontal bodies have a wide hip spread along the image
+    /// X axis and ~0 along Z; sideways bodies have ~0 along X and a wide
+    /// spread along Z. Returns 0 when the 3D observation or either hip
+    /// joint is unavailable.
+    private static func sidewaysFactor(from pose3D: VNHumanBodyPose3DObservation?) -> CGFloat {
+        guard let pose3D,
+              let leftHip = try? pose3D.recognizedPoint(.leftHip),
+              let rightHip = try? pose3D.recognizedPoint(.rightHip)
+        else { return 0 }
+
+        // VNHumanBodyRecognizedPoint3D.position is a simd_float4x4 where
+        // column 3 holds the (x, y, z) translation in Vision's 3D space.
+        let leftPos = leftHip.position.columns.3
+        let rightPos = rightHip.position.columns.3
+        let dx = Double(rightPos.x - leftPos.x)
+        let dz = Double(rightPos.z - leftPos.z)
+        let magnitude = sqrt(dx * dx + dz * dz)
+        guard magnitude > 0 else { return 0 }
+        return CGFloat(abs(dz) / magnitude)
     }
 
     /// Derive a chest rect from a body-pose observation's shoulder + hip
