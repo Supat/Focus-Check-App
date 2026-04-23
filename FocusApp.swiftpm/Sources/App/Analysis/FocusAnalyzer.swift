@@ -64,6 +64,10 @@ actor FocusAnalyzer {
         /// black = background. nil when no person was detected or Vision
         /// declined to run segmentation.
         var personMask: CIImage?
+        /// Per-body nudity level — same order as `bodyRectangles`. Empty
+        /// when the NudeNet model isn't installed. Callers distinguish
+        /// "model absent" (empty) from "model says none" (.none entries).
+        var nudityLevels: [NudityLevel] = []
     }
 
     private let device: MTLDevice
@@ -72,9 +76,11 @@ actor FocusAnalyzer {
     private let laplacian: LaplacianVariance
     private let motionBlur: MotionBlurDetector
     private let sensitiveContent = SensitiveContentChecker()
+    private let nudityDetector = NudityDetector()
     private var depthEstimator: DepthEstimator?
     private let depthInstaller = ModelArchiveInstaller(.depthAnything)
     private let nsfwInstaller = ModelArchiveInstaller(.nsfw)
+    private let nudenetInstaller = ModelArchiveInstaller(.nudenet)
 
     private var source: CIImage?
 
@@ -179,6 +185,15 @@ actor FocusAnalyzer {
         try await nsfwInstaller.install(progress: progress)
     }
 
+    /// True when the NudeNet per-subject detector is installed + loaded.
+    var isNudeNetInstalled: Bool { ModelArchive.nudenet.isInstalled() }
+
+    /// Download + install NudeNet, same pattern as depth / NSFW. The wrapper
+    /// initializes lazily on first `detect` call, so no explicit reload.
+    func installNudeNetModel(progress: @Sendable @escaping (Double) -> Void) async throws {
+        try await nudenetInstaller.install(progress: progress)
+    }
+
     /// Run the analysis pipeline for the given mode. Returns display-ready overlay images
     /// already upscaled to the source's extent.
     func analyze(mode: AnalysisMode) async throws -> Overlays {
@@ -209,6 +224,13 @@ actor FocusAnalyzer {
         // pass so the source only gets decoded to a CGImage once and the
         // three requests share the handler's image pyramid.
         let vision = runVision(in: source)
+
+        // Per-subject nudity levels from NudeNet, keyed by `vision.bodies`
+        // index. Empty array when the NudeNet model isn't installed —
+        // downstream UI treats absent and .none distinctly.
+        let nudityLevels = nudityDetector.levels(
+            for: source, bodies: vision.bodies, ciContext: ciContext
+        )
 
         switch mode {
         case .sharpness:
@@ -246,7 +268,8 @@ actor FocusAnalyzer {
             groinRectangles: vision.groins,
             eyeBars: vision.eyes,
             chestRectangles: vision.chests,
-            personMask: vision.personMask
+            personMask: vision.personMask,
+            nudityLevels: nudityLevels
         )
     }
 

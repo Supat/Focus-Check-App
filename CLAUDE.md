@@ -115,6 +115,19 @@ Two backends stacked in `SensitiveContentChecker`:
 The availability enum surfaces both paths plus "neither" so the UI can
 show a targeted install prompt rather than silently hiding the feature.
 
+### Per-subject nudity rating (NudeNet)
+Third tier, additive to whichever primary classifier is active:
+`NudityDetector` runs a downloaded NudeNet Core ML model (YOLO-style
+object detector, Create ML-exported) over the whole image. Each
+detection's bounding box is attributed to one of the Vision body
+rectangles (≥ 50 % area overlap) and the bag of per-body labels maps
+to a four-level rating — `.none` / `.covered` / `.partial` / `.nude`.
+
+The renderer reads `nudityLevels` + `nudityGate` off the composite
+inputs and skips any body whose level falls below the gate, so clothed
+subjects in a mixed scene aren't mosaiced alongside the flagged ones.
+Gate is user-controllable once the model is installed.
+
 ### Vision-derived regions
 Run in one consolidated `VNImageRequestHandler.perform([...])` pass so the
 CGImage decode and internal pyramid are shared:
@@ -272,6 +285,7 @@ struct ModelArchive {
 
 - `ModelArchive.depthAnything` → `depth-model-v1` release tag
 - `ModelArchive.nsfw` → `nsfw-model-v1` release tag
+- `ModelArchive.nudenet` → `nudenet-model-v1` release tag (per-subject detector)
 
 Maintainer workflow (one-time, requires a Mac):
 
@@ -314,6 +328,10 @@ each, gated by the analyzer's availability flags.
   unsigned builds
 - **No demographic inference** (gender, age, ethnicity) — Vision doesn't
   expose these and we're not shipping a third-party classifier for them
+- **NudeNet detector format assumptions** — `NudityDetector` expects
+  Create ML's object-detector output (`coordinates` Nx4 + `confidence` NxC).
+  If a maintainer converts NudeNet with a different export shape (raw
+  YOLO tensors, concatenated format), extend `parseDetections(from:)`
 
 ---
 

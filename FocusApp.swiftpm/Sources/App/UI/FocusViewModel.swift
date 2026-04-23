@@ -174,6 +174,13 @@ final class FocusViewModel: ObservableObject {
     /// analyze; consumed by the .body mosaic mode to pixelate along the
     /// actual outline instead of a loose bounding box.
     @Published var personMask: CIImage?
+    /// Per-body nudity level from NudeNet, same index as `bodyRectangles`.
+    /// Empty when the NudeNet model isn't installed.
+    @Published var nudityLevels: [NudityLevel] = []
+    /// Minimum level that triggers the per-subject mosaic gating. Bodies
+    /// whose level is below this are skipped even when the global mosaic
+    /// condition is on. `.covered` leaves clothed subjects alone.
+    @Published var nudityGate: NudityLevel = .covered
     /// User-controlled mosaic toggle. Defaults on — protective default so
     /// sensitive content isn't displayed until the user explicitly opts in.
     @Published var mosaicEnabled: Bool = true
@@ -188,6 +195,8 @@ final class FocusViewModel: ObservableObject {
     /// Install state for the NSFW fallback model. Reuses DepthInstallState —
     /// the shape (notInstalled / downloading / installed / failed) is generic.
     @Published var nsfwInstall: DepthInstallState = .notInstalled
+    /// Install state for the NudeNet per-subject detector.
+    @Published var nudenetInstall: DepthInstallState = .notInstalled
     @Published var isAnalyzing: Bool = false
     @Published var errorMessage: String?
     @Published var depthAvailable: Bool = false
@@ -197,6 +206,7 @@ final class FocusViewModel: ObservableObject {
     private var currentTask: Task<Void, Never>?
     private var installTask: Task<Void, Never>?
     private var nsfwInstallTask: Task<Void, Never>?
+    private var nudenetInstallTask: Task<Void, Never>?
 
     init() {
         self.analyzer = FocusAnalyzer()
@@ -205,11 +215,13 @@ final class FocusViewModel: ObservableObject {
             let depth = await analyzer.isDepthAvailable
             let sensitive = await analyzer.sensitiveContentAvailability
             let nsfwInstalled = await analyzer.isNSFWModelInstalled
+            let nudenetInstalled = await analyzer.isNudeNetInstalled
             await MainActor.run { [weak self] in
                 self?.depthAvailable = depth
                 self?.depthInstall = depth ? .installed : .notInstalled
                 self?.sensitiveContentAvailability = sensitive
                 self?.nsfwInstall = nsfwInstalled ? .installed : .notInstalled
+                self?.nudenetInstall = nudenetInstalled ? .installed : .notInstalled
             }
         }
     }
@@ -252,6 +264,31 @@ final class FocusViewModel: ObservableObject {
                 }
             }
             await MainActor.run { [weak self] in self?.nsfwInstallTask = nil }
+        }
+    }
+
+    /// Download the NudeNet per-subject detector. Mirrors the NSFW / depth
+    /// download flow so the UI layer can reuse the same install-state row.
+    func downloadNudeNetModel() {
+        guard nudenetInstallTask == nil else { return }
+        nudenetInstall = .downloading(progress: 0)
+        let analyzer = self.analyzer
+        nudenetInstallTask = Task { [weak self] in
+            do {
+                try await analyzer.installNudeNetModel { [weak self] p in
+                    Task { @MainActor [weak self] in
+                        self?.nudenetInstall = .downloading(progress: p)
+                    }
+                }
+                await MainActor.run { [weak self] in
+                    self?.nudenetInstall = .installed
+                }
+            } catch {
+                await MainActor.run { [weak self] in
+                    self?.nudenetInstall = .failed(error.localizedDescription)
+                }
+            }
+            await MainActor.run { [weak self] in self?.nudenetInstallTask = nil }
         }
     }
 
@@ -323,6 +360,7 @@ final class FocusViewModel: ObservableObject {
                     self?.eyeBars = overlays.eyeBars
                     self?.chestRectangles = overlays.chestRectangles
                     self?.personMask = overlays.personMask
+                    self?.nudityLevels = overlays.nudityLevels
                     self?.isAnalyzing = false
                     print("[ViewModel] sourceImage set, isAnalyzing=false")
                 }
@@ -359,6 +397,7 @@ final class FocusViewModel: ObservableObject {
         eyeBars = []
         chestRectangles = []
         personMask = nil
+        nudityLevels = []
         exposureInfo = nil
         errorMessage = nil
         isAnalyzing = false
@@ -389,7 +428,9 @@ final class FocusViewModel: ObservableObject {
             groins: groinRectangles,
             eyes: eyeBars,
             chests: chestRectangles,
-            personMask: personMask
+            personMask: personMask,
+            nudityLevels: nudityLevels,
+            nudityGate: nudityGate
         )
 
         let baseName: String
@@ -435,6 +476,7 @@ final class FocusViewModel: ObservableObject {
                     self?.eyeBars = overlays.eyeBars
                     self?.chestRectangles = overlays.chestRectangles
                     self?.personMask = overlays.personMask
+                    self?.nudityLevels = overlays.nudityLevels
                     self?.isAnalyzing = false
                 }
             } catch is CancellationError {

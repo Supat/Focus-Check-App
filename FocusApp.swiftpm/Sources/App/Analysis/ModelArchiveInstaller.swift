@@ -29,6 +29,19 @@ struct ModelArchive: Sendable {
         )!
     )
 
+    /// NudeNet v3 detector — YOLO-style object detector with 18 labels for
+    /// exposed/covered body parts, enabling per-subject nudity scoring
+    /// instead of the whole-image SFW/NSFW binary the `.nsfw` archive
+    /// provides. Expected output: Create ML object-detector format
+    /// (`coordinates` Nx4 + `confidence` NxC). Maintainer converts the
+    /// upstream ONNX via coremltools + compiles with `xcrun coremlcompiler`.
+    static let nudenet = ModelArchive(
+        directoryName: "NudeNet.mlmodelc",
+        sourceURL: URL(string:
+            "https://github.com/Supat/Focus-Check-App/releases/download/nudenet-model-v1/NudeNet.mlmodelc.zip"
+        )!
+    )
+
     /// Persistent install path: `Application Support/<directoryName>`.
     /// Application Support is user-data, not purged on low-disk like Caches.
     func installedURL() throws -> URL {

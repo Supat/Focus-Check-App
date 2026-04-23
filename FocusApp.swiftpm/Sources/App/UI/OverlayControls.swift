@@ -78,7 +78,9 @@ struct OverlayControls: View {
 
             depthInstallRow
             mosaicToggleRow
+            nudityGateRow
             nsfwInstallRow
+            nudenetInstallRow
         }
         #if os(iOS)
         .onPencilSqueeze { phase in
@@ -231,6 +233,78 @@ struct OverlayControls: View {
                         .buttonStyle(.bordered)
                         .controlSize(.small)
                 }
+            }
+        }
+    }
+
+    /// Per-subject gate — choose the minimum NudeNet level that triggers
+    /// a mosaic. Only shown once the NudeNet model is installed; until
+    /// then the app behaves as before (every body is mosaiced when the
+    /// mosaic is on).
+    @ViewBuilder
+    private var nudityGateRow: some View {
+        if viewModel.nudenetInstall == .installed {
+            HStack(spacing: 8) {
+                Spacer()
+                Label("Per subject", systemImage: "person.crop.square.filled.and.at.rectangle")
+                    .font(.caption)
+                Picker("Per-subject gate", selection: $viewModel.nudityGate) {
+                    Text("All").tag(NudityLevel.none)
+                    Text("Covered+").tag(NudityLevel.covered)
+                    Text("Partial+").tag(NudityLevel.partial)
+                    Text("Nude").tag(NudityLevel.nude)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .controlSize(.small)
+                .frame(width: 320)
+            }
+        }
+    }
+
+    /// NudeNet per-subject detector install row — parallels `nsfwInstallRow`
+    /// but unconditional: per-subject rating is additive to whichever
+    /// primary classifier is active.
+    @ViewBuilder
+    private var nudenetInstallRow: some View {
+        switch viewModel.nudenetInstall {
+        case .installed:
+            EmptyView()
+
+        case .notInstalled:
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.down.circle")
+                    .foregroundStyle(.secondary)
+                Text("Per-subject detector (NudeNet) not installed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Download") { viewModel.downloadNudeNetModel() }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+            }
+
+        case .downloading(let progress):
+            HStack(spacing: 8) {
+                ProgressView(value: progress)
+                Text("\(Int(progress * 100))%")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44, alignment: .trailing)
+            }
+
+        case .failed(let message):
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+                Text(message)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                Spacer()
+                Button("Retry") { viewModel.downloadNudeNetModel() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
             }
         }
     }

@@ -24,6 +24,15 @@ struct FocusCompositeInputs {
     /// Person-silhouette mask stretched to source extent (white = person).
     /// When present, .body mosaic uses the outline instead of a rectangle.
     var personMask: CIImage?
+    /// Per-body NudeNet levels, aligned with `bodies`. Empty when the
+    /// detector isn't installed. When populated, mosaic modes that
+    /// render per body (Body / Chest / Groin / Face) can skip subjects
+    /// whose level falls below `nudityGate`.
+    var nudityLevels: [NudityLevel]
+    /// Minimum level that triggers mosaic. Ignored when `nudityLevels`
+    /// is empty (no detector) — in that case the original "every body"
+    /// behavior is preserved.
+    var nudityGate: NudityLevel
 }
 
 /// Composites the source image with a focus overlay each frame for live
@@ -139,7 +148,9 @@ final class FocusRenderer {
                 groins: viewModel.groinRectangles,
                 eyes: viewModel.eyeBars,
                 chests: viewModel.chestRectangles,
-                personMask: viewModel.personMask
+                personMask: viewModel.personMask,
+                nudityLevels: viewModel.nudityLevels,
+                nudityGate: viewModel.nudityGate
             )
             return RenderSnapshot(
                 inputs: inputs,
@@ -177,42 +188,72 @@ final class FocusRenderer {
     ) -> CIImage {
         // Mosaic is applied at source resolution before fit/zoom, so the fit
         // transform handles the rest without rect-coordinate gymnastics.
+        //
+        // When NudeNet has classified each body, per-subject modes skip
+        // bodies below the gate. With no NudeNet (`nudityLevels` empty),
+        // every body qualifies — preserving pre-NudeNet behavior.
+        let gatedBodies = filterBodies(bodies: inputs.bodies,
+                                       levels: inputs.nudityLevels,
+                                       gate: inputs.nudityGate)
+        let gatedFaces = filterByBodyLevel(regions: inputs.faces,
+                                           bodies: inputs.bodies,
+                                           levels: inputs.nudityLevels,
+                                           gate: inputs.nudityGate)
+        let gatedChests = filterByBodyLevel(regions: inputs.chests,
+                                            bodies: inputs.bodies,
+                                            levels: inputs.nudityLevels,
+                                            gate: inputs.nudityGate)
+        let gatedGroins = filterByBodyLevel(regions: inputs.groins,
+                                            bodies: inputs.bodies,
+                                            levels: inputs.nudityLevels,
+                                            gate: inputs.nudityGate)
+        let gatedEyes = filterEyesByBodyLevel(eyes: inputs.eyes,
+                                              bodies: inputs.bodies,
+                                              levels: inputs.nudityLevels,
+                                              gate: inputs.nudityGate)
+
         let baseSource: CIImage = {
             guard inputs.mosaic else { return inputs.source }
             switch inputs.mosaicMode {
             case .tabloid:
                 var result = inputs.source
-                if !inputs.eyes.isEmpty {
-                    result = blackBarOverlay(source: result, bars: inputs.eyes)
+                if !gatedEyes.isEmpty {
+                    result = blackBarOverlay(source: result, bars: gatedEyes)
                 }
-                if !inputs.groins.isEmpty {
-                    result = regionMosaic(source: result, regions: inputs.groins, capDivisor: 32)
+                if !gatedGroins.isEmpty {
+                    result = regionMosaic(source: result, regions: gatedGroins, capDivisor: 32)
                 }
                 return result
             case .eyes:
-                guard !inputs.eyes.isEmpty else { return inputs.source }
-                return blackBarOverlay(source: inputs.source, bars: inputs.eyes)
+                guard !gatedEyes.isEmpty else { return inputs.source }
+                return blackBarOverlay(source: inputs.source, bars: gatedEyes)
             case .face:
-                guard !inputs.faces.isEmpty else { return inputs.source }
-                return regionMosaic(source: inputs.source, regions: inputs.faces, capDivisor: 32)
+                guard !gatedFaces.isEmpty else { return inputs.source }
+                return regionMosaic(source: inputs.source, regions: gatedFaces, capDivisor: 32)
             case .chest:
-                guard !inputs.chests.isEmpty else { return inputs.source }
-                return regionMosaic(source: inputs.source, regions: inputs.chests, capDivisor: 48)
+                guard !gatedChests.isEmpty else { return inputs.source }
+                return regionMosaic(source: inputs.source, regions: gatedChests, capDivisor: 48)
             case .groin:
-                guard !inputs.groins.isEmpty else { return inputs.source }
-                return regionMosaic(source: inputs.source, regions: inputs.groins, capDivisor: 32)
+                guard !gatedGroins.isEmpty else { return inputs.source }
+                return regionMosaic(source: inputs.source, regions: gatedGroins, capDivisor: 32)
             case .body:
-                // Prefer the silhouette when Vision's segmentation request
-                // produced a mask — the outline hugs the subject so the
-                // pixelation stops at clothing edges instead of flooding the
-                // whole bounding box. Fall back to the loose rectangles when
-                // segmentation declined (low-light / occluded scenes) or to
-                // the face rect as a last resort.
-                if let mask = inputs.personMask {
+                // Skip the mosaic outright when NudeNet excluded every body —
+                // nothing in the image crossed the gate.
+                if gatedBodies.isEmpty && !inputs.nudityLevels.isEmpty {
+                    return inputs.source
+                }
+                // Full-silhouette path only when no per-subject filtering
+                // happened — otherwise fall through to body-rects so clothed
+                // subjects aren't included in the silhouette blend.
+                if let mask = inputs.personMask,
+                   gatedBodies.count == inputs.bodies.count {
                     return silhouetteMosaic(source: inputs.source, mask: mask)
                 }
-                if !inputs.bodies.isEmpty {
-                    return regionMosaic(source: inputs.source, regions: inputs.bodies, capDivisor: 64)
+                if !gatedBodies.isEmpty {
+                    return regionMosaic(source: inputs.source, regions: gatedBodies, capDivisor: 64)
+                }
+                if let mask = inputs.personMask {
+                    return silhouetteMosaic(source: inputs.source, mask: mask)
                 }
                 if !inputs.faces.isEmpty {
                     return regionMosaic(source: inputs.source, regions: inputs.faces, capDivisor: 32)
@@ -542,6 +583,51 @@ final class FocusRenderer {
             }
         }
         return (stops.last!.1, stops.last!.2, stops.last!.3)
+    }
+
+    // MARK: - NudeNet gating
+
+    /// Returns bodies whose NudeNet level meets or exceeds `gate`. When
+    /// `levels` is empty (no NudeNet model installed), every body passes —
+    /// preserving behaviour from before the per-subject classifier existed.
+    private static func filterBodies(bodies: [CGRect],
+                                     levels: [NudityLevel],
+                                     gate: NudityLevel) -> [CGRect] {
+        guard !levels.isEmpty else { return bodies }
+        return zip(bodies, levels)
+            .compactMap { $1 >= gate ? $0 : nil }
+    }
+
+    /// Assign each region (face / chest / groin) to whichever body
+    /// contains its center; keep the region only when that body's level
+    /// qualifies. Regions with no containing body are kept as a safety
+    /// default — better to mosaic them than risk missing something the
+    /// detector simply failed to attribute.
+    private static func filterByBodyLevel(regions: [CGRect],
+                                          bodies: [CGRect],
+                                          levels: [NudityLevel],
+                                          gate: NudityLevel) -> [CGRect] {
+        guard !levels.isEmpty, !bodies.isEmpty else { return regions }
+        return regions.filter { region in
+            let center = CGPoint(x: region.midX, y: region.midY)
+            guard let idx = bodies.firstIndex(where: { $0.contains(center) }),
+                  idx < levels.count
+            else { return true }
+            return levels[idx] >= gate
+        }
+    }
+
+    private static func filterEyesByBodyLevel(eyes: [EyeBar],
+                                              bodies: [CGRect],
+                                              levels: [NudityLevel],
+                                              gate: NudityLevel) -> [EyeBar] {
+        guard !levels.isEmpty, !bodies.isEmpty else { return eyes }
+        return eyes.filter { bar in
+            guard let idx = bodies.firstIndex(where: { $0.contains(bar.center) }),
+                  idx < levels.count
+            else { return true }
+            return levels[idx] >= gate
+        }
     }
 
     // MARK: - Mosaic primitives

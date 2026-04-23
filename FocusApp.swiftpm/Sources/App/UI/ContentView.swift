@@ -189,10 +189,19 @@ struct ContentView: View {
            viewModel.sourceImage != nil,
            !viewModel.overlayHidden {
             let isHighConfidence = (viewModel.sensitiveConfidence ?? 0) > 0.6
+            let flaggedSubjects = viewModel.nudityLevels
+                .filter { $0 >= viewModel.nudityGate }.count
             HStack(spacing: 6) {
                 Image(systemName: "exclamationmark.shield.fill")
                 Text(viewModel.sensitiveLabel ?? "Sensitive")
                     .font(.caption)
+                if !viewModel.nudityLevels.isEmpty {
+                    // NudeNet ran — show how many subjects crossed the
+                    // current per-subject gate out of how many were detected.
+                    Text("\(flaggedSubjects)/\(viewModel.nudityLevels.count)")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.white.opacity(0.85))
+                }
             }
             .foregroundStyle(isHighConfidence ? Color.red : Color.orange)
             .padding(.horizontal, 12)
