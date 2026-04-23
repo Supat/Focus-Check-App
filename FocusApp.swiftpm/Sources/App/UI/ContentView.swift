@@ -272,7 +272,10 @@ struct ContentView: View {
                 let level = viewModel.nudityLevels[index]
                 if level >= .covered {
                     let rect = viewRect(for: body, source: extent, in: size)
-                    SubjectHeadBadge(level: level)
+                    let gender = index < viewModel.nudityGenders.count
+                        ? viewModel.nudityGenders[index]
+                        : .unknown
+                    SubjectHeadBadge(level: level, gender: gender)
                         .position(x: rect.midX, y: max(rect.minY - 18, 20))
                         .allowsHitTesting(false)
                 }
@@ -419,20 +422,31 @@ private struct ShareSheet: UIViewControllerRepresentable {
                                 context: Context) {}
 }
 
-/// Small round warning glyph rendered above each flagged subject's
-/// head. Colour is driven by the subject's aggregated NudeNet level —
-/// yellow / orange / red for covered / partial / nude — matching the
-/// per-subject counter badge so the legend stays consistent.
+/// Floating glyph pair rendered above each flagged subject's head:
+/// a gender-inferred figure symbol (when NudeNet's FACE_* branch fired
+/// on this body) next to the level-coloured warning shield. Colour is
+/// driven by the aggregated NudeNet level — yellow / orange / red for
+/// covered / partial / nude — matching the per-subject counter badge
+/// legend. Gender symbol is omitted when unknown, so the badge stays
+/// compact for unidentified subjects.
 private struct SubjectHeadBadge: View {
     let level: NudityLevel
+    let gender: SubjectGender
 
     var body: some View {
-        Image(systemName: "exclamationmark.shield.fill")
-            .font(.title3)
-            .foregroundStyle(tint)
-            .padding(6)
-            .background(Color.black.opacity(0.45), in: Circle())
-            .overlay(Circle().strokeBorder(tint.opacity(0.8), lineWidth: 1))
+        HStack(spacing: 4) {
+            if let symbol = gender.symbol {
+                Image(systemName: symbol)
+                    .font(.footnote.weight(.semibold))
+            }
+            Image(systemName: "exclamationmark.shield.fill")
+                .font(.title3)
+        }
+        .foregroundStyle(tint)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color.black.opacity(0.45), in: Capsule())
+        .overlay(Capsule().strokeBorder(tint.opacity(0.8), lineWidth: 1))
     }
 
     private var tint: Color {

@@ -68,6 +68,9 @@ actor FocusAnalyzer {
         /// when the NudeNet model isn't installed. Callers distinguish
         /// "model absent" (empty) from "model says none" (.none entries).
         var nudityLevels: [NudityLevel] = []
+        /// Per-body inferred gender from NudeNet's FACE_* branch, same
+        /// order / same empty-vs-`.unknown` semantics as `nudityLevels`.
+        var nudityGenders: [SubjectGender] = []
         /// Raw per-part detections in source-extent coords. Used only by
         /// the debug label overlay; compositing paths use the aggregated
         /// `nudityLevels` instead.
@@ -254,6 +257,7 @@ actor FocusAnalyzer {
             image: source, bodies: vision.bodies, ciContext: ciContext
         )
         let nudityLevels = nudity.levels
+        let nudityGenders = nudity.genders
         let nudityDetections = nudity.detections
 
         switch mode {
@@ -294,6 +298,7 @@ actor FocusAnalyzer {
             chestRectangles: vision.chests,
             personMask: vision.personMask,
             nudityLevels: nudityLevels,
+            nudityGenders: nudityGenders,
             nudityDetections: nudityDetections
         )
     }

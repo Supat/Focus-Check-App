@@ -177,6 +177,10 @@ final class FocusViewModel: ObservableObject {
     /// Per-body nudity level from NudeNet, same index as `bodyRectangles`.
     /// Empty when the NudeNet model isn't installed.
     @Published var nudityLevels: [NudityLevel] = []
+    /// Per-body inferred gender from NudeNet's FACE_* branch, same
+    /// index as `bodyRectangles`. `.unknown` when no face detection
+    /// attributed to that body.
+    @Published var nudityGenders: [SubjectGender] = []
     /// Raw NudeNet per-part detections. Only consumed by the optional
     /// label overlay; mosaic pipeline uses `nudityLevels` instead.
     @Published var nudityDetections: [NudityDetection] = []
@@ -372,6 +376,7 @@ final class FocusViewModel: ObservableObject {
                     self?.chestRectangles = overlays.chestRectangles
                     self?.personMask = overlays.personMask
                     self?.nudityLevels = overlays.nudityLevels
+                    self?.nudityGenders = overlays.nudityGenders
                     self?.nudityDetections = overlays.nudityDetections
                     self?.isAnalyzing = false
                     print("[ViewModel] sourceImage set, isAnalyzing=false")
@@ -410,6 +415,7 @@ final class FocusViewModel: ObservableObject {
         chestRectangles = []
         personMask = nil
         nudityLevels = []
+        nudityGenders = []
         nudityDetections = []
         exposureInfo = nil
         errorMessage = nil
@@ -491,6 +497,7 @@ final class FocusViewModel: ObservableObject {
                     self?.chestRectangles = overlays.chestRectangles
                     self?.personMask = overlays.personMask
                     self?.nudityLevels = overlays.nudityLevels
+                    self?.nudityGenders = overlays.nudityGenders
                     self?.nudityDetections = overlays.nudityDetections
                     self?.isAnalyzing = false
                 }

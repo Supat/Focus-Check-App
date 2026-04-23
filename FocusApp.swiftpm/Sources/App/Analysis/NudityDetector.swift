@@ -42,12 +42,34 @@ struct NudityDetection: Hashable, Sendable {
     let confidence: Float
 }
 
+/// Inferred subject gender from NudeNet's `FACE_MALE` / `FACE_FEMALE`
+/// detections attributed to a body. This is a classifier label, not
+/// ground truth — it reads exactly as well as NudeNet's face branch
+/// does. `.unknown` when no face detection landed on the body.
+enum SubjectGender: Sendable, Equatable {
+    case unknown
+    case male
+    case female
+
+    /// SF Symbol glyph for the overhead badge. Returns nil for
+    /// `.unknown` so the badge stays compact when NudeNet didn't
+    /// commit to either label.
+    var symbol: String? {
+        switch self {
+        case .unknown: return nil
+        case .male:    return "figure.stand"
+        case .female:  return "figure.stand.dress"
+        }
+    }
+}
+
 /// Combined result of one detection pass: per-subject levels (same
-/// order as the bodies argument) plus the raw per-part detections in
-/// source-extent coordinates. Keeping both in one return value lets
-/// callers skip a second detection run just to get the rectangles.
+/// order as the bodies argument), inferred gender per body, plus the
+/// raw per-part detections in source-extent coordinates. Keeping all
+/// three in one return value lets callers skip repeat detection runs.
 struct NudityAnalysis: Sendable {
     let levels: [NudityLevel]
+    let genders: [SubjectGender]
     let detections: [NudityDetection]
 }
 
@@ -75,15 +97,16 @@ struct NudityDetector {
                  bodies: [CGRect],
                  ciContext: CIContext) -> NudityAnalysis {
         guard let classifier else {
-            return NudityAnalysis(levels: [], detections: [])
+            return NudityAnalysis(levels: [], genders: [], detections: [])
         }
         guard !bodies.isEmpty else {
-            return NudityAnalysis(levels: [], detections: [])
+            return NudityAnalysis(levels: [], genders: [], detections: [])
         }
         let detections = classifier.detect(in: image, ciContext: ciContext)
         guard !detections.isEmpty else {
             return NudityAnalysis(
                 levels: Array(repeating: .none, count: bodies.count),
+                genders: Array(repeating: .unknown, count: bodies.count),
                 detections: []
             )
         }
@@ -114,8 +137,29 @@ struct NudityDetector {
         }
         return NudityAnalysis(
             levels: bags.map(aggregate),
+            genders: bags.map(inferGender),
             detections: detections
         )
+    }
+
+    /// Pick the gender implied by the FACE_MALE / FACE_FEMALE detections
+    /// in a body's bag. Highest-confidence face wins when NudeNet fires
+    /// both labels on the same subject (rare but possible when the face
+    /// is partially obscured). Returns `.unknown` when no face-branch
+    /// detection was attributed to this body.
+    private func inferGender(from detections: [NudityDetection]) -> SubjectGender {
+        var best: (gender: SubjectGender, confidence: Float) = (.unknown, 0)
+        for det in detections {
+            let upper = det.label.uppercased()
+            let gender: SubjectGender?
+            if upper == "FACE_MALE"        { gender = .male }
+            else if upper == "FACE_FEMALE" { gender = .female }
+            else                           { gender = nil }
+            if let g = gender, det.confidence > best.confidence {
+                best = (g, det.confidence)
+            }
+        }
+        return best.gender
     }
 
     /// Map a bag of detections attributed to one subject into a level.
