@@ -1,186 +1,329 @@
-# Focus Detection App — CLAUDE.md
+# Focus Check — CLAUDE.md
 
 ## Project Overview
 
-A Swift Playgrounds app (`.swiftpm`) that takes an image as input, detects in-focus vs out-of-focus regions using classical sharpness analysis and optional ML-based depth estimation, then renders a focus-highlight overlay for the user.
+A Swift Playgrounds app (`.swiftpm`) that imports a photo and renders
+focus-analysis overlays on top of it. Beyond the original sharpness-peaking
+idea, the app has grown into a general image-inspection tool: classical
+sharpness + ML depth + motion-blur detection, on-device sensitive-content
+classification, silhouette-aware mosaic redaction, EXIF badges, 2× zoom,
+press-and-hold compare, and PNG export via the share sheet.
 
-Target platforms: **iPadOS 18.1+ and macOS 14+** (single codebase, ~80% shared).
-Distribution: App Store / TestFlight (not Swift Student Challenge — model exceeds 25 MB cap).
+Target platforms: **iPadOS 18.1+** and **macOS 14+** (single codebase, UIKit
+everywhere — the product type is `.iOSApplication`, so Mac runs via
+*Designed for iPad*).
+
+Distribution paths (sibling projects):
+- `FocusApp.swiftpm/` — Swift Playgrounds on iPad / Mac. Unsigned, local.
+- `Xcode/` — XcodeGen manifest → `.xcodeproj`. Same sources; signed builds
+  for TestFlight / App Store + the `SensitiveContentAnalysis` capability.
 
 ---
 
 ## Architecture
 
-### Package Format
+### Package format
 - Swift Package Manager project (`.swiftpm`)
-- Product type: `iOSApplication` (also runs on Mac via Catalyst)
-- Swift language mode: 5.9 (Playgrounds default); upgrade to Swift 6 with care around Sendable actors
-- Round-trips cleanly with Xcode 16+ for debugging and profiling
+- Product type: `.iOSApplication` (UIKit view system, iPad + Mac)
+- Swift language mode: 5.9 (Playgrounds default)
+- Round-trips with Xcode 16+ via the sibling XcodeGen project for
+  debugging, Metal Frame Capture, and Instruments
 
-### Layer Structure
+### Dependency
+- [`ZIPFoundation`](https://github.com/weichsel/ZIPFoundation) —
+  pure-Swift unzip, used by `ModelArchiveInstaller` to unpack Core ML
+  model archives downloaded at runtime.
+
+### Capabilities (declared in `Package.swift`)
+- `.photoLibrary` — select originals from Photos via `PHPickerViewController`
+- `.fileAccess(.userSelectedFiles, .readOnly)` — `.fileImporter` path
+- `.outgoingNetworkConnections` — required on macOS sandbox for the
+  runtime model downloads
+
+### Layer structure
 
 ```
 FocusApp.swiftpm/
 ├── Package.swift
-└── Sources/
-    └── App/
-        ├── App entry (@main, WindowGroup)
-        ├── UI/
-        │   ├── ContentView.swift          # root SwiftUI layout
-        │   ├── MetalView.swift            # UIViewRepresentable wrapping MTKView
-        │   ├── OverlayControls.swift      # threshold slider, color well, style toggle
-        │   └── ImageImporter.swift        # PhotosPicker + fileImporter glue
-        ├── Analysis/
-        │   ├── FocusAnalyzer.swift        # actor — owns MTLDevice, CIContext, MPS kernels
-        │   ├── LaplacianVariance.swift    # MPS sharpness pipeline
-        │   └── DepthEstimator.swift       # Core ML Depth Anything v2 wrapper
-        ├── Rendering/
-        │   └── FocusRenderer.swift        # overlay compositing via Core Image + MTKView
-        └── Resources/
-            └── DepthAnythingV2SmallF16.mlmodelc/   # pre-compiled model (see setup)
+└── Sources/App/
+    ├── FocusApp.swift                     # @main / WindowGroup
+    ├── UI/
+    │   ├── ContentView.swift              # NavigationStack, toolbar, badges
+    │   ├── MetalView.swift                # UIViewRepresentable around MTKView
+    │   ├── FocusViewModel.swift           # @MainActor ObservableObject
+    │   ├── OverlayControls.swift          # style picker, slider, mosaic row
+    │   ├── ImageImporter.swift            # PHPicker + fileImporter menu
+    │   └── ExposureInfo.swift             # EXIF reader + formatters
+    ├── Analysis/
+    │   ├── FocusAnalyzer.swift            # actor — the GPU/ML workhorse
+    │   ├── LaplacianVariance.swift        # MPS sharpness pipeline + AnalysisError
+    │   ├── DepthEstimator.swift           # Depth Anything v2 wrapper
+    │   ├── MotionBlurDetector.swift       # vDSP 2D FFT (global + tiled)
+    │   ├── SensitiveContentChecker.swift  # SCA primary + NSFW fallback
+    │   ├── ModelArchiveInstaller.swift    # shared downloader actor
+    │   └── CIImage+Stretch.swift          # translate-to-origin + stretch helpers
+    └── Rendering/
+        └── FocusRenderer.swift            # Core Image compositor + MTKView driver
 ```
 
 ---
 
-## Core Technical Stack
+## Core technical stack
 
-### Sharpness Detection (classical path)
-- **Pipeline**: `MPSImageGaussianBlur` (σ≈1) → `MPSImageLaplacian` → `MPSImageStatisticsMeanAndVariance`
-- Compute at **1024 px long-side** (analysis resolution); upscale mask with `CILanczosScaleTransform`
-- Cache sharpness map as `MTLTexture` (R16F); re-run only on new image load, not on slider scrub
-- Target: **2–5 ms per frame** on Apple Silicon iPad/Mac
+### Sharpness detection (classical path)
+- Pipeline: `MPSImageGaussianBlur` (σ ≈ 1) → `MPSImageLaplacian` →
+  `MPSImageMedian` (3×3, drops shadow-noise false positives)
+- Compute at **1024 px long-side** analysis resolution (`LaplacianVariance.analysisLongSide`);
+  upscale to source extent with `CILanczosScaleTransform`
+- Output: single-channel `r16Float` `MTLTexture`, cached across slider scrub
 
-### Depth Estimation (ML path, optional)
-- **Model**: `apple/coreml-depth-anything-v2-small` F16 variant (49.8 MB, ~30 ms on ANE)
-- Load via `MLModel(contentsOf: Bundle.module.url(forResource:withExtension:)!)`
-- Run with `MLComputeUnits.all` (targets Neural Engine)
-- Output: relative monocular depth map → use as focal-plane prior
-- **Hybrid mode**: Laplacian mask AND depth mask intersection (best quality)
+### Depth estimation (ML path, optional)
+- Model: `apple/coreml-depth-anything-v2-small` (F16, ~50 MB, ANE-friendly)
+- **Runtime download**, not bundled. `ModelArchiveInstaller(.depthAnything)`
+  fetches a zipped `.mlmodelc` from a GitHub release and installs it into
+  `Application Support/`. The 50 MB directory-format artifact can't sit in
+  the git repo and can't be compiled on iPad.
+- Loaded via generic `MLModel` + `MLDictionaryFeatureProvider` (no
+  auto-generated Swift class — SPM can't process `.mlpackage`)
+- Input size is **queried from the model's image constraint** at load
+  time (pick the largest enumerated size); don't hardcode 518×518
+- Stretched (non-uniform) to model input — preserves source↔map
+  spatial correspondence for the post-inference upscale
 
-### Overlay Rendering
-- `MTKView` embedded via `UIViewRepresentable` (iOS) / `NSViewRepresentable` (macOS)
-- `MTKView.framebufferOnly = false`, `autoResizeDrawable = true`
-- `CIContext(mtlDevice:)` for all compositing — never rasterize to `CGImage` mid-pipeline
-- Colorspace: **extended linear Display P3** (`extendedLinearDisplayP3`) throughout
-- Pixel format: `rgba16Float` on the backing `CAMetalLayer`; `wantsExtendedDynamicRangeContent = true` for EDR
+### Motion-blur detection
+- Frequency-domain: 2D Accelerate FFT; motion PSF produces a directional
+  dark band in the spectrum, defocus produces rings
+- **Global reading** for the info badge: center-cropped 256² patch,
+  ~10 ms on A14
+- **Tiled confidence map** for the `.motion` overlay: 512² analysis
+  image, 128² patches, 64-stride → 7×7 grid, ~100 ms total
+- Badge floor: `confidence > 0.4` (`MotionBlurReport.isSignificant`) —
+  keeps fences / waves / stripes from consistently triggering it; the
+  overlay shows sub-threshold readings too so the user can inspect them
 
-### Overlay Styles
-1. **Focus peaking** — colored edges at high-gradient pixels (default; matches FastRawViewer)
-2. **Heatmap** — viridis LUT via `CIColorCube` (never jet — perceptually non-uniform)
-3. **Binary mask** — threshold + tint at 50% opacity
-4. **Split view** — `DragGesture` divider, original vs overlay
+### Sensitive-content classification
+Two backends stacked in `SensitiveContentChecker`:
+
+1. **Primary: Apple's `SensitiveContentAnalysis` framework** — requires
+   the SCA capability + user-enabled Communication Safety (iOS) or
+   per-app Sensitive Content Warning (macOS). In Playgrounds /
+   unsigned builds this reliably returns `.disabled`.
+2. **Fallback: runtime-downloaded Core ML model** — lovoo/NSFWDetector
+   CreateML-trained binary SFW/NSFW classifier, installed via
+   `ModelArchiveInstaller(.nsfw)`.
+
+The availability enum surfaces both paths plus "neither" so the UI can
+show a targeted install prompt rather than silently hiding the feature.
+
+### Vision-derived regions
+Run in one consolidated `VNImageRequestHandler.perform([...])` pass so the
+CGImage decode and internal pyramid are shared:
+
+- `VNDetectFaceLandmarksRequest` — face rects + eye-bar geometry
+- `VNDetectHumanRectanglesRequest` — body bounding boxes
+- `VNDetectHumanBodyPoseRequest` — 2D joints (derive groin + chest rects)
+- `VNDetectHumanBodyPose3DRequest` — 3D hips for sideways-pose widening
+- `VNGeneratePersonSegmentationRequest` (`.balanced`) — silhouette mask
+  for the `.body` mosaic mode
+
+### Overlay rendering
+- `MTKView` via `UIViewRepresentable` (UIKit-only — product type is
+  `.iOSApplication`; no `NSViewRepresentable` branch exists or is correct)
+- `framebufferOnly = false`, `autoResizeDrawable = true`, paused off
+- `CIContext(mtlDevice:)` shared across analyzer + renderer; never
+  rasterize to `CGImage` mid-pipeline except at export and Vision decode
+- Working color space: **extended linear Display P3**,
+  working format: `RGBAh`, `cacheIntermediates = false`
+- Drawable: `rgba16Float` on the `CAMetalLayer`,
+  `wantsExtendedDynamicRangeContent = true` for EDR
+
+### Overlay styles (`OverlayStyle`)
+| Style | What it shows |
+|---|---|
+| `None` | Original image — disables the threshold slider + analysis mode |
+| `Peaking` | Colored edges gated by the focus mask (FastRawViewer-style) |
+| `Mask` | Flat 50%-opacity tint over in-focus pixels |
+| `Heatmap` | Viridis LUT via `CIColorCube` (never jet) |
+| `Error` | Red = too close / blue = too far, relative to focal plane; requires Hybrid mode |
+| `Motion` | Tint where the per-patch motion-blur confidence exceeds the threshold |
+
+### Mosaic modes (`MosaicMode`)
+| Mode | Coverage |
+|---|---|
+| `Tabloid` | Eyes (black bar) + Groin (pixelate) |
+| `Eyes` | Rotated black bar following head tilt |
+| `Face` | Pixelate face landmark rect |
+| `Chest` | Pixelate upper torso rect from pose joints |
+| `Groin` | Pixelate pelvis rect; widens up to 3× for sideways bodies |
+| `Body` | Pixelate along the person silhouette, snapped to the pixelation grid so the edge reads block-jagged |
+| `Whole` | Pixelate the entire image |
+
+Triggers: classifier flagged **and** the Mosaic toggle is on, **or**
+`Force Censor` is on (bypasses the classifier). Both paths are honored
+by the live renderer and the PNG export.
 
 ---
 
-## Key Implementation Rules
+## Key implementation rules
 
 ### Threading
-- `FocusAnalyzer` is a Swift `actor` — all MPS/CIContext/MLModel calls stay on this actor
-- `Task.detached(priority: .userInitiated)` for image analysis; cancel prior task on new load
-- Slider scrub must NOT re-run analysis — update only a `@Published var threshold: Float`
-- Stage Manager live-resize: reallocate `MTLTexture` only when drawable size changes by >1 px
+- `FocusAnalyzer` is an actor; MPS kernels, `CIContext`, `MLModel`
+  calls all stay on it
+- Analysis runs on `Task.detached(priority: .userInitiated)`; cancel
+  the prior task on each new image load / mode change
+- Slider scrub must **not** re-analyze — the renderer reads
+  `@Published var threshold: Float` directly each frame
+- Live MTKView resize (Stage Manager): only notify the renderer when
+  drawable size delta > 1 px
 
 ### Memory
-- Keep everything as `CIImage` (lazy recipe graph) — never `CGImage` intermediates
-- 50 MP RAW decoded to fp16 = ~400 MB; declare `com.apple.developer.kernel.increased-memory-limit` entitlement
-- On 4 GB iPads (A14 iPad 10th-gen): tile images through Core Image ROI
-- `CIContext.cacheIntermediates = false` for large images
+- Treat everything as `CIImage` (lazy recipe graph); never materialize
+  `CGImage` mid-pipeline
+- 50 MP RAW → fp16 ≈ 400 MB; needs the
+  `com.apple.developer.kernel.increased-memory-limit` entitlement on
+  8 GB iPads (signed Xcode builds only — Playgrounds can't declare it)
 
-### Core ML in SwiftPM (critical gotcha)
-- SPM **cannot** compile `.mlpackage` — must pre-compile externally (see Setup)
-- Resource rule in `Package.swift` **must be `.copy()`**, never `.process()`:
-  ```swift
-  .copy("DepthAnythingV2SmallF16.mlmodelc")
-  ```
-- No auto-generated Swift class — use generic `MLModel` + `MLDictionaryFeatureProvider`
+### Core ML in SwiftPM
+- SwiftPM **cannot compile** `.mlpackage` / `.mlmodel` — artifacts must
+  already be `.mlmodelc` when the app sees them. We solve this by
+  downloading zipped `.mlmodelc` directories at runtime; nothing Core-ML
+  needs to live in the repo.
+- No auto-generated Swift class — load with `MLModel(contentsOf:)`,
+  feed `MLDictionaryFeatureProvider`, iterate `featureNames` at output
 
-### Metal Shaders
-- **No custom `.metal` files** in Playgrounds — SwiftPM doesn't compile them
-- Use MPS kernels exclusively for sharpness (no shader authoring needed)
-- If a custom CIKernel is ever needed: pre-compile a `.metallib` in Xcode and ship as `.copy()` resource, or use string-based `makeLibrary(source:)` at runtime
+### Metal shaders
+- No custom `.metal` files — SwiftPM doesn't compile them. Rely on
+  MPS kernels + Core Image built-in filters throughout.
 
-### Color Management
-- Decode RAW with `CIRAWFilter(imageURL:)` — never bypass for manual decode
-- Set `CIContext.workingColorSpace = CGColorSpace(name: CGColorSpace.extendedLinearDisplayP3)!`
-- Set `CIContext.workingFormat = CIFormat.RGBAh`
-- Apply 3×3 median filter to sharpness map before thresholding (eliminates shadow noise / false positives)
+### Color management
+- RAW via `CIRAWFilter(imageURL:)` — don't bypass it
+- `CIImage(contentsOf:)` with `.applyOrientationProperty: true` so EXIF
+  orientation is normalized before any transform runs
+- Working color space `extendedLinearDisplayP3`, working format `RGBAh`
+- PNG export: render in linear P3, then `createCGImage` to `sRGB` for the
+  file — downstream viewers overwhelmingly expect sRGB PNGs
 
 ---
 
-## Platform Differences
+## Platform notes
 
-| Concern | iPadOS | macOS |
+| Concern | iPad (`.iOSApplication`) | Mac (Designed for iPad) |
 |---|---|---|
-| MTKView bridge | `UIViewRepresentable` | `NSViewRepresentable` |
-| EDR headroom query | `UIScreen.currentEDRHeadroom` | `NSScreen.maximumExtendedDynamicRangeColorComponentValue` |
-| File import | `PHPickerViewController` / `.fileImporter` | `.fileImporter` / `NSOpenPanel` (via SwiftUI) |
-| LiDAR depth (iPad Pro) | Available via `ARKit` — use as depth prior when present | Not available |
-| Apple Pencil Pro | `.onPencilSqueeze` for threshold toggle | Not applicable |
-| Thermal throttling | Throttles after ~15 min sustained GPU load | Active cooling (MacBook Pro), similar on MacBook Air |
-
-Use `#if os(iOS)` / `#if canImport(AppKit)` for platform-specific branches. Wrap both bridging types behind a `PlatformViewRepresentable` typealias.
+| View bridge | `UIViewRepresentable` | Same (UIKit via Catalyst-style) |
+| File import | PHPicker + `.fileImporter` | `.fileImporter` (PHPicker also works) |
+| SCA primary backend | Enabled via Screen Time → Comm Safety | Enabled via Settings → Sensitive Content Warning (per-app; requires capability + signing) |
+| Pencil Pro | `.onPencilSqueeze` cycles Peaking ↔ Heatmap | N/A |
+| Network egress | Default-allow | Needs `.outgoingNetworkConnections()` capability + `com.apple.security.network.client` in entitlements |
 
 ---
 
-## File Input
+## File input
 
-**Primary (photo library):** SwiftUI `PhotosPicker` with `Transferable` or `PHPickerViewController`.
-- Set `preferredAssetRepresentationMode = .current` for ProRAW
-- Load via `loadFileRepresentation(forTypeIdentifier:)` — not `loadObject(ofClass: UIImage.self)` (that decodes to rendered JPEG)
-- If UTI lookup fails, inspect `registeredTypeIdentifiers` and fall back through: `public.camera-raw-image` → `com.adobe.raw-image` → vendor UTIs
+**Primary (Photos):** `PHPickerViewController` wrapped via
+`UIViewControllerRepresentable` in `ImageImporter.swift`. Runs
+out-of-process — no Photos permission dialog. `suggestedName` carries
+the original camera filename, which SwiftUI's `PhotosPicker` doesn't
+surface. `preferredAssetRepresentationMode = .current` preserves
+ProRAW / RAW / HEIC originals.
 
-**Secondary (Files / external):** SwiftUI `.fileImporter(allowedContentTypes: [.image, .rawImage])`. Security-scoped URLs — always call `startAccessingSecurityScopedResource()` before reading.
+**UTI fallback order** (empty / unexpected UTIs): `public.camera-raw-image`
+→ `com.adobe.raw-image` → `public.heic` → `public.image`.
 
-**Drag and drop:** `.dropDestination(for: URL.self)` (iOS 16+, `Transferable`-based). Accept `URL` to avoid copying large files into memory.
+**Secondary (Files / disk):** `.fileImporter(allowedContentTypes: [.image, .rawImage])`.
+Security-scoped URLs — call `startAccessingSecurityScopedResource()`
+but read via `Data(contentsOf:)` regardless (`copyItem` is flakier
+inside the macOS sandbox).
+
+**Drag and drop:** `.dropDestination(for: URL.self)` on the empty-state
+placeholder view.
 
 ---
 
-## Setup (one-time, requires Mac)
+## Export
 
-### 1. Pre-compile Depth Anything v2 model
-```bash
-# Download from https://huggingface.co/apple/coreml-depth-anything-v2-small
-xcrun coremlcompiler compile DepthAnythingV2SmallF16.mlpackage /tmp/
-cp -r /tmp/DepthAnythingV2SmallF16.mlmodelc \
-  FocusApp.swiftpm/Sources/App/Resources/
-```
+`FocusViewModel.exportPNG()` snapshots the current state into a
+`FocusCompositeInputs`, feeds it through the same `FocusRenderer.composite`
+used by the live MTKView (at source resolution, zoom = 1), encodes sRGB
+PNG via `CGImageDestination`, and writes to `FileManager.temporaryDirectory`.
+`ContentView` presents the URL through a `UIActivityViewController`
+(`ShareSheet`) so the user can save to Files, Photos, or any registered
+share target.
 
-### 2. Register in Package.swift
+Force Censor participates in the export: the mosaic condition is
+`forceCensor || ((isSensitive == true) && mosaicEnabled)` in both the
+live renderer and the export path, so the exported image always matches
+what's on screen.
+
+---
+
+## Runtime model installs
+
+Both installs use the same code path — `ModelArchiveInstaller` +
+`ModelArchive` descriptor:
+
 ```swift
-targets: [
-    .executableTarget(
-        name: "App",
-        path: "Sources/App",
-        resources: [
-            .copy("Resources/DepthAnythingV2SmallF16.mlmodelc")
-        ]
-    )
-]
+struct ModelArchive {
+    let directoryName: String   // e.g. "DepthAnythingV2SmallF16.mlmodelc"
+    let sourceURL: URL          // GitHub release asset (.zip)
+    func installedURL() throws -> URL
+    func isInstalled() -> Bool
+}
 ```
 
-### 3. Entitlements (via Playgrounds Capabilities UI)
-- Photos Library (read access)
-- Camera (if live capture added later)
-- `com.apple.developer.kernel.increased-memory-limit` (required for 50 MP+ RAW on 8 GB iPads)
+- `ModelArchive.depthAnything` → `depth-model-v1` release tag
+- `ModelArchive.nsfw` → `nsfw-model-v1` release tag
+
+Maintainer workflow (one-time, requires a Mac):
+
+```bash
+# Depth Anything v2 Small F16
+xcrun coremlcompiler compile DepthAnythingV2SmallF16.mlpackage /tmp/
+ditto -c -k --sequesterRsrc --keepParent \
+      /tmp/DepthAnythingV2SmallF16.mlmodelc \
+      DepthAnythingV2SmallF16.mlmodelc.zip
+gh release upload depth-model-v1 DepthAnythingV2SmallF16.mlmodelc.zip
+
+# NSFW fallback (lovoo)
+curl -L -o NSFW.mlmodel \
+  https://github.com/lovoo/NSFWDetector/releases/download/1.1.0/NSFW.mlmodel
+xcrun coremlcompiler compile NSFW.mlmodel /tmp/
+ditto -c -k --sequesterRsrc --keepParent /tmp/NSFW.mlmodelc NSFW.mlmodelc.zip
+gh release upload nsfw-model-v1 NSFW.mlmodelc.zip
+```
+
+`OverlayControls` renders a dedicated install/progress/retry row for
+each, gated by the analyzer's availability flags.
 
 ---
 
-## Known Limitations & Non-Goals
+## Known limitations & non-goals
 
-- **No custom `.metal` source authoring** in Playgrounds — use MPS / Core Image exclusively
-- **No breakpoint debugger in Playgrounds** — for GPU debugging, open `.swiftpm` in Xcode and use Metal Frame Capture / Instruments
-- **Motion blur** is not distinguished from defocus by classical operators — known limitation, no fix without a dedicated DBD network
-- **Smooth in-focus regions** (skin, sky) underestimate sharpness in Laplacian path — Depth Anything v2 hybrid mode corrects this
-- Vision framework has **no spatial focus-map API** (confirmed as of iPadOS/macOS 26) — all focus detection is custom
-- `CIRAWFilter` supports Apple's [published camera list](https://support.apple.com/en-us/122870) only; cameras outside it require LibRaw
+- No custom `.metal` authoring in Playgrounds — MPS / Core Image only
+- No debugger breakpoints in Playgrounds — open `Xcode/FocusApp.xcodeproj`
+  for Metal Frame Capture, Instruments, and source-level debugging
+- **Motion blur** from the FFT path isn't perfectly distinguishable from
+  strong directional texture; the 0.4 confidence floor tamps most false
+  positives but not all
+- **Smooth in-focus regions** (skin, sky) underread in the Laplacian
+  path; Hybrid with Depth Anything recovers them
+- Vision has **no spatial focus-map API** — all focus detection is custom
+- `CIRAWFilter` supports Apple's [published camera list](https://support.apple.com/en-us/122870)
+  only; cameras outside it would need LibRaw
+- **SCA in Playgrounds** will always be `.disabled` — the NSFW fallback
+  download is the only way sensitive-content flagging works in
+  unsigned builds
+- **No demographic inference** (gender, age, ethnicity) — Vision doesn't
+  expose these and we're not shipping a third-party classifier for them
 
 ---
 
 ## References
 
 - Apple Accelerate sample: [Finding the sharpest image in a sequence](https://developer.apple.com/documentation/accelerate/finding-the-sharpest-image-in-a-sequence-of-captured-images)
-- Depth Anything v2 Core ML model + Swift example: [apple/coreml-depth-anything-v2-small](https://huggingface.co/apple/coreml-depth-anything-v2-small)
+- Depth Anything v2 Core ML release: [apple/coreml-depth-anything-v2-small](https://huggingface.co/apple/coreml-depth-anything-v2-small)
+- NSFW fallback: [lovoo/NSFWDetector](https://github.com/lovoo/NSFWDetector)
 - Metal in Swift Playgrounds 4: [Better Programming](https://betterprogramming.pub/using-metal-in-swift-playgrounds-4-e100122d276a)
 - Core ML in `.swiftpm`: [Apple Developer Forums thread 771598](https://developer.apple.com/forums/thread/771598)
 - EDR rendering: WWDC22 session 10114 — *Display EDR content with Core Image, Metal, and SwiftUI*
+- Person segmentation: `VNGeneratePersonSegmentationRequest` (iOS 15+)
 - Classical focus operators benchmark: Pertuz, Puig, García — *Pattern Recognition* 46(5), 2013
