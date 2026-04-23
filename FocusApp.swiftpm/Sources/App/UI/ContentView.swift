@@ -437,9 +437,11 @@ private struct SubjectHeadBadge: View {
         HStack(spacing: 4) {
             Image(systemName: "exclamationmark.shield.fill")
                 .font(.title3)
-            if let symbol = gender.symbol {
-                Image(systemName: symbol)
-                    .font(.footnote.weight(.semibold))
+            if let glyph = gender.glyph {
+                // Unicode Mars/Venus glyphs — rendered via Text instead
+                // of Image(systemName:) because they aren't SF Symbols.
+                Text(glyph)
+                    .font(.title3.weight(.bold))
             }
         }
         .foregroundStyle(tint)

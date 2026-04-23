@@ -51,14 +51,14 @@ enum SubjectGender: Sendable, Equatable {
     case male
     case female
 
-    /// SF Symbol glyph for the overhead badge. Returns nil for
-    /// `.unknown` so the badge stays compact when NudeNet didn't
+    /// Unicode glyph for the overhead badge — Mars / Venus. Returns nil
+    /// for `.unknown` so the badge stays compact when NudeNet didn't
     /// commit to either label.
-    var symbol: String? {
+    var glyph: String? {
         switch self {
         case .unknown: return nil
-        case .male:    return "figure.stand"
-        case .female:  return "figure.stand.dress"
+        case .male:    return "♂"
+        case .female:  return "♀"
         }
     }
 }
