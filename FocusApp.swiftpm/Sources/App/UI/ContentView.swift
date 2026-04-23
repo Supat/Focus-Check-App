@@ -447,7 +447,7 @@ private struct SubjectHeadBadge: View {
         .foregroundStyle(tint)
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .background(Color.black.opacity(0.45), in: Capsule())
+        .liquidBadgeBackground(tint: Color.black.opacity(0.45), in: Capsule())
         .overlay(Capsule().strokeBorder(tint.opacity(0.8), lineWidth: 1))
     }
 
