@@ -423,7 +423,7 @@ actor FocusAnalyzer {
 
         return EyeBar(
             center: CGPoint(x: (leftC.x + rightC.x) / 2, y: (leftC.y + rightC.y) / 2),
-            size: CGSize(width: eyeDistance * 1.75, height: eyeDistance * 0.33),
+            size: CGSize(width: eyeDistance * 2.1, height: eyeDistance * 0.396),
             angleRadians: atan2(dy, dx)
         )
     }
