@@ -73,15 +73,15 @@ struct ModelArchive: Sendable {
     ///     *matching* text encoder at conversion time.
     /// The installer uses `kind: .bundle` to keep both files together.
     ///
-    /// **Version**: `CLIP-v4` — bump the directory name + tag together
+    /// **Version**: `CLIP-v5` — bump the directory name + tag together
     /// when the prompt set or encoder variant changes so existing
     /// installs get orphaned and the Download button reappears for a
-    /// clean re-pull. Old `CLIP-v3/` / `CLIP-v2/` / `CLIP/` stay on
+    /// clean re-pull. Older `CLIP-v*` / `CLIP/` directories stay on
     /// disk until the user offloads the app.
     static let clip = ModelArchive(
-        directoryName: "CLIP-v4",
+        directoryName: "CLIP-v5",
         sourceURL: URL(string:
-            "https://github.com/Supat/Focus-Check-App/releases/download/clip-model-v4/CLIP.zip"
+            "https://github.com/Supat/Focus-Check-App/releases/download/clip-model-v5/CLIP.zip"
         )!,
         kind: .bundle
     )
