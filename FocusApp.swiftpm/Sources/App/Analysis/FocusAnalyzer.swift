@@ -73,8 +73,8 @@ actor FocusAnalyzer {
     private let motionBlur: MotionBlurDetector
     private let sensitiveContent = SensitiveContentChecker()
     private var depthEstimator: DepthEstimator?
-    private let downloader = DepthModelDownloader()
-    private let nsfwDownloader = NSFWModelDownloader()
+    private let depthInstaller = ModelArchiveInstaller(.depthAnything)
+    private let nsfwInstaller = ModelArchiveInstaller(.nsfw)
 
     private var source: CIImage?
 
@@ -102,7 +102,7 @@ actor FocusAnalyzer {
     /// release URL, then refresh the estimator so Depth/Hybrid modes become usable.
     /// Progress (0...1) is reported via the callback — may run on any thread.
     func installDepthModel(progress: @Sendable @escaping (Double) -> Void) async throws {
-        try await downloader.install(progress: progress)
+        try await depthInstaller.install(progress: progress)
         depthEstimator = try DepthEstimator()
     }
 
@@ -172,11 +172,11 @@ actor FocusAnalyzer {
     }
 
     /// True when the NSFW fallback Core ML model is already installed.
-    var isNSFWModelInstalled: Bool { NSFWModelDownloader.isInstalled() }
+    var isNSFWModelInstalled: Bool { ModelArchive.nsfw.isInstalled() }
 
     /// Download + install the NSFW fallback model, mirroring installDepthModel.
     func installNSFWModel(progress: @Sendable @escaping (Double) -> Void) async throws {
-        try await nsfwDownloader.install(progress: progress)
+        try await nsfwInstaller.install(progress: progress)
     }
 
     /// Run the analysis pipeline for the given mode. Returns display-ready overlay images
@@ -554,8 +554,8 @@ actor FocusAnalyzer {
 
         // Normalize both images to the same small extent so the i-th pixel in each
         // array describes the same spatial location.
-        let sharpSmall = shrinkToOrigin(sharpness, size: CGSize(width: side, height: side))
-        let depthSmall = shrinkToOrigin(depth,     size: CGSize(width: side, height: side))
+        let sharpSmall = sharpness.stretched(to: CGSize(width: side, height: side))
+        let depthSmall = depth.stretched(to: CGSize(width: side, height: side))
 
         var sharpBuf = [Float](repeating: 0, count: side * side)
         var depthBuf = [Float](repeating: 0, count: side * side)
@@ -591,18 +591,6 @@ actor FocusAnalyzer {
         return selected[selected.count / 2]
     }
 
-    /// Non-uniform stretch to `size` with origin at (0,0). Matches the CPU readback bounds.
-    private func shrinkToOrigin(_ image: CIImage, size: CGSize) -> CIImage {
-        let sx = size.width / image.extent.width
-        let sy = size.height / image.extent.height
-        let normalized = image.transformed(
-            by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY)
-        )
-        return normalized
-            .transformed(by: CGAffineTransform(scaleX: sx, y: sy))
-            .cropped(to: CGRect(origin: .zero, size: size))
-    }
-
     // MARK: - Helpers
 
     private func upscale(texture: MTLTexture, toExtentOf source: CIImage) -> CIImage? {
@@ -613,16 +601,18 @@ actor FocusAnalyzer {
     }
 
     private func upscale(image: CIImage, toExtentOf source: CIImage) -> CIImage? {
-        // Non-uniform stretch: the low-res map may come from the depth estimator at
-        // the model's aspect, which differs from the source's. Uniform scaling with
-        // aspectRatio=1 placed content at source.origin but only the cropped region's
-        // data was stretched to fill the whole extent, producing a visible offset.
-        // Stretching both axes independently makes coordinates map 1:1.
+        // Non-uniform stretch with Lanczos: the low-res map may come from the
+        // depth estimator at the model's aspect, which differs from the
+        // source's. Uniform scaling with aspectRatio=1 placed content at
+        // source.origin but only the cropped region's data was stretched to
+        // fill the whole extent, producing a visible offset. Stretching both
+        // axes independently makes coordinates map 1:1. Lanczos (rather than
+        // the `.stretched` extension's default affine) matters here because
+        // the depth map has meaningful gradient detail we don't want
+        // bilinearly-smoothed away.
         let sx = source.extent.width / image.extent.width
         let sy = source.extent.height / image.extent.height
-        let normalized = image.transformed(
-            by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY)
-        )
+        let normalized = image.translatedToOrigin()
         let upscale = CIFilter.lanczosScaleTransform()
         upscale.inputImage = normalized
         upscale.scale = Float(sy)

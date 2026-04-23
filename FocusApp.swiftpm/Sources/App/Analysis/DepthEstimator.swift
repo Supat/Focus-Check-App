@@ -4,10 +4,11 @@ import Vision
 
 /// Wraps the pre-compiled Depth Anything v2 Small F16 model.
 ///
-/// The `.mlmodelc` is fetched at runtime by `DepthModelDownloader` and installed into
-/// `Application Support/`. `init()` probes that location first, falling back to the
-/// app bundle for dev setups that manually drop the model into `Sources/App/Resources/`.
-/// When neither source has the model, it throws `AnalysisError.modelMissing` and the
+/// The `.mlmodelc` is fetched at runtime by `ModelArchiveInstaller` (archive:
+/// `.depthAnything`) and installed into `Application Support/`. `init()`
+/// probes that location first, falling back to the app bundle for dev setups
+/// that manually drop the model into `Sources/App/Resources/`. When neither
+/// source has the model, it throws `AnalysisError.modelMissing` and the
 /// analyzer degrades to sharpness-only.
 struct DepthEstimator {
     private let model: MLModel
@@ -26,7 +27,7 @@ struct DepthEstimator {
     /// Probe the runtime install location first, then the app bundle. Returns the
     /// first `.mlmodelc` URL found, or throws `.modelMissing`.
     private static func locateModel() throws -> URL {
-        if let installed = try? DepthModelDownloader.installedURL(),
+        if let installed = try? ModelArchive.depthAnything.installedURL(),
            FileManager.default.fileExists(atPath: installed.path) {
             return installed
         }
@@ -54,7 +55,7 @@ struct DepthEstimator {
         // here than avoiding a few percent of aspect distortion; DA v2 is trained
         // robustly enough to tolerate it, and it's what lets the upscaled depth
         // map align with the source when composited.
-        let filled = resize(image, to: inputSize)
+        let filled = image.stretched(to: inputSize)
 
         var pixelBuffer: CVPixelBuffer?
         let attrs: [CFString: Any] = [
@@ -107,20 +108,6 @@ struct DepthEstimator {
             break
         }
         return CGSize(width: constraint.pixelsWide, height: constraint.pixelsHigh)
-    }
-
-    /// Stretch `image` to exactly `target` — non-uniform scaling, no crop, no
-    /// letterbox. Preserves the source's coordinate system into the model input
-    /// so the output depth map maps 1:1 back to the source when upscaled.
-    private func resize(_ image: CIImage, to target: CGSize) -> CIImage {
-        let sx = target.width / image.extent.width
-        let sy = target.height / image.extent.height
-        let normalized = image.transformed(
-            by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY)
-        )
-        return normalized
-            .transformed(by: CGAffineTransform(scaleX: sx, y: sy))
-            .cropped(to: CGRect(origin: .zero, size: target))
     }
 
     /// Pack a Float32/Float16 MLMultiArray [H,W] into a luminance CIImage, normalized to [0,1].

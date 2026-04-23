@@ -276,13 +276,9 @@ struct MotionBlurDetector {
             y: extent.minY + (extent.height - squareSide) / 2,
             width: squareSide, height: squareSide
         )
-        let cropped = image.cropped(to: cropRect)
-        let translated = cropped.transformed(
-            by: CGAffineTransform(translationX: -cropped.extent.minX, y: -cropped.extent.minY)
-        )
-        let scale = CGFloat(size) / squareSide
-        let scaled = translated.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-        return luma(scaled).cropped(to: CGRect(x: 0, y: 0, width: size, height: size))
+        let square = image.cropped(to: cropRect)
+        let sizeCG = CGSize(width: CGFloat(size), height: CGFloat(size))
+        return luma(square.stretched(to: sizeCG))
     }
 
     /// Non-uniform stretch to `size`×`size` — used for the tiled map so the
@@ -290,13 +286,8 @@ struct MotionBlurDetector {
     private func stretchedLumaPatch(_ image: CIImage, size: Int) -> CIImage? {
         let extent = image.extent
         guard extent.width > 0, extent.height > 0 else { return nil }
-        let translated = image.transformed(
-            by: CGAffineTransform(translationX: -extent.minX, y: -extent.minY)
-        )
-        let sx = CGFloat(size) / extent.width
-        let sy = CGFloat(size) / extent.height
-        let scaled = translated.transformed(by: CGAffineTransform(scaleX: sx, y: sy))
-        return luma(scaled).cropped(to: CGRect(x: 0, y: 0, width: size, height: size))
+        let sizeCG = CGSize(width: CGFloat(size), height: CGFloat(size))
+        return luma(image.stretched(to: sizeCG))
     }
 
     private func luma(_ image: CIImage) -> CIImage {

@@ -38,8 +38,8 @@ let package = Package(
         )
     ],
     dependencies: [
-        // Pure-Swift ZIP extraction — used by DepthModelDownloader to unzip the
-        // compiled `.mlmodelc` after downloading it at runtime.
+        // Pure-Swift ZIP extraction — used by ModelArchiveInstaller to unzip
+        // the compiled `.mlmodelc` after downloading it at runtime.
         .package(url: "https://github.com/weichsel/ZIPFoundation", from: "0.9.19")
     ],
     targets: [

@@ -97,54 +97,61 @@ final class FocusRenderer {
         commandBuffer.commit()
     }
 
-    private func buildFrame(drawableSize: CGSize) -> CIImage {
-        let snapshot: (source: CIImage?, style: OverlayStyle, threshold: Float,
-                       color: Color, focalPlane: Float?,
-                       zoomScale: CGFloat, zoomAnchor: CGPoint,
-                       sharpness: CIImage?, depth: CIImage?, motion: CIImage?,
-                       overlayHidden: Bool, mosaic: Bool, mosaicMode: MosaicMode,
-                       faces: [CGRect], bodies: [CGRect], groins: [CGRect],
-                       eyes: [EyeBar], chests: [CGRect], personMask: CIImage?) =
-            MainActor.assumeIsolated {
-                // Mosaic fires when the classifier flagged the image AND the
-                // user has mosaic enabled, OR when Force Censor is on
-                // (which bypasses classifier state entirely).
-                let applyMosaic =
-                    viewModel.forceCensor ||
-                    ((viewModel.isSensitive == true) && viewModel.mosaicEnabled)
-                return (viewModel.sourceImage, viewModel.style, viewModel.threshold,
-                        viewModel.overlayColor, viewModel.focalPlane,
-                        viewModel.zoomScale, viewModel.zoomAnchor,
-                        viewModel.sharpnessOverlay, viewModel.depthOverlay,
-                        viewModel.motionOverlay,
-                        viewModel.overlayHidden, applyMosaic, viewModel.mosaicMode,
-                        viewModel.faceRectangles, viewModel.bodyRectangles,
-                        viewModel.groinRectangles, viewModel.eyeBars,
-                        viewModel.chestRectangles, viewModel.personMask)
-            }
+    /// Viewport-only state captured alongside `FocusCompositeInputs` for a
+    /// single frame. `inputs` is nil when the user hasn't loaded an image
+    /// yet — callers render a black canvas in that case.
+    private struct RenderSnapshot {
+        var inputs: FocusCompositeInputs?
+        var overlayHidden: Bool
+        var zoomScale: CGFloat
+        var zoomAnchor: CGPoint
+    }
 
-        guard let source = snapshot.source else {
-            return CIImage(color: CIColor.black).cropped(to: CGRect(origin: .zero, size: drawableSize))
+    private func buildFrame(drawableSize: CGSize) -> CIImage {
+        let snapshot: RenderSnapshot = MainActor.assumeIsolated {
+            guard let source = viewModel.sourceImage else {
+                return RenderSnapshot(
+                    inputs: nil,
+                    overlayHidden: viewModel.overlayHidden,
+                    zoomScale: viewModel.zoomScale,
+                    zoomAnchor: viewModel.zoomAnchor
+                )
+            }
+            // Mosaic fires when the classifier flagged the image AND the
+            // user has mosaic enabled, OR when Force Censor is on (which
+            // bypasses classifier state entirely).
+            let applyMosaic =
+                viewModel.forceCensor ||
+                ((viewModel.isSensitive == true) && viewModel.mosaicEnabled)
+            let inputs = FocusCompositeInputs(
+                source: source,
+                style: viewModel.style,
+                threshold: viewModel.threshold,
+                tint: CIColor(color: viewModel.overlayColor) ?? CIColor(red: 1, green: 0.85, blue: 0),
+                focalPlane: viewModel.focalPlane,
+                sharpness: viewModel.sharpnessOverlay,
+                depth: viewModel.depthOverlay,
+                motion: viewModel.motionOverlay,
+                mosaic: applyMosaic,
+                mosaicMode: viewModel.mosaicMode,
+                faces: viewModel.faceRectangles,
+                bodies: viewModel.bodyRectangles,
+                groins: viewModel.groinRectangles,
+                eyes: viewModel.eyeBars,
+                chests: viewModel.chestRectangles,
+                personMask: viewModel.personMask
+            )
+            return RenderSnapshot(
+                inputs: inputs,
+                overlayHidden: viewModel.overlayHidden,
+                zoomScale: viewModel.zoomScale,
+                zoomAnchor: viewModel.zoomAnchor
+            )
         }
 
-        let inputs = FocusCompositeInputs(
-            source: source,
-            style: snapshot.style,
-            threshold: snapshot.threshold,
-            tint: CIColor(color: snapshot.color) ?? CIColor(red: 1, green: 0.85, blue: 0),
-            focalPlane: snapshot.focalPlane,
-            sharpness: snapshot.sharpness,
-            depth: snapshot.depth,
-            motion: snapshot.motion,
-            mosaic: snapshot.mosaic,
-            mosaicMode: snapshot.mosaicMode,
-            faces: snapshot.faces,
-            bodies: snapshot.bodies,
-            groins: snapshot.groins,
-            eyes: snapshot.eyes,
-            chests: snapshot.chests,
-            personMask: snapshot.personMask
-        )
+        guard let inputs = snapshot.inputs else {
+            return CIImage(color: CIColor.black).cropped(to: CGRect(origin: .zero, size: drawableSize))
+        }
         return Self.composite(
             inputs,
             drawableSize: drawableSize,

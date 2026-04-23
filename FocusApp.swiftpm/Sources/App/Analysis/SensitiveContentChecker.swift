@@ -62,8 +62,8 @@ struct SensitiveContentResult: Equatable {
 /// Playgrounds builds get `.disabled` and can't classify.
 ///
 /// Fallback backend: a downloaded OpenNSFW-style Core ML model installed
-/// via `NSFWModelDownloader`. Works in Playgrounds end-to-end once the
-/// user has downloaded the model.
+/// via `ModelArchiveInstaller` (archive: `.nsfw`). Works in Playgrounds
+/// end-to-end once the user has downloaded the model.
 struct SensitiveContentChecker {
 
     /// Probability ≥ this flags the image as sensitive in the NSFW fallback.
@@ -75,14 +75,14 @@ struct SensitiveContentChecker {
         #if canImport(SensitiveContentAnalysis)
         switch SCSensitivityAnalyzer().analysisPolicy {
         case .disabled:
-            return NSFWModelDownloader.isInstalled() ? .nsfwFallback : .disabled
+            return ModelArchive.nsfw.isInstalled() ? .nsfwFallback : .disabled
         case .simpleInterventions:      return .simpleInterventions
         case .descriptiveInterventions: return .descriptiveInterventions
         @unknown default:
-            return NSFWModelDownloader.isInstalled() ? .nsfwFallback : .disabled
+            return ModelArchive.nsfw.isInstalled() ? .nsfwFallback : .disabled
         }
         #else
-        return NSFWModelDownloader.isInstalled() ? .nsfwFallback : .frameworkMissing
+        return ModelArchive.nsfw.isInstalled() ? .nsfwFallback : .frameworkMissing
         #endif
     }
 
@@ -153,7 +153,7 @@ private final class NSFWClassifier {
     private let inputSize: CGSize
 
     init() throws {
-        let url = try NSFWModelDownloader.installedURL()
+        let url = try ModelArchive.nsfw.installedURL()
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw AnalysisError.modelMissing
         }
@@ -184,7 +184,7 @@ private final class NSFWClassifier {
     func topClass(for image: CIImage, ciContext: CIContext) -> (label: String, probability: Float)? {
         let w = Int(inputSize.width)
         let h = Int(inputSize.height)
-        let resized = resize(image, to: inputSize)
+        let resized = image.stretched(to: inputSize)
 
         var pixelBuffer: CVPixelBuffer?
         let attrs: [CFString: Any] = [kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary]
@@ -240,15 +240,4 @@ private final class NSFWClassifier {
         return nil
     }
 
-    /// Non-uniform stretch to `size` — matches the depth estimator's helper.
-    private func resize(_ image: CIImage, to size: CGSize) -> CIImage {
-        let sx = size.width / image.extent.width
-        let sy = size.height / image.extent.height
-        let normalized = image.transformed(
-            by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY)
-        )
-        return normalized
-            .transformed(by: CGAffineTransform(scaleX: sx, y: sy))
-            .cropped(to: CGRect(origin: .zero, size: size))
-    }
 }
