@@ -205,11 +205,11 @@ final class FocusViewModel: ObservableObject {
     /// Minimum level that triggers the per-subject mosaic gating. Bodies
     /// whose level is below this are skipped even when the global mosaic
     /// condition is on. `.covered` leaves clothed subjects alone.
-    @Published var nudityGate: NudityLevel = .covered
+    @Published var nudityGate: NudityLevel = .none
     /// User-controlled mosaic toggle. Defaults on — protective default so
     /// sensitive content isn't displayed until the user explicitly opts in.
     @Published var mosaicEnabled: Bool = true
-    @Published var mosaicMode: MosaicMode = .face
+    @Published var mosaicMode: MosaicMode = .tabloid
     /// When true, the selected `mosaicMode` is applied to every image
     /// regardless of what the sensitive-content classifier returns — useful
     /// for redacting screenshots, preparing sample images for documentation,
