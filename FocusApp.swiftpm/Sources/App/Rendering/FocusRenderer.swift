@@ -33,6 +33,10 @@ struct FocusCompositeInputs {
     /// is empty (no detector) — in that case the original "every body"
     /// behavior is preserved.
     var nudityGate: NudityLevel
+    /// Raw NudeNet detections in source-extent coords. Consumed by the
+    /// `.nudity` mosaic mode, which pixelates each detection box
+    /// directly rather than going through Vision body assignment.
+    var nudityDetections: [NudityDetection]
 }
 
 /// Composites the source image with a focus overlay each frame for live
@@ -150,7 +154,8 @@ final class FocusRenderer {
                 chests: viewModel.chestRectangles,
                 personMask: viewModel.personMask,
                 nudityLevels: viewModel.nudityLevels,
-                nudityGate: viewModel.nudityGate
+                nudityGate: viewModel.nudityGate,
+                nudityDetections: viewModel.nudityDetections
             )
             return RenderSnapshot(
                 inputs: inputs,
@@ -259,6 +264,15 @@ final class FocusRenderer {
                     return regionMosaic(source: inputs.source, regions: inputs.faces, capDivisor: 32)
                 }
                 return inputs.source
+            case .nudity:
+                // Pixelate each NudeNet detection box directly. No Vision
+                // body assignment in this path; the detector's own boxes
+                // are the redaction targets. Detections are not subject to
+                // the per-subject gate — the user picked this mode to
+                // cover every flagged region.
+                guard !inputs.nudityDetections.isEmpty else { return inputs.source }
+                let regions = inputs.nudityDetections.map(\.rect)
+                return regionMosaic(source: inputs.source, regions: regions, capDivisor: 32)
             case .whole:
                 return wholeMosaic(source: inputs.source)
             }

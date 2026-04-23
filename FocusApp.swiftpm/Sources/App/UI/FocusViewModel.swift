@@ -62,6 +62,7 @@ enum MosaicMode: String, CaseIterable, Identifiable {
     case chest   = "Chest"
     case groin   = "Groin"
     case body    = "Body"
+    case nudity  = "Nudity"
     case whole   = "Whole"
     var id: String { rawValue }
 }
@@ -439,7 +440,8 @@ final class FocusViewModel: ObservableObject {
             chests: chestRectangles,
             personMask: personMask,
             nudityLevels: nudityLevels,
-            nudityGate: nudityGate
+            nudityGate: nudityGate,
+            nudityDetections: nudityDetections
         )
 
         let baseName: String
