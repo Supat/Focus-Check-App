@@ -419,8 +419,13 @@ actor FocusAnalyzer {
         // sideways, it rotates into the Z (depth) axis. Scale width by
         // (1 + 2 * sidewaysFactor) so a full profile gets up to 3x the
         // original width, a three-quarter view gets ~2x, and a frontal
-        // pose is unchanged.
-        let sideways = Self.sidewaysFactor(from: pose3D)
+        // pose is unchanged. Take the max of the 3D and 2D signals —
+        // VNDetectHumanBodyPose3DRequest declines on many sideways
+        // images where the 2D hip-to-torso ratio still captures it.
+        let sideways = max(
+            Self.sidewaysFactor(from: pose3D),
+            Self.sidewaysFactor2D(from: obs)
+        )
         if sideways > 0.01 {
             let expandedWidth = rect.width * (1 + 2 * sideways)
             let extra = expandedWidth - rect.width
@@ -445,6 +450,35 @@ actor FocusAnalyzer {
             width: newWidth,
             height: rect.height
         )
+    }
+
+    /// 2D fallback when the 3D pose request can't solve. Uses the ratio of
+    /// projected hip width to torso height: a frontal body has hip width
+    /// close to 0.5 × torso height; as the subject turns to profile both
+    /// hips project to roughly the same x and the ratio collapses toward
+    /// zero. Normalized so 0 = frontal (≥ the reference ratio), 1 = pure
+    /// profile (zero projected hip width). Returns 0 when any of the four
+    /// required landmarks are low-confidence.
+    private static func sidewaysFactor2D(from obs: VNHumanBodyPoseObservation) -> CGFloat {
+        guard let leftHip = try? obs.recognizedPoint(.leftHip),
+              let rightHip = try? obs.recognizedPoint(.rightHip),
+              let leftShoulder = try? obs.recognizedPoint(.leftShoulder),
+              let rightShoulder = try? obs.recognizedPoint(.rightShoulder),
+              leftHip.confidence > 0.3, rightHip.confidence > 0.3,
+              leftShoulder.confidence > 0.3, rightShoulder.confidence > 0.3
+        else { return 0 }
+
+        let hipWidth = abs(rightHip.location.x - leftHip.location.x)
+        let shoulderY = (leftShoulder.location.y + rightShoulder.location.y) / 2
+        let hipY = (leftHip.location.y + rightHip.location.y) / 2
+        let torsoHeight = abs(shoulderY - hipY)
+        guard torsoHeight > 0.02 else { return 0 }
+
+        // Reference ratio tuned empirically — frontal poses land near
+        // 0.45–0.55, three-quarter views near 0.25, full profiles near 0.
+        let reference: CGFloat = 0.5
+        let factor = 1 - min(1, hipWidth / torsoHeight / reference)
+        return max(0, factor)
     }
 
     /// 0 = fully frontal, 1 = fully sideways. Computed from the 3D hip
