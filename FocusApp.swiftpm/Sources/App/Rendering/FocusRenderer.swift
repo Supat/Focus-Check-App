@@ -264,6 +264,23 @@ final class FocusRenderer {
                     return regionMosaic(source: inputs.source, regions: inputs.faces, capDivisor: 32)
                 }
                 return inputs.source
+            case .privy:
+                // Subset of Nudity: cover every NudeNet detection except
+                // secondary regions the user explicitly spared —
+                // armpits, breasts, belly, feet. Genitalia / anus /
+                // buttocks / face-label detections still get mosaiced.
+                let keep = inputs.nudityDetections.filter { det in
+                    let upper = det.label.uppercased()
+                    return !(upper.contains("ARMPITS")
+                          || upper.contains("BREAST")
+                          || upper.contains("BELLY")
+                          || upper.contains("FEET"))
+                }
+                guard !keep.isEmpty else { return inputs.source }
+                return regionMosaic(source: inputs.source,
+                                    regions: keep.map(\.rect),
+                                    capDivisor: 32,
+                                    scaleMultiplier: 1.5)
             case .nudity:
                 // Pixelate each NudeNet detection box directly. No Vision
                 // body assignment in this path; the detector's own boxes
