@@ -35,23 +35,33 @@ struct CLIPScorer {
     /// `topK` matches sorted by similarity (descending). Returns an
     /// empty array when the model or prompts couldn't be loaded.
     func score(image: CIImage, ciContext: CIContext, topK: Int = 3) -> [CLIPMatch] {
-        guard let encoder, let prompts = CLIPPromptStore.shared else { return [] }
+        guard let encoder, let prompts = CLIPPromptStore.shared else {
+            print("[CLIP] scorer not ready — encoder=\(encoder == nil ? "nil" : "ok") prompts=\(CLIPPromptStore.shared == nil ? "nil" : "ok")")
+            return []
+        }
         guard let imageEmbedding = encoder.embed(image: image, ciContext: ciContext) else {
-            return [] }
+            print("[CLIP] embed() returned nil")
+            return []
+        }
 
-        // Cosine similarity against each prompt. Prompt embeddings are
-        // expected pre-normalized at export time; we also L2-normalize
-        // the image embedding here so the dot product is cosine.
         let imgNorm = l2Normalize(imageEmbedding)
         var matches: [CLIPMatch] = []
         matches.reserveCapacity(prompts.entries.count)
+        var skipped = 0
         for entry in prompts.entries {
-            guard entry.embedding.count == imgNorm.count else { continue }
+            guard entry.embedding.count == imgNorm.count else {
+                skipped += 1
+                continue
+            }
             var dot: Float = 0
             for i in 0..<imgNorm.count {
                 dot += imgNorm[i] * entry.embedding[i]
             }
             matches.append(CLIPMatch(prompt: entry.prompt, similarity: dot))
+        }
+        if matches.isEmpty {
+            let promptDim = prompts.entries.first?.embedding.count ?? 0
+            print("[CLIP] no matches — image dim=\(imgNorm.count) prompt dim=\(promptDim) skipped=\(skipped) (dimension mismatch means the image encoder and text encoder came from different CLIP variants)")
         }
         matches.sort { $0.similarity > $1.similarity }
         return Array(matches.prefix(topK))
