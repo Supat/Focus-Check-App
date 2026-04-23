@@ -56,14 +56,16 @@ struct NudityAnalysis: Sendable {
 /// intersection area so we can surface a per-subject rating without a
 /// classifier inference per person.
 struct NudityDetector {
-    private let classifier: NudityClassifier?
+    /// Defer touching `NudityClassifier.shared` until the first detection
+    /// run — the shared static loads a 10-MB+ Core ML model, which would
+    /// otherwise synchronously block app launch when the analyzer is
+    /// constructed during `FocusViewModel.init`.
+    private var classifier: NudityClassifier? { NudityClassifier.shared }
 
-    init() {
-        self.classifier = NudityClassifier.shared
-    }
-
-    /// True when the NudeNet model is available (installed + loaded).
-    var isReady: Bool { classifier != nil }
+    /// True when the NudeNet model is installed on disk. Mirrors the
+    /// disk-presence check used by the other models — resolves without
+    /// forcing the MLModel load.
+    var isReady: Bool { ModelArchive.nudenet.isInstalled() }
 
     /// Run the detector and return per-subject levels plus the raw
     /// per-part detections (for optional UI overlay). Returns empty

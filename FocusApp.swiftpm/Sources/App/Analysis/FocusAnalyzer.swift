@@ -81,7 +81,6 @@ actor FocusAnalyzer {
     private let motionBlur: MotionBlurDetector
     private let sensitiveContent = SensitiveContentChecker()
     private let nudityDetector = NudityDetector()
-    private var depthEstimator: DepthEstimator?
     private let depthInstaller = ModelArchiveInstaller(.depthAnything)
     private let nsfwInstaller = ModelArchiveInstaller(.nsfw)
     private let nudenetInstaller = ModelArchiveInstaller(.nudenet)
@@ -103,17 +102,35 @@ actor FocusAnalyzer {
         ])
         self.laplacian = LaplacianVariance(device: device, commandQueue: queue)
         self.motionBlur = MotionBlurDetector(ciContext: self.ciContext)
-        self.depthEstimator = try? DepthEstimator()
+        // DepthEstimator and NudityClassifier eager-load their Core ML
+        // models (50 MB+ each, ANE compile ~1–3 s). Skipping that at
+        // init keeps app launch under Swift Playgrounds' 5-second
+        // preview budget — both are loaded on first use instead.
     }
 
-    var isDepthAvailable: Bool { depthEstimator != nil }
+    var isDepthAvailable: Bool { ModelArchive.depthAnything.isInstalled() }
+
+    /// Lazy-loaded depth estimator. Nil until either (a) the caller has
+    /// invoked an analysis mode that needs depth, or (b) the model
+    /// finishes downloading via `installDepthModel`. Returning nil here
+    /// when the model isn't present lets `.depth` / `.hybrid` modes
+    /// gracefully downgrade.
+    private func depthEstimator() -> DepthEstimator? {
+        if let cached = _depthEstimator { return cached }
+        guard let created = try? DepthEstimator() else { return nil }
+        _depthEstimator = created
+        return created
+    }
+    private var _depthEstimator: DepthEstimator?
 
     /// Download + install the Depth Anything v2 `.mlmodelc` from the maintainer's
     /// release URL, then refresh the estimator so Depth/Hybrid modes become usable.
     /// Progress (0...1) is reported via the callback — may run on any thread.
     func installDepthModel(progress: @Sendable @escaping (Double) -> Void) async throws {
         try await depthInstaller.install(progress: progress)
-        depthEstimator = try DepthEstimator()
+        // Eagerly load the freshly-installed model so the first analysis
+        // after download doesn't pay the compile cost on the user's tap.
+        _depthEstimator = try DepthEstimator()
     }
 
     /// Render the composite for `inputs` at source resolution via the
@@ -245,14 +262,14 @@ actor FocusAnalyzer {
             sharpness = upscale(texture: tex, toExtentOf: source)
 
         case .depth:
-            guard let estimator = depthEstimator else { throw AnalysisError.modelMissing }
+            guard let estimator = depthEstimator() else { throw AnalysisError.modelMissing }
             let map = try estimator.depthMap(for: source, ciContext: ciContext)
             depth = upscale(image: map, toExtentOf: source)
 
         case .hybrid:
             let tex = try laplacian.sharpnessMap(from: source, ciContext: ciContext)
             sharpness = upscale(texture: tex, toExtentOf: source)
-            if let estimator = depthEstimator {
+            if let estimator = depthEstimator() {
                 let map = try estimator.depthMap(for: source, ciContext: ciContext)
                 depth = upscale(image: map, toExtentOf: source)
                 if let s = sharpness, let d = depth {
