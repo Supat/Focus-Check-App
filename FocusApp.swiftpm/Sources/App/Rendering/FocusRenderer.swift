@@ -80,8 +80,16 @@ final class FocusRenderer {
             width: view.drawableSize.width,
             height: view.drawableSize.height
         )
+        // MTKView.drawableSize is in pixels; DragGesture.translation (the
+        // source of zoomPanOffset) is in points. Pass the ratio through
+        // so the renderer can convert the pan into pixel space before
+        // composing, otherwise the image drifts from the SwiftUI overlay
+        // by the device scale factor.
+        let pointsToPixels = view.bounds.width > 0
+            ? drawableSize.width / view.bounds.width
+            : 1
 
-        let content = buildFrame(drawableSize: drawableSize)
+        let content = buildFrame(drawableSize: drawableSize, pointsToPixels: pointsToPixels)
         // Composite over solid black so letterbox bars are defined pixels.
         let canvas = CIImage(color: CIColor.black)
             .cropped(to: CGRect(origin: .zero, size: drawableSize))
@@ -121,7 +129,7 @@ final class FocusRenderer {
         var zoomPan: CGSize
     }
 
-    private func buildFrame(drawableSize: CGSize) -> CIImage {
+    private func buildFrame(drawableSize: CGSize, pointsToPixels: CGFloat) -> CIImage {
         let snapshot: RenderSnapshot = MainActor.assumeIsolated {
             guard let source = viewModel.sourceImage else {
                 return RenderSnapshot(
@@ -129,7 +137,10 @@ final class FocusRenderer {
                     overlayHidden: viewModel.overlayHidden,
                     zoomScale: viewModel.zoomScale,
                     zoomAnchor: viewModel.zoomAnchor,
-                    zoomPan: viewModel.zoomPanOffset
+                    zoomPan: CGSize(
+                        width: viewModel.zoomPanOffset.width * pointsToPixels,
+                        height: viewModel.zoomPanOffset.height * pointsToPixels
+                    )
                 )
             }
             // Mosaic fires when the classifier flagged the image AND the
@@ -164,7 +175,10 @@ final class FocusRenderer {
                 overlayHidden: viewModel.overlayHidden,
                 zoomScale: viewModel.zoomScale,
                 zoomAnchor: viewModel.zoomAnchor,
-                zoomPan: viewModel.zoomPanOffset
+                zoomPan: CGSize(
+                    width: viewModel.zoomPanOffset.width * pointsToPixels,
+                    height: viewModel.zoomPanOffset.height * pointsToPixels
+                )
             )
         }
 
