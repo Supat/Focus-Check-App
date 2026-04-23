@@ -225,8 +225,12 @@ struct ContentView: View {
             ZStack {
                 ForEach(Array(viewModel.nudityDetections.enumerated()), id: \.offset) { _, det in
                     let r = viewRect(for: det.rect, source: extent, in: size)
+                    // Orange for "*_EXPOSED" labels, yellow otherwise —
+                    // surfaces the high-signal detections at a glance.
+                    let tint: Color = det.label.uppercased().contains("EXPOSED")
+                        ? .orange : .yellow
                     Rectangle()
-                        .strokeBorder(Color.yellow, lineWidth: 2)
+                        .strokeBorder(tint, lineWidth: 2)
                         .frame(width: r.width, height: r.height)
                         .overlay(alignment: .topLeading) {
                             Text("\(det.label) \(Int((det.confidence * 100).rounded()))%")
@@ -234,7 +238,7 @@ struct ContentView: View {
                                 .foregroundStyle(.black)
                                 .padding(.horizontal, 4)
                                 .padding(.vertical, 2)
-                                .background(Color.yellow.opacity(0.9),
+                                .background(tint.opacity(0.9),
                                             in: RoundedRectangle(cornerRadius: 3))
                                 .fixedSize()
                                 .alignmentGuide(.top) { _ in 14 }
