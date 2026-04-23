@@ -74,14 +74,24 @@ struct ImageImporter: View {
         defer { if didStart { url.stopAccessingSecurityScopedResource() } }
 
         do {
+            // Read the full file contents into Data first, then write our
+            // own tmp copy. This is more robust under macOS sandbox than
+            // FileManager.copyItem — copyItem occasionally fails on scoped
+            // URLs even with user-selected.read-only granted, while a
+            // plain file-open read works.
+            let data = try Data(contentsOf: url, options: .mappedIfSafe)
             let ext = url.pathExtension.isEmpty ? "img" : url.pathExtension
             let tmp = FileManager.default.temporaryDirectory
                 .appendingPathComponent(UUID().uuidString)
                 .appendingPathExtension(ext)
-            try FileManager.default.copyItem(at: url, to: tmp)
+            try data.write(to: tmp, options: .atomic)
             onPick(tmp, url.lastPathComponent)
         } catch {
-            onError("Couldn't read “\(url.lastPathComponent)”: \(error.localizedDescription)")
+            // Surface in both the UI capsule and the Playgrounds console
+            // so the user can see it either way.
+            let message = "Couldn't read “\(url.lastPathComponent)”: \(error.localizedDescription)"
+            print("[ImageImporter] \(message) — url=\(url) scoped=\(fromScoped) didStart=\(didStart)")
+            onError(message)
         }
     }
 }
