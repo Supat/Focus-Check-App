@@ -174,6 +174,12 @@ final class FocusViewModel: ObservableObject {
     /// sensitive content isn't displayed until the user explicitly opts in.
     @Published var mosaicEnabled: Bool = true
     @Published var mosaicMode: MosaicMode = .face
+    /// When true, the selected `mosaicMode` is applied to every image
+    /// regardless of what the sensitive-content classifier returns — useful
+    /// for redacting screenshots, preparing sample images for documentation,
+    /// or working with photos the classifier doesn't flag but the user still
+    /// wants covered.
+    @Published var forceCensor: Bool = false
     @Published var sensitiveContentAvailability: SensitiveContentAvailability = .frameworkMissing
     /// Install state for the NSFW fallback model. Reuses DepthInstallState —
     /// the shape (notInstalled / downloading / installed / failed) is generic.

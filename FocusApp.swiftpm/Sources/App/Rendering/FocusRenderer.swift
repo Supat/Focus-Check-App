@@ -103,7 +103,12 @@ final class FocusRenderer {
                        faces: [CGRect], bodies: [CGRect], groins: [CGRect],
                        eyes: [EyeBar], chests: [CGRect]) =
             MainActor.assumeIsolated {
-                let applyMosaic = (viewModel.isSensitive == true) && viewModel.mosaicEnabled
+                // Mosaic fires when the classifier flagged the image AND the
+                // user has mosaic enabled, OR when Force Censor is on
+                // (which bypasses classifier state entirely).
+                let applyMosaic =
+                    viewModel.forceCensor ||
+                    ((viewModel.isSensitive == true) && viewModel.mosaicEnabled)
                 return (viewModel.sourceImage, viewModel.style, viewModel.threshold,
                         viewModel.overlayColor, viewModel.focalPlane,
                         viewModel.zoomScale, viewModel.zoomAnchor,

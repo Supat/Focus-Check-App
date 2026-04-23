@@ -78,6 +78,7 @@ struct OverlayControls: View {
 
             depthInstallRow
             mosaicToggleRow
+            forceCensorRow
             nsfwInstallRow
         }
         #if os(iOS)
@@ -104,6 +105,13 @@ struct OverlayControls: View {
 
     @ViewBuilder
     private var mosaicToggleRow: some View {
+        // The mode picker is usable whenever at least one of the mosaic paths
+        // can fire — either the classifier-gated one (toggle + SCA ready) or
+        // Force Censor (which bypasses the classifier entirely).
+        let classifierPath =
+            viewModel.mosaicEnabled && viewModel.sensitiveContentAvailability.isReady
+        let pickerActive = classifierPath || viewModel.forceCensor
+
         HStack {
             Spacer()
             Label("Mosaic sensitive content", systemImage: "eye.slash")
@@ -117,12 +125,28 @@ struct OverlayControls: View {
             .labelsHidden()
             .controlSize(.small)
             .frame(width: 420)
-            .disabled(!viewModel.mosaicEnabled || !viewModel.sensitiveContentAvailability.isReady)
+            .disabled(!pickerActive)
             Toggle("", isOn: $viewModel.mosaicEnabled)
                 .labelsHidden()
                 .toggleStyle(.switch)
                 .controlSize(.small)
                 .disabled(!viewModel.sensitiveContentAvailability.isReady)
+        }
+    }
+
+    /// Sibling row to the mosaic toggle: apply the selected mode to every
+    /// image regardless of classifier verdict. Lives on its own row so the
+    /// intent — 'override the classifier' — is visually distinct.
+    @ViewBuilder
+    private var forceCensorRow: some View {
+        HStack {
+            Spacer()
+            Label("Force censor", systemImage: "eye.slash.circle.fill")
+                .font(.caption)
+            Toggle("", isOn: $viewModel.forceCensor)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
         }
     }
 
