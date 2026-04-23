@@ -366,14 +366,16 @@ actor FocusAnalyzer {
         // Portrait / tall-aspect sources can make the denormalized rect
         // taller than wide even though the normalized rect isn't — that
         // looks wrong for a groin cover, which users expect to read as
-        // horizontal. Pad width out to match height around the same
-        // center x so the rect is always at least square.
+        // a horizontal strip. When width < height, pad the width out to
+        // 3x the height around the same center x so the rect becomes a
+        // wide band rather than a square or tall box.
         guard rect.width < rect.height else { return rect }
-        let extra = rect.height - rect.width
+        let newWidth = rect.height * 3
+        let extra = newWidth - rect.width
         return CGRect(
             x: rect.minX - extra / 2,
             y: rect.minY,
-            width: rect.height,
+            width: newWidth,
             height: rect.height
         )
     }
