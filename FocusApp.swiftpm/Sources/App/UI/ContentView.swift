@@ -31,9 +31,10 @@ struct ContentView: View {
                         }
                     }
                     ToolbarItem(placement: .primaryAction) {
-                        ImageImporter { url, name in
-                            viewModel.load(url: url, name: name)
-                        }
+                        ImageImporter(
+                            onPick: { url, name in viewModel.load(url: url, name: name) },
+                            onError: { message in viewModel.errorMessage = message }
+                        )
                     }
                 }
                 .sheet(item: $exportedImage) { item in

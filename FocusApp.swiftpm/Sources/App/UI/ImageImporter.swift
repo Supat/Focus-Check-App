@@ -8,6 +8,9 @@ struct ImageImporter: View {
     /// filename from `NSItemProvider.suggestedName` for library picks; the
     /// original `url.lastPathComponent` for file imports).
     let onPick: (URL, String) -> Void
+    /// Surface failures back to the caller (view model) so the user sees
+    /// why a pick didn't land instead of the picker silently doing nothing.
+    let onError: (String) -> Void
 
     @State private var showingPhotosPicker = false
     @State private var showingFileImporter = false
@@ -34,12 +37,18 @@ struct ImageImporter: View {
             }
         }
         .sheet(isPresented: $showingPhotosPicker) {
-            PHPickerSheet(isPresented: $showingPhotosPicker) { url, name in
-                isLoading = false
-                onPick(url, name)
-            } onStart: {
-                isLoading = true
-            }
+            PHPickerSheet(
+                isPresented: $showingPhotosPicker,
+                onPick: { url, name in
+                    isLoading = false
+                    onPick(url, name)
+                },
+                onStart: { isLoading = true },
+                onError: { message in
+                    isLoading = false
+                    onError(message)
+                }
+            )
         }
         .fileImporter(
             isPresented: $showingFileImporter,
@@ -49,25 +58,30 @@ struct ImageImporter: View {
             switch result {
             case .success(let urls):
                 if let url = urls.first { deliver(url: url, fromScoped: true) }
-            case .failure:
-                break
+            case .failure(let error):
+                onError("Couldn't open file picker: \(error.localizedDescription)")
             }
         }
     }
 
     private func deliver(url: URL, fromScoped: Bool) {
-        // Security-scoped URLs from .fileImporter need explicit start/stop. We copy into a
-        // tmp file so the downstream analyzer doesn't have to hold the scope open.
-        let didStart = fromScoped ? url.startAccessingSecurityScopedResource() : false
+        // `startAccessingSecurityScopedResource` returns false for URLs that
+        // don't need scoped access (common on iOS + some macOS paths). Treat
+        // that as "no scope to juggle" and try the read anyway — failing
+        // early here would drop legitimate picks. Only stop access if we
+        // actually started it.
+        let didStart = fromScoped && url.startAccessingSecurityScopedResource()
         defer { if didStart { url.stopAccessingSecurityScopedResource() } }
+
         do {
+            let ext = url.pathExtension.isEmpty ? "img" : url.pathExtension
             let tmp = FileManager.default.temporaryDirectory
                 .appendingPathComponent(UUID().uuidString)
-                .appendingPathExtension(url.pathExtension)
+                .appendingPathExtension(ext)
             try FileManager.default.copyItem(at: url, to: tmp)
             onPick(tmp, url.lastPathComponent)
         } catch {
-            // swallow
+            onError("Couldn't read “\(url.lastPathComponent)”: \(error.localizedDescription)")
         }
     }
 }
@@ -79,6 +93,7 @@ private struct PHPickerSheet: UIViewControllerRepresentable {
     @Binding var isPresented: Bool
     let onPick: (URL, String) -> Void
     let onStart: () -> Void
+    let onError: (String) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -120,7 +135,13 @@ private struct PHPickerSheet: UIViewControllerRepresentable {
             let suggested = result.itemProvider.suggestedName
             let onPick = parent.onPick
 
-            result.itemProvider.loadFileRepresentation(forTypeIdentifier: uti) { tempURL, _ in
+            result.itemProvider.loadFileRepresentation(forTypeIdentifier: uti) { tempURL, error in
+                if let error {
+                    Task { @MainActor in
+                        parent.onError("Couldn't load photo: \(error.localizedDescription)")
+                    }
+                    return
+                }
                 guard let tempURL else { return }
                 do {
                     // URL.pathExtension is a non-optional String ("" when absent),
