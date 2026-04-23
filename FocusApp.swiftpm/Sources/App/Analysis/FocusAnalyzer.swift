@@ -75,6 +75,9 @@ actor FocusAnalyzer {
         /// the debug label overlay; compositing paths use the aggregated
         /// `nudityLevels` instead.
         var nudityDetections: [NudityDetection] = []
+        /// CLIP zero-shot context matches, sorted highest-similarity
+        /// first. Empty when the CLIP bundle isn't installed.
+        var clipMatches: [CLIPMatch] = []
     }
 
     private let device: MTLDevice
@@ -84,9 +87,11 @@ actor FocusAnalyzer {
     private let motionBlur: MotionBlurDetector
     private let sensitiveContent = SensitiveContentChecker()
     private let nudityDetector = NudityDetector()
+    private let clipScorer = CLIPScorer()
     private let depthInstaller = ModelArchiveInstaller(.depthAnything)
     private let nsfwInstaller = ModelArchiveInstaller(.nsfw)
     private let nudenetInstaller = ModelArchiveInstaller(.nudenet)
+    private let clipInstaller = ModelArchiveInstaller(.clip)
 
     private var source: CIImage?
 
@@ -222,6 +227,17 @@ actor FocusAnalyzer {
         try await nudenetInstaller.install(progress: progress)
     }
 
+    /// True when the CLIP bundle (image encoder + prompt embeddings) is
+    /// installed on disk.
+    var isCLIPInstalled: Bool { ModelArchive.clip.isInstalled() }
+
+    /// Download + install the CLIP image-encoder + prompt-embeddings
+    /// bundle. Uses the same runtime-download pattern as the other
+    /// models; see `ModelArchive.clip` for the expected ZIP layout.
+    func installCLIPModel(progress: @Sendable @escaping (Double) -> Void) async throws {
+        try await clipInstaller.install(progress: progress)
+    }
+
     /// Eagerly compile the installed Core ML models so the first analyze
     /// after launch doesn't pay the ~1–3 s compile cost. Safe to call
     /// from a background task once the app is idle. No-op for models
@@ -229,6 +245,7 @@ actor FocusAnalyzer {
     func prewarmModels() {
         _ = depthEstimator()
         _ = nudityDetector.warm()
+        _ = clipScorer.warm()
     }
 
     /// Everything analyze() computes that doesn't depend on the chosen
@@ -242,6 +259,7 @@ actor FocusAnalyzer {
         var sensitive: SensitiveContentResult?
         var vision: VisionResults
         var nudity: NudityAnalysis
+        var clipMatches: [CLIPMatch]
     }
     private var cachedNonMode: NonModeResults?
 
@@ -271,6 +289,10 @@ actor FocusAnalyzer {
             let nudity = nudityDetector.analyze(
                 image: source, bodies: vision.bodies, ciContext: ciContext
             )
+            // Zero-shot context scoring via CLIP. Returns [] when the
+            // model archive isn't installed so downstream UI just hides
+            // the Context badge.
+            let clipMatches = clipScorer.score(image: source, ciContext: ciContext)
             let sensitive = await sensitiveFuture
 
             let computed = NonModeResults(
@@ -278,7 +300,8 @@ actor FocusAnalyzer {
                 motionOverlay: motionOverlay,
                 sensitive: sensitive,
                 vision: vision,
-                nudity: nudity
+                nudity: nudity,
+                clipMatches: clipMatches
             )
             cachedNonMode = computed
             nonMode = computed
@@ -321,6 +344,7 @@ actor FocusAnalyzer {
         let isSensitive = nonMode.sensitive?.isSensitive
         let sensitiveLabel = nonMode.sensitive?.topLabel
         let sensitiveConfidence = nonMode.sensitive?.confidence
+        let clipMatches = nonMode.clipMatches
 
         return Overlays(
             sharpness: sharpness,
@@ -339,7 +363,8 @@ actor FocusAnalyzer {
             personMask: vision.personMask,
             nudityLevels: nudityLevels,
             nudityGenders: nudityGenders,
-            nudityDetections: nudityDetections
+            nudityDetections: nudityDetections,
+            clipMatches: clipMatches
         )
     }
 

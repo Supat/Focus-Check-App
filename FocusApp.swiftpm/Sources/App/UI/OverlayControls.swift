@@ -80,6 +80,7 @@ struct OverlayControls: View {
             mosaicToggleRow
             nsfwInstallRow
             nudenetInstallRow
+            clipInstallRow
         }
         #if os(iOS)
         .onPencilSqueeze { phase in
@@ -336,6 +337,54 @@ struct OverlayControls: View {
                     .lineLimit(2)
                 Spacer()
                 Button("Retry") { viewModel.downloadNudeNetModel() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+        }
+    }
+
+    /// CLIP context-scorer install row. Same shape as the other three
+    /// install rows. Unconditional — CLIP is additive to every other
+    /// signal in the pipeline, whether or not SCA / NSFW / NudeNet are
+    /// active.
+    @ViewBuilder
+    private var clipInstallRow: some View {
+        switch viewModel.clipInstall {
+        case .installed:
+            EmptyView()
+
+        case .notInstalled:
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.down.circle")
+                    .foregroundStyle(.secondary)
+                Text("Context scorer (CLIP) not installed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Download") { viewModel.downloadCLIPModel() }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+            }
+
+        case .downloading(let progress):
+            HStack(spacing: 8) {
+                ProgressView(value: progress)
+                Text("\(Int(progress * 100))%")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44, alignment: .trailing)
+            }
+
+        case .failed(let message):
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+                Text(message)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                Spacer()
+                Button("Retry") { viewModel.downloadCLIPModel() }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
             }

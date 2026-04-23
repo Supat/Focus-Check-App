@@ -6,8 +6,29 @@ import ZIPFoundation
 /// fetch — the pair together is enough to install, query, or uninstall a
 /// model without caring about which model it is.
 struct ModelArchive: Sendable {
+    /// How the installer interprets the extracted ZIP contents.
+    enum Kind: Sendable {
+        /// ZIP contains a single `.mlmodelc` directory at the root (or
+        /// one level deep). Only that directory is moved to the install
+        /// location — extras are discarded. Default for single-model
+        /// archives (depth, NSFW, NudeNet).
+        case mlmodelc
+        /// ZIP contains a whole directory tree — an `.mlmodelc` plus
+        /// sibling files (e.g. a prompt-embedding JSON for CLIP). The
+        /// entire unpacked tree is moved to the install location so
+        /// callers can reference any member by name.
+        case bundle
+    }
+
     let directoryName: String
     let sourceURL: URL
+    let kind: Kind
+
+    init(directoryName: String, sourceURL: URL, kind: Kind = .mlmodelc) {
+        self.directoryName = directoryName
+        self.sourceURL = sourceURL
+        self.kind = kind
+    }
 
     /// Depth Anything v2 Small (F16) — Apple's Core ML release. Fetched
     /// on demand so the 50 MB `.mlmodelc` doesn't inflate the git repo.
@@ -42,6 +63,23 @@ struct ModelArchive: Sendable {
         )!
     )
 
+    /// CLIP image encoder + pre-computed text-prompt embeddings for
+    /// context-aware sensitive-content scoring. The ZIP at the tag
+    /// below is expected to contain two siblings:
+    ///   - `CLIPImageEncoder.mlmodelc/` — standard Core ML image encoder
+    ///     (OpenAI CLIP ViT-B/32 works; outputs a 512-d image embedding).
+    ///   - `clip-prompts.json` — array of `{prompt: String, embedding:
+    ///     [Float]}` records, embeddings normalized and produced by the
+    ///     *matching* text encoder at conversion time.
+    /// The installer uses `kind: .bundle` to keep both files together.
+    static let clip = ModelArchive(
+        directoryName: "CLIP",
+        sourceURL: URL(string:
+            "https://github.com/Supat/Focus-Check-App/releases/download/clip-model-v1/CLIP.zip"
+        )!,
+        kind: .bundle
+    )
+
     /// Persistent install path: `Application Support/<directoryName>`.
     /// Application Support is user-data, not purged on low-disk like Caches.
     func installedURL() throws -> URL {
@@ -54,7 +92,7 @@ struct ModelArchive: Sendable {
         return appSupport.appendingPathComponent(directoryName, isDirectory: true)
     }
 
-    /// True when the unpacked `.mlmodelc` directory exists on disk.
+    /// True when the unpacked install directory exists on disk.
     func isInstalled() -> Bool {
         guard let url = try? installedURL() else { return false }
         return FileManager.default.fileExists(atPath: url.path)
@@ -88,8 +126,20 @@ actor ModelArchiveInstaller {
         defer { try? FileManager.default.removeItem(at: scratch) }
         try FileManager.default.unzipItem(at: tempZIP, to: scratch)
 
-        guard let extracted = Self.locateMLModelC(in: scratch) else {
-            throw AnalysisError.modelLoadFailed("ZIP does not contain a .mlmodelc directory.")
+        let source: URL
+        switch archive.kind {
+        case .mlmodelc:
+            guard let mlmodelc = Self.locateMLModelC(in: scratch) else {
+                throw AnalysisError.modelLoadFailed("ZIP does not contain a .mlmodelc directory.")
+            }
+            source = mlmodelc
+        case .bundle:
+            // Bundle archives may either put the contents at the root
+            // (scratch/CLIPImageEncoder.mlmodelc + scratch/prompts.json)
+            // or one level down (scratch/CLIP/...). Collapse the single-
+            // top-dir case so the caller's install path always contains
+            // the files directly instead of an extra wrapping layer.
+            source = Self.collapseSingleRootDirectory(in: scratch) ?? scratch
         }
 
         let dest = try archive.installedURL()
@@ -98,9 +148,25 @@ actor ModelArchiveInstaller {
         }
         try FileManager.default.createDirectory(at: dest.deletingLastPathComponent(),
                                                 withIntermediateDirectories: true)
-        try FileManager.default.moveItem(at: extracted, to: dest)
+        try FileManager.default.moveItem(at: source, to: dest)
 
         progress(1.0)
+    }
+
+    /// If `root` contains exactly one top-level directory, return that
+    /// directory so the caller moves its contents to the install path
+    /// without an extra wrapping layer. Otherwise return nil.
+    private static func collapseSingleRootDirectory(in root: URL) -> URL? {
+        let entries = (try? FileManager.default.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: [.isDirectoryKey]
+        )) ?? []
+        let visible = entries.filter { !$0.lastPathComponent.hasPrefix(".") }
+        guard visible.count == 1,
+              let only = visible.first,
+              only.hasDirectoryPath,
+              only.pathExtension != "mlmodelc"
+        else { return nil }
+        return only
     }
 
     /// Remove the installed model. Useful for a "re-download" UX or tests.

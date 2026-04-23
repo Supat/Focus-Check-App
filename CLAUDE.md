@@ -128,6 +128,23 @@ inputs and skips any body whose level falls below the gate, so clothed
 subjects in a mixed scene aren't mosaiced alongside the flagged ones.
 Gate is user-controllable once the model is installed.
 
+### Context scoring (CLIP, optional)
+Fourth tier, complements the anatomy-centric detectors with
+scene/context understanding: `CLIPScorer` runs a downloaded CLIP
+image encoder once per analyze, then computes cosine similarity
+against a set of pre-embedded text prompts shipped alongside the
+model. Top match is surfaced as a "Context" badge; the scorer runs
+inside the non-mode-dependent cache so mode switches don't re-run it.
+
+- Model: OpenAI CLIP ViT-B/32 (Core ML, image-encoder only; ~150 MB F16)
+- Archive layout: `CLIP.zip` containing both `CLIPImageEncoder.mlmodelc`
+  and `clip-prompts.json` (prompt + matching text-encoder embedding).
+  `ModelArchive.clip` uses `kind: .bundle` so the installer moves the
+  whole tree instead of just the `.mlmodelc`.
+- Prompts are whatever the maintainer chose at export time — typical
+  set mixes nudity / scene / safe-art / medical / minor-presence
+  anchors so the top match functions as a coarse context label.
+
 ### Vision-derived regions
 Run in one consolidated `VNImageRequestHandler.perform([...])` pass so the
 CGImage decode and internal pyramid are shared:
@@ -286,6 +303,7 @@ struct ModelArchive {
 - `ModelArchive.depthAnything` → `depth-model-v1` release tag
 - `ModelArchive.nsfw` → `nsfw-model-v1` release tag
 - `ModelArchive.nudenet` → `nudenet-model-v1` release tag (per-subject detector)
+- `ModelArchive.clip` → `clip-model-v1` release tag (context scorer, bundle)
 
 Maintainer workflow (one-time, requires a Mac):
 
@@ -303,6 +321,20 @@ curl -L -o NSFW.mlmodel \
 xcrun coremlcompiler compile NSFW.mlmodel /tmp/
 ditto -c -k --sequesterRsrc --keepParent /tmp/NSFW.mlmodelc NSFW.mlmodelc.zip
 gh release upload nsfw-model-v1 NSFW.mlmodelc.zip
+
+# CLIP context scorer — two-stage: export the image encoder + run the
+# text encoder once to produce prompt embeddings, then ZIP both into
+# the same archive.
+python3 export_clip_image_encoder.py    # -> CLIPImageEncoder.mlpackage
+python3 export_clip_prompt_embeddings.py \
+        --prompts prompts.txt \
+        --out     clip-prompts.json     # pre-normalized [{prompt, embedding}]
+xcrun coremlcompiler compile CLIPImageEncoder.mlpackage /tmp/
+mkdir -p /tmp/CLIP
+mv /tmp/CLIPImageEncoder.mlmodelc /tmp/CLIP/
+cp clip-prompts.json                    /tmp/CLIP/
+ditto -c -k --sequesterRsrc --keepParent /tmp/CLIP CLIP.zip
+gh release upload clip-model-v1 CLIP.zip
 ```
 
 `OverlayControls` renders a dedicated install/progress/retry row for

@@ -154,6 +154,7 @@ struct ContentView: View {
                     exposureBadge
                     motionBlurBadge
                     nudeSubjectsBadge
+                    contextBadge
                 }
                 .padding([.leading, .bottom], 12)
             }
@@ -405,6 +406,33 @@ struct ContentView: View {
             width: max(panMinX, min(panMaxX, pan.width)),
             height: max(panMinY, min(panMaxY, pan.height))
         )
+    }
+
+    /// CLIP zero-shot top context match. Shown as a tag icon + the
+    /// prompt's display label + its similarity percent, so the viewer
+    /// can see what the scene classifier thinks this image is about
+    /// ("a photograph of a person in a bedroom" 34 %). Hidden when the
+    /// CLIP bundle isn't installed or the classifier returned nothing.
+    @ViewBuilder
+    private var contextBadge: some View {
+        if let top = viewModel.clipMatches.first,
+           viewModel.sourceImage != nil,
+           !viewModel.overlayHidden {
+            HStack(spacing: 6) {
+                Image(systemName: "sparkle.magnifyingglass")
+                Text(top.prompt)
+                    .font(.caption)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: 240, alignment: .leading)
+                Text("\(Int((top.similarity * 100).rounded()))%")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .liquidBadgeBackground(in: Capsule())
+        }
     }
 
     /// Per-subject counts from NudeNet, split by level so the user can

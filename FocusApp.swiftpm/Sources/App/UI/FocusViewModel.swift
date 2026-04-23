@@ -194,6 +194,10 @@ final class FocusViewModel: ObservableObject {
     /// Raw NudeNet per-part detections. Only consumed by the optional
     /// label overlay; mosaic pipeline uses `nudityLevels` instead.
     @Published var nudityDetections: [NudityDetection] = []
+    /// CLIP zero-shot context matches for the current image, sorted
+    /// highest-similarity first. Empty when the CLIP bundle isn't
+    /// installed.
+    @Published var clipMatches: [CLIPMatch] = []
     /// User toggle: draw NudeNet detection boxes + class labels on top
     /// of the image. Hidden by default so most users don't see the raw
     /// detector output.
@@ -218,6 +222,8 @@ final class FocusViewModel: ObservableObject {
     @Published var nsfwInstall: DepthInstallState = .notInstalled
     /// Install state for the NudeNet per-subject detector.
     @Published var nudenetInstall: DepthInstallState = .notInstalled
+    /// Install state for the CLIP image encoder + prompt-embeddings bundle.
+    @Published var clipInstall: DepthInstallState = .notInstalled
     @Published var isAnalyzing: Bool = false
     @Published var errorMessage: String?
     @Published var depthAvailable: Bool = false
@@ -228,6 +234,7 @@ final class FocusViewModel: ObservableObject {
     private var installTask: Task<Void, Never>?
     private var nsfwInstallTask: Task<Void, Never>?
     private var nudenetInstallTask: Task<Void, Never>?
+    private var clipInstallTask: Task<Void, Never>?
 
     init() {
         self.analyzer = FocusAnalyzer()
@@ -242,11 +249,13 @@ final class FocusViewModel: ObservableObject {
             let depth = await analyzer.isDepthAvailable
             let nsfwInstalled = await analyzer.isNSFWModelInstalled
             let nudenetInstalled = await analyzer.isNudeNetInstalled
+            let clipInstalled = await analyzer.isCLIPInstalled
             await MainActor.run { [weak self] in
                 self?.depthAvailable = depth
                 self?.depthInstall = depth ? .installed : .notInstalled
                 self?.nsfwInstall = nsfwInstalled ? .installed : .notInstalled
                 self?.nudenetInstall = nudenetInstalled ? .installed : .notInstalled
+                self?.clipInstall = clipInstalled ? .installed : .notInstalled
             }
         }
         // Pre-compile installed Core ML models in the background after
@@ -296,6 +305,32 @@ final class FocusViewModel: ObservableObject {
                 }
             }
             await MainActor.run { [weak self] in self?.nsfwInstallTask = nil }
+        }
+    }
+
+    /// Download the CLIP bundle (image encoder + prompt embeddings).
+    /// Mirrors the other model-install flows so the UI can reuse the
+    /// same install-state row.
+    func downloadCLIPModel() {
+        guard clipInstallTask == nil else { return }
+        clipInstall = .downloading(progress: 0)
+        let analyzer = self.analyzer
+        clipInstallTask = Task { [weak self] in
+            do {
+                try await analyzer.installCLIPModel { [weak self] p in
+                    Task { @MainActor [weak self] in
+                        self?.clipInstall = .downloading(progress: p)
+                    }
+                }
+                await MainActor.run { [weak self] in
+                    self?.clipInstall = .installed
+                }
+            } catch {
+                await MainActor.run { [weak self] in
+                    self?.clipInstall = .failed(error.localizedDescription)
+                }
+            }
+            await MainActor.run { [weak self] in self?.clipInstallTask = nil }
         }
     }
 
@@ -378,6 +413,7 @@ final class FocusViewModel: ObservableObject {
         nudityLevels = []
         nudityGenders = []
         nudityDetections = []
+        clipMatches = []
         exposureInfo = ExposureInfo.read(from: url)
         sourceName = name
         refreshSensitiveContentAvailability()
@@ -414,6 +450,7 @@ final class FocusViewModel: ObservableObject {
                     self?.nudityLevels = overlays.nudityLevels
                     self?.nudityGenders = overlays.nudityGenders
                     self?.nudityDetections = overlays.nudityDetections
+                    self?.clipMatches = overlays.clipMatches
                     self?.isAnalyzing = false
                     print("[ViewModel] sourceImage set, isAnalyzing=false")
                 }
@@ -453,6 +490,7 @@ final class FocusViewModel: ObservableObject {
         nudityLevels = []
         nudityGenders = []
         nudityDetections = []
+        clipMatches = []
         exposureInfo = nil
         errorMessage = nil
         isAnalyzing = false
@@ -536,6 +574,7 @@ final class FocusViewModel: ObservableObject {
                     self?.nudityLevels = overlays.nudityLevels
                     self?.nudityGenders = overlays.nudityGenders
                     self?.nudityDetections = overlays.nudityDetections
+                    self?.clipMatches = overlays.clipMatches
                     self?.isAnalyzing = false
                 }
             } catch is CancellationError {
