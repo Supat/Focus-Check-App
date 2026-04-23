@@ -127,6 +127,12 @@ struct ContentView: View {
                             nudityLabelOverlay(in: geo.size)
                             nudeSubjectHeadBadges(in: geo.size)
                         }
+                        // Contain any zoomed overlays (label boxes, head
+                        // badges) to the image area — without this, a
+                        // body rect mapped through the 2.5x zoom can
+                        // place a badge above the viewport and paint
+                        // over the toolbar.
+                        .clipped()
                         .onChange(of: viewModel.zoomScale) { _, newScale in
                             // Re-seed the drag baseline any time the zoom
                             // toggles — otherwise the next drag picks up
