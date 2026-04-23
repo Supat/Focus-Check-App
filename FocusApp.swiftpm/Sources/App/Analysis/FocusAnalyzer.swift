@@ -192,6 +192,10 @@ actor FocusAnalyzer {
             image = decoded
         }
         self.source = image
+        // Invalidate the non-mode cache — Vision / NudeNet / motion
+        // blur / sensitive content are all bound to this specific
+        // source. analyze() will repopulate on the next call.
+        cachedNonMode = nil
         return image
     }
 
@@ -227,47 +231,63 @@ actor FocusAnalyzer {
         _ = nudityDetector.warm()
     }
 
+    /// Everything analyze() computes that doesn't depend on the chosen
+    /// AnalysisMode. Cached on first full run so mode switches
+    /// (Sharpness ↔ Depth ↔ Hybrid) only recompute the sharpness /
+    /// depth stage instead of redoing Vision, NudeNet, motion blur,
+    /// and the sensitive-content classifier.
+    private struct NonModeResults {
+        var motion: MotionBlurReport?
+        var motionOverlay: CIImage?
+        var sensitive: SensitiveContentResult?
+        var vision: VisionResults
+        var nudity: NudityAnalysis
+    }
+    private var cachedNonMode: NonModeResults?
+
     /// Run the analysis pipeline for the given mode. Returns display-ready overlay images
     /// already upscaled to the source's extent.
     func analyze(mode: AnalysisMode) async throws -> Overlays {
         guard let source else { throw AnalysisError.imageDecodeFailed }
         try Task.checkCancellation()
 
+        // Non-mode-dependent pipeline — cached across mode changes on the
+        // same source so `reanalyze()` short-circuits to just sharpness /
+        // depth. Invalidated on every `loadImage`.
+        let nonMode: NonModeResults
+        if let cached = cachedNonMode {
+            nonMode = cached
+        } else {
+            // Classifier runs on an independent compute path (SCA or the
+            // NSFW MLModel); kick it off early so its 100–300 ms latency
+            // overlaps with the rest of the non-mode pipeline.
+            async let sensitiveFuture = sensitiveContent.check(image: source, ciContext: ciContext)
+
+            let motionReport = motionBlur.detect(in: source)
+            let motionOverlay = motionBlur.detectMap(in: source).flatMap {
+                upscale(image: $0, toExtentOf: source)
+            }
+            let vision = runVision(in: source)
+            let nudity = nudityDetector.analyze(
+                image: source, bodies: vision.bodies, ciContext: ciContext
+            )
+            let sensitive = await sensitiveFuture
+
+            let computed = NonModeResults(
+                motion: motionReport,
+                motionOverlay: motionOverlay,
+                sensitive: sensitive,
+                vision: vision,
+                nudity: nudity
+            )
+            cachedNonMode = computed
+            nonMode = computed
+        }
+        try Task.checkCancellation()
+
         var sharpness: CIImage?
         var depth: CIImage?
         var focalPlane: Float?
-
-        // Kick the sensitive-content classifier off as a concurrent task —
-        // it runs through SCA or NSFW MLModel on a compute path that's
-        // independent of Vision / MPS / CIContext. Awaiting it at the end
-        // hides its ~100–300 ms latency behind the rest of the pipeline.
-        async let sensitiveFuture = sensitiveContent.check(image: source, ciContext: ciContext)
-
-        // Motion blur is cheap (~10 ms) and independent of the selected mode —
-        // run it every time so the info badge stays accurate after mode changes.
-        let motionReport = motionBlur.detect(in: source)
-
-        // Per-patch motion blur map (~100 ms). Upscaled so downstream compositing
-        // treats it the same as sharpness/depth overlays.
-        let motionOverlay = motionBlur.detectMap(in: source).flatMap {
-            upscale(image: $0, toExtentOf: source)
-        }
-
-        // Face / body / pose detection — consolidated into a single Vision
-        // pass so the source only gets decoded to a CGImage once and the
-        // three requests share the handler's image pyramid.
-        let vision = runVision(in: source)
-
-        // Per-subject nudity levels from NudeNet, keyed by `vision.bodies`
-        // index. Empty when the NudeNet model isn't installed — downstream
-        // UI treats absent and .none distinctly. Raw detections are kept
-        // so the optional label overlay can draw the boxes.
-        let nudity = nudityDetector.analyze(
-            image: source, bodies: vision.bodies, ciContext: ciContext
-        )
-        let nudityLevels = nudity.levels
-        let nudityGenders = nudity.genders
-        let nudityDetections = nudity.detections
 
         switch mode {
         case .sharpness:
@@ -291,14 +311,16 @@ actor FocusAnalyzer {
             }
         }
 
-        // Collect the classifier result that we kicked off at the top of
-        // analyze — by now Vision / NudeNet / sharpness / depth have all
-        // finished, so awaiting here doesn't add wall time when the
-        // classifier finished first.
-        let sensitiveResult = await sensitiveFuture
-        let isSensitive = sensitiveResult?.isSensitive
-        let sensitiveLabel = sensitiveResult?.topLabel
-        let sensitiveConfidence = sensitiveResult?.confidence
+        let vision = nonMode.vision
+        let nudity = nonMode.nudity
+        let nudityLevels = nudity.levels
+        let nudityGenders = nudity.genders
+        let nudityDetections = nudity.detections
+        let motionReport = nonMode.motion
+        let motionOverlay = nonMode.motionOverlay
+        let isSensitive = nonMode.sensitive?.isSensitive
+        let sensitiveLabel = nonMode.sensitive?.topLabel
+        let sensitiveConfidence = nonMode.sensitive?.confidence
 
         return Overlays(
             sharpness: sharpness,
