@@ -564,11 +564,9 @@ final class FocusRenderer {
         return result.cropped(to: source.extent)
     }
 
-    /// Pixelate the source, then feather the silhouette mask a touch (erodes
-    /// the 1-pixel Vision segmentation boundary so no original-resolution
-    /// skin slips through at the outline) and composite the pixelated image
-    /// through it. Block size matches the .body rect mosaic so switching
-    /// back to the bbox fallback isn't jarring.
+    /// Pixelate the source and composite it through Vision's silhouette
+    /// mask. Block size matches the .body rect mosaic so switching back to
+    /// the bbox fallback isn't jarring.
     private static func silhouetteMosaic(source: CIImage, mask: CIImage) -> CIImage {
         let pixelate = CIFilter.pixellate()
         pixelate.inputImage = source.clampedToExtent()
@@ -577,30 +575,10 @@ final class FocusRenderer {
         pixelate.center = CGPoint(x: source.extent.midX, y: source.extent.midY)
         let pixelated = (pixelate.outputImage ?? source).cropped(to: source.extent)
 
-        // Soft blur → hard step. Vision's .balanced mask has jagged
-        // boundaries at source resolution; a small blur followed by a
-        // steep matrix contrast pushes the transition into a clean
-        // silhouette edge without hand-tuning the mask values.
-        let blur = CIFilter.gaussianBlur()
-        blur.inputImage = mask.clampedToExtent()
-        blur.radius = Float(longerSide / 400)
-        let softened = (blur.outputImage ?? mask).cropped(to: source.extent)
-
-        let steep = softened.applyingFilter("CIColorMatrix", parameters: [
-            "inputRVector": CIVector(x: 6, y: 0, z: 0, w: 0),
-            "inputGVector": CIVector(x: 6, y: 0, z: 0, w: 0),
-            "inputBVector": CIVector(x: 6, y: 0, z: 0, w: 0),
-            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1),
-            "inputBiasVector": CIVector(x: -2.4, y: -2.4, z: -2.4, w: 0)
-        ]).applyingFilter("CIColorClamp", parameters: [
-            "inputMinComponents": CIVector(x: 0, y: 0, z: 0, w: 0),
-            "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1)
-        ])
-
         let blend = CIFilter.blendWithMask()
         blend.inputImage = pixelated
         blend.backgroundImage = source
-        blend.maskImage = steep
+        blend.maskImage = mask
         return (blend.outputImage ?? source).cropped(to: source.extent)
     }
 
