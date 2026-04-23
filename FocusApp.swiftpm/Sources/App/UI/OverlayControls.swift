@@ -78,7 +78,6 @@ struct OverlayControls: View {
 
             depthInstallRow
             mosaicToggleRow
-            nudityGateRow
             nsfwInstallRow
             nudenetInstallRow
         }
@@ -115,6 +114,23 @@ struct OverlayControls: View {
 
         HStack(spacing: 8) {
             Spacer()
+            // Per-subject gate leads the row — only drawn once NudeNet is
+            // installed, otherwise the mosaic cluster stays at the left
+            // edge as before.
+            if viewModel.nudenetInstall == .installed {
+                Label("Per subject", systemImage: "person.crop.square.filled.and.at.rectangle")
+                    .font(.caption)
+                Picker("Per-subject gate", selection: $viewModel.nudityGate) {
+                    Text("All").tag(NudityLevel.none)
+                    Text("Covered+").tag(NudityLevel.covered)
+                    Text("Partial+").tag(NudityLevel.partial)
+                    Text("Nude").tag(NudityLevel.nude)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .controlSize(.small)
+                .frame(width: 280)
+            }
             Label("Mosaic", systemImage: "eye.slash")
                 .font(.caption)
             Picker("Mosaic mode", selection: $viewModel.mosaicMode) {
@@ -233,31 +249,6 @@ struct OverlayControls: View {
                         .buttonStyle(.bordered)
                         .controlSize(.small)
                 }
-            }
-        }
-    }
-
-    /// Per-subject gate — choose the minimum NudeNet level that triggers
-    /// a mosaic. Only shown once the NudeNet model is installed; until
-    /// then the app behaves as before (every body is mosaiced when the
-    /// mosaic is on).
-    @ViewBuilder
-    private var nudityGateRow: some View {
-        if viewModel.nudenetInstall == .installed {
-            HStack(spacing: 8) {
-                Spacer()
-                Label("Per subject", systemImage: "person.crop.square.filled.and.at.rectangle")
-                    .font(.caption)
-                Picker("Per-subject gate", selection: $viewModel.nudityGate) {
-                    Text("All").tag(NudityLevel.none)
-                    Text("Covered+").tag(NudityLevel.covered)
-                    Text("Partial+").tag(NudityLevel.partial)
-                    Text("Nude").tag(NudityLevel.nude)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .controlSize(.small)
-                .frame(width: 320)
             }
         }
     }
