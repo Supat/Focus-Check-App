@@ -332,9 +332,30 @@ actor FocusAnalyzer {
             }
         }
 
-        // Full-body rectangles.
+        // Full-body rectangles. VNDetectHumanRectanglesRequest frequently
+        // misses subjects in images where it *should* catch them — we
+        // augment below using pose-derived bounding boxes so NudeNet
+        // has a proper per-subject list.
         for obs in bodyRects.results ?? [] {
             results.bodies.append(Self.denormalize(obs.boundingBox, in: extent))
+        }
+        // Merge in pose-derived bodies that don't overlap an existing
+        // rect — catches subjects the body-rect request dropped. Dedup
+        // uses IoU against the smaller box (≥ 0.3) so tight crops of one
+        // person don't register as two.
+        for obs in bodyPose.results ?? [] {
+            guard let rect = Self.bodyRect(from: obs, in: extent) else { continue }
+            let overlapsExisting = results.bodies.contains { existing in
+                let inter = existing.intersection(rect)
+                guard !inter.isNull else { return false }
+                let interArea = inter.width * inter.height
+                let smallerArea = min(existing.width * existing.height,
+                                      rect.width * rect.height)
+                return smallerArea > 0 && interArea / smallerArea > 0.3
+            }
+            if !overlapsExisting {
+                results.bodies.append(rect)
+            }
         }
 
         // Groin + chest from the shared pose observations. Pair each 2D
@@ -524,6 +545,37 @@ actor FocusAnalyzer {
         let magnitude = sqrt(dx * dx + dz * dz)
         guard magnitude > 0 else { return 0 }
         return CGFloat(abs(dz) / magnitude)
+    }
+
+    /// Derive a full-body bounding rect from whatever joints the pose
+    /// request returned with decent confidence. Used to fill in bodies
+    /// that VNDetectHumanRectanglesRequest missed. A small pad around
+    /// the joint cloud covers clothing beyond the skeleton.
+    private static func bodyRect(from obs: VNHumanBodyPoseObservation,
+                                 in extent: CGRect) -> CGRect? {
+        guard let points = try? obs.recognizedPoints(.all) else { return nil }
+        let valid = points.values.filter { $0.confidence > 0.3 }
+        guard valid.count >= 4 else { return nil }
+
+        var minX: CGFloat = .infinity
+        var minY: CGFloat = .infinity
+        var maxX: CGFloat = -.infinity
+        var maxY: CGFloat = -.infinity
+        for p in valid {
+            minX = min(minX, p.location.x)
+            minY = min(minY, p.location.y)
+            maxX = max(maxX, p.location.x)
+            maxY = max(maxY, p.location.y)
+        }
+        let padX = (maxX - minX) * 0.15
+        let padY = (maxY - minY) * 0.15
+        let normalized = CGRect(
+            x: minX - padX,
+            y: minY - padY,
+            width: (maxX - minX) + 2 * padX,
+            height: (maxY - minY) + 2 * padY
+        )
+        return denormalize(normalized, in: extent)
     }
 
     /// Derive a chest rect from a body-pose observation's shoulder + hip
