@@ -177,6 +177,13 @@ final class FocusViewModel: ObservableObject {
     /// Per-body nudity level from NudeNet, same index as `bodyRectangles`.
     /// Empty when the NudeNet model isn't installed.
     @Published var nudityLevels: [NudityLevel] = []
+    /// Raw NudeNet per-part detections. Only consumed by the optional
+    /// label overlay; mosaic pipeline uses `nudityLevels` instead.
+    @Published var nudityDetections: [NudityDetection] = []
+    /// User toggle: draw NudeNet detection boxes + class labels on top
+    /// of the image. Hidden by default so most users don't see the raw
+    /// detector output.
+    @Published var showNudityLabels: Bool = false
     /// Minimum level that triggers the per-subject mosaic gating. Bodies
     /// whose level is below this are skipped even when the global mosaic
     /// condition is on. `.covered` leaves clothed subjects alone.
@@ -361,6 +368,7 @@ final class FocusViewModel: ObservableObject {
                     self?.chestRectangles = overlays.chestRectangles
                     self?.personMask = overlays.personMask
                     self?.nudityLevels = overlays.nudityLevels
+                    self?.nudityDetections = overlays.nudityDetections
                     self?.isAnalyzing = false
                     print("[ViewModel] sourceImage set, isAnalyzing=false")
                 }
@@ -398,6 +406,7 @@ final class FocusViewModel: ObservableObject {
         chestRectangles = []
         personMask = nil
         nudityLevels = []
+        nudityDetections = []
         exposureInfo = nil
         errorMessage = nil
         isAnalyzing = false
@@ -477,6 +486,7 @@ final class FocusViewModel: ObservableObject {
                     self?.chestRectangles = overlays.chestRectangles
                     self?.personMask = overlays.personMask
                     self?.nudityLevels = overlays.nudityLevels
+                    self?.nudityDetections = overlays.nudityDetections
                     self?.isAnalyzing = false
                 }
             } catch is CancellationError {

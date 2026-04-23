@@ -68,6 +68,10 @@ actor FocusAnalyzer {
         /// when the NudeNet model isn't installed. Callers distinguish
         /// "model absent" (empty) from "model says none" (.none entries).
         var nudityLevels: [NudityLevel] = []
+        /// Raw per-part detections in source-extent coords. Used only by
+        /// the debug label overlay; compositing paths use the aggregated
+        /// `nudityLevels` instead.
+        var nudityDetections: [NudityDetection] = []
     }
 
     private let device: MTLDevice
@@ -226,11 +230,14 @@ actor FocusAnalyzer {
         let vision = runVision(in: source)
 
         // Per-subject nudity levels from NudeNet, keyed by `vision.bodies`
-        // index. Empty array when the NudeNet model isn't installed —
-        // downstream UI treats absent and .none distinctly.
-        let nudityLevels = nudityDetector.levels(
-            for: source, bodies: vision.bodies, ciContext: ciContext
+        // index. Empty when the NudeNet model isn't installed — downstream
+        // UI treats absent and .none distinctly. Raw detections are kept
+        // so the optional label overlay can draw the boxes.
+        let nudity = nudityDetector.analyze(
+            image: source, bodies: vision.bodies, ciContext: ciContext
         )
+        let nudityLevels = nudity.levels
+        let nudityDetections = nudity.detections
 
         switch mode {
         case .sharpness:
@@ -269,7 +276,8 @@ actor FocusAnalyzer {
             eyeBars: vision.eyes,
             chestRectangles: vision.chests,
             personMask: vision.personMask,
-            nudityLevels: nudityLevels
+            nudityLevels: nudityLevels,
+            nudityDetections: nudityDetections
         )
     }
 

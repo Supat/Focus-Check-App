@@ -33,11 +33,22 @@ enum NudityLevel: Int, Comparable, Equatable, Sendable {
     }
 }
 
-/// One NudeNet detection at source-extent coordinates.
-private struct NudityDetection {
+/// One NudeNet detection at source-extent coordinates. Exposed beyond
+/// the detector so the UI can draw per-box overlays when the user
+/// enables the label toggle.
+struct NudityDetection: Hashable, Sendable {
     let rect: CGRect        // In source CIImage extent (Y-up).
     let label: String       // NudeNet class name, e.g. "FEMALE_BREAST_EXPOSED".
     let confidence: Float
+}
+
+/// Combined result of one detection pass: per-subject levels (same
+/// order as the bodies argument) plus the raw per-part detections in
+/// source-extent coordinates. Keeping both in one return value lets
+/// callers skip a second detection run just to get the rectangles.
+struct NudityAnalysis: Sendable {
+    let levels: [NudityLevel]
+    let detections: [NudityDetection]
 }
 
 /// NudeNet v3-style detector. Runs one Core ML inference over the whole
@@ -54,18 +65,25 @@ struct NudityDetector {
     /// True when the NudeNet model is available (installed + loaded).
     var isReady: Bool { classifier != nil }
 
-    /// Run the detector and return one `NudityLevel` per body in `bodies`,
-    /// preserving array order. Returns an empty array when the model is
-    /// unavailable or detection failed — callers should treat that as
-    /// "unknown" rather than "clothed".
-    func levels(for image: CIImage,
-                bodies: [CGRect],
-                ciContext: CIContext) -> [NudityLevel] {
-        guard let classifier else { return [] }
-        guard !bodies.isEmpty else { return [] }
+    /// Run the detector and return per-subject levels plus the raw
+    /// per-part detections (for optional UI overlay). Returns empty
+    /// levels when the model is unavailable or detection failed —
+    /// callers should treat that as "unknown" rather than "clothed".
+    func analyze(image: CIImage,
+                 bodies: [CGRect],
+                 ciContext: CIContext) -> NudityAnalysis {
+        guard let classifier else {
+            return NudityAnalysis(levels: [], detections: [])
+        }
+        guard !bodies.isEmpty else {
+            return NudityAnalysis(levels: [], detections: [])
+        }
         let detections = classifier.detect(in: image, ciContext: ciContext)
         guard !detections.isEmpty else {
-            return Array(repeating: .none, count: bodies.count)
+            return NudityAnalysis(
+                levels: Array(repeating: .none, count: bodies.count),
+                detections: []
+            )
         }
 
         // Bucket detections per body by maximum intersection area —
@@ -74,7 +92,7 @@ struct NudityDetector {
         // "≥ 50 % inside the body box" rule dropped valid detections
         // when the Vision body rect was tight or loose in the wrong
         // direction). Detections with no overlap against any body are
-        // discarded.
+        // still returned for the label overlay.
         var bags: [[NudityDetection]] = Array(repeating: [], count: bodies.count)
         for det in detections {
             var bestIdx: Int? = nil
@@ -92,7 +110,10 @@ struct NudityDetector {
                 bags[idx].append(det)
             }
         }
-        return bags.map(aggregate)
+        return NudityAnalysis(
+            levels: bags.map(aggregate),
+            detections: detections
+        )
     }
 
     /// Map a bag of detections attributed to one subject into a level.

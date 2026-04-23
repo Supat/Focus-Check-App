@@ -154,6 +154,12 @@ struct OverlayControls: View {
         .labelsHidden()
         .controlSize(.small)
         .frame(width: 280)
+        Label("Labels", systemImage: "tag")
+            .font(.caption)
+        Toggle("", isOn: $viewModel.showNudityLabels)
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.small)
     }
 
     /// The mosaic mode picker + enable + force toggles, extracted so the

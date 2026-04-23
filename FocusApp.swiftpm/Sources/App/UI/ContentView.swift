@@ -63,30 +63,33 @@ struct ContentView: View {
                     placeholder
                 } else {
                     GeometryReader { geo in
-                        MetalView(viewModel: viewModel)
-                            .ignoresSafeArea(edges: .horizontal)
-                            .contentShape(Rectangle())
-                            .gesture(
-                                SpatialTapGesture(count: 2)
-                                    .onEnded { event in
-                                        let normalized = CGPoint(
-                                            x: max(0, min(1, event.location.x / geo.size.width)),
-                                            y: max(0, min(1, event.location.y / geo.size.height))
-                                        )
-                                        viewModel.toggleZoom(at: normalized)
+                        ZStack {
+                            MetalView(viewModel: viewModel)
+                                .ignoresSafeArea(edges: .horizontal)
+                                .contentShape(Rectangle())
+                                .gesture(
+                                    SpatialTapGesture(count: 2)
+                                        .onEnded { event in
+                                            let normalized = CGPoint(
+                                                x: max(0, min(1, event.location.x / geo.size.width)),
+                                                y: max(0, min(1, event.location.y / geo.size.height))
+                                            )
+                                            viewModel.toggleZoom(at: normalized)
+                                        }
+                                )
+                                // Press-and-hold hides the overlay so the user can
+                                // compare against the original photo; release
+                                // re-reveals it.
+                                .onLongPressGesture(
+                                    minimumDuration: 0.2,
+                                    maximumDistance: 100,
+                                    perform: {},
+                                    onPressingChanged: { pressing in
+                                        viewModel.overlayHidden = pressing
                                     }
-                            )
-                            // Press-and-hold hides the overlay so the user can
-                            // compare against the original photo; release
-                            // re-reveals it.
-                            .onLongPressGesture(
-                                minimumDuration: 0.2,
-                                maximumDistance: 100,
-                                perform: {},
-                                onPressingChanged: { pressing in
-                                    viewModel.overlayHidden = pressing
-                                }
-                            )
+                                )
+                            nudityLabelOverlay(in: geo.size)
+                        }
                     }
                 }
                 if viewModel.isAnalyzing {
@@ -203,6 +206,84 @@ struct ContentView: View {
             // through the capsule while the coloured text stays legible.
             .background(Color.black.opacity(0.4), in: Capsule())
         }
+    }
+
+    /// Debug-style overlay: draws one outlined rect + text label per
+    /// NudeNet detection on top of the rendered photo. Hidden when the
+    /// user toggles it off, when no detections exist, or during the
+    /// press-and-hold "compare with original" gesture so the original
+    /// photo is visible unadorned. The coordinate math mirrors
+    /// `FocusRenderer.fit` so the boxes track the same aspect-fit +
+    /// zoom transform the Metal view uses.
+    @ViewBuilder
+    private func nudityLabelOverlay(in size: CGSize) -> some View {
+        if viewModel.showNudityLabels,
+           !viewModel.overlayHidden,
+           !viewModel.nudityDetections.isEmpty,
+           let extent = viewModel.sourceImage?.extent,
+           extent.width > 0, extent.height > 0 {
+            ZStack {
+                ForEach(Array(viewModel.nudityDetections.enumerated()), id: \.offset) { _, det in
+                    let r = viewRect(for: det.rect, source: extent, in: size)
+                    Rectangle()
+                        .strokeBorder(Color.yellow, lineWidth: 2)
+                        .frame(width: r.width, height: r.height)
+                        .overlay(alignment: .topLeading) {
+                            Text("\(det.label) \(Int((det.confidence * 100).rounded()))%")
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.black)
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 2)
+                                .background(Color.yellow.opacity(0.9),
+                                            in: RoundedRectangle(cornerRadius: 3))
+                                .fixedSize()
+                                .alignmentGuide(.top) { _ in 14 }
+                        }
+                        .position(x: r.midX, y: r.midY)
+                }
+            }
+            .allowsHitTesting(false)
+        }
+    }
+
+    /// Map a source-extent CIImage rect (Y-up) into a SwiftUI view rect
+    /// (Y-down) that reflects the same aspect-fit + zoom transform the
+    /// Metal renderer applies. Must stay in sync with `FocusRenderer.fit`.
+    private func viewRect(for sourceRect: CGRect,
+                          source: CGRect,
+                          in viewSize: CGSize) -> CGRect {
+        let scale = min(viewSize.width / source.width,
+                        viewSize.height / source.height)
+        let fittedW = source.width * scale
+        let fittedH = source.height * scale
+        let offsetX = (viewSize.width - fittedW) / 2
+        let offsetY = (viewSize.height - fittedH) / 2
+
+        // CIImage Y-up → SwiftUI Y-down, relative to the source origin.
+        let localX = (sourceRect.minX - source.minX) * scale + offsetX
+        let localY = (source.height - (sourceRect.maxY - source.minY)) * scale + offsetY
+        var rect = CGRect(
+            x: localX,
+            y: localY,
+            width: sourceRect.width * scale,
+            height: sourceRect.height * scale
+        )
+
+        // Apply the same zoom transform the Metal view uses. The anchor
+        // is stored in normalized view coordinates with Y-down origin,
+        // so no flip needed here.
+        let zoom = viewModel.zoomScale
+        if zoom > 1.001 {
+            let ax = viewModel.zoomAnchor.x * viewSize.width
+            let ay = viewModel.zoomAnchor.y * viewSize.height
+            rect = CGRect(
+                x: (rect.minX - ax) * zoom + ax,
+                y: (rect.minY - ay) * zoom + ay,
+                width: rect.width * zoom,
+                height: rect.height * zoom
+            )
+        }
+        return rect
     }
 
     /// Per-subject count from NudeNet, shown alongside the exposure and
