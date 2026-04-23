@@ -120,11 +120,11 @@ struct OverlayControls: View {
                 VStack(alignment: .trailing, spacing: 8) {
                     HStack(spacing: 8) {
                         Spacer()
-                        perSubjectCluster
+                        mosaicCluster
                     }
                     HStack(spacing: 8) {
                         Spacer()
-                        mosaicCluster
+                        perSubjectCluster
                     }
                 }
             }
