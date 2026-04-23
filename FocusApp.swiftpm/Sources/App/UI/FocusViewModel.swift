@@ -218,15 +218,19 @@ final class FocusViewModel: ObservableObject {
     init() {
         self.analyzer = FocusAnalyzer()
         let analyzer = self.analyzer
+        // Only query the cheap disk-presence flags at startup. The
+        // SensitiveContentAnalysis probe (`SCSensitivityAnalyzer()`
+        // + `.analysisPolicy`) is deferred — Swift Playgrounds' preview
+        // system was occasionally blowing its 5-second launch budget
+        // while SCA initialized. `refreshSensitiveContentAvailability`
+        // fires on first image load, which is soon enough for the UI.
         Task { [weak self] in
             let depth = await analyzer.isDepthAvailable
-            let sensitive = await analyzer.sensitiveContentAvailability
             let nsfwInstalled = await analyzer.isNSFWModelInstalled
             let nudenetInstalled = await analyzer.isNudeNetInstalled
             await MainActor.run { [weak self] in
                 self?.depthAvailable = depth
                 self?.depthInstall = depth ? .installed : .notInstalled
-                self?.sensitiveContentAvailability = sensitive
                 self?.nsfwInstall = nsfwInstalled ? .installed : .notInstalled
                 self?.nudenetInstall = nudenetInstalled ? .installed : .notInstalled
             }
