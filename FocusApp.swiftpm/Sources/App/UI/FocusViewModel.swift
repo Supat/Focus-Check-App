@@ -238,26 +238,24 @@ final class FocusViewModel: ObservableObject {
 
     init() {
         self.analyzer = FocusAnalyzer()
+        // Resolve the install-state flags synchronously so the UI never
+        // briefly shows a "Download" button for an already-installed
+        // model. `ModelArchive.isInstalled` is a cheap disk check that
+        // doesn't need the actor — calling it through `await analyzer`
+        // creates a race window where the user can re-trigger a
+        // download that may now 404 against a deleted GitHub release,
+        // wiping the perfectly-fine install they already had.
+        let depthInstalled = ModelArchive.depthAnything.isInstalled()
+        let nsfwInstalled = ModelArchive.nsfw.isInstalled()
+        let nudenetInstalled = ModelArchive.nudenet.isInstalled()
+        let clipInstalled = ModelArchive.clip.isInstalled()
+        self.depthAvailable = depthInstalled
+        self.depthInstall = depthInstalled ? .installed : .notInstalled
+        self.nsfwInstall = nsfwInstalled ? .installed : .notInstalled
+        self.nudenetInstall = nudenetInstalled ? .installed : .notInstalled
+        self.clipInstall = clipInstalled ? .installed : .notInstalled
+
         let analyzer = self.analyzer
-        // Only query the cheap disk-presence flags at startup. The
-        // SensitiveContentAnalysis probe (`SCSensitivityAnalyzer()`
-        // + `.analysisPolicy`) is deferred — Swift Playgrounds' preview
-        // system was occasionally blowing its 5-second launch budget
-        // while SCA initialized. `refreshSensitiveContentAvailability`
-        // fires on first image load, which is soon enough for the UI.
-        Task { [weak self] in
-            let depth = await analyzer.isDepthAvailable
-            let nsfwInstalled = await analyzer.isNSFWModelInstalled
-            let nudenetInstalled = await analyzer.isNudeNetInstalled
-            let clipInstalled = await analyzer.isCLIPInstalled
-            await MainActor.run { [weak self] in
-                self?.depthAvailable = depth
-                self?.depthInstall = depth ? .installed : .notInstalled
-                self?.nsfwInstall = nsfwInstalled ? .installed : .notInstalled
-                self?.nudenetInstall = nudenetInstalled ? .installed : .notInstalled
-                self?.clipInstall = clipInstalled ? .installed : .notInstalled
-            }
-        }
         // Pre-compile installed Core ML models in the background after
         // launch so the first analyze doesn't block on cold compile.
         // Utility priority yields to anything the UI is doing; by the
@@ -301,8 +299,17 @@ final class FocusViewModel: ObservableObject {
                     self?.refreshSensitiveContentAvailability()
                 }
             } catch {
+                // Re-downloads can fail (404, network) without touching
+                // the existing on-disk install — the installer wipes
+                // the destination only after the new content has been
+                // unpacked. Preserve `.installed` when the file's
+                // still there so the UI doesn't surface a misleading
+                // failure for a model that's actually working.
+                let stillInstalled = ModelArchive.nsfw.isInstalled()
                 await MainActor.run { [weak self] in
-                    self?.nsfwInstall = .failed(error.localizedDescription)
+                    self?.nsfwInstall = stillInstalled
+                        ? .installed
+                        : .failed(error.localizedDescription)
                 }
             }
             await MainActor.run { [weak self] in self?.nsfwInstallTask = nil }
@@ -327,8 +334,11 @@ final class FocusViewModel: ObservableObject {
                     self?.clipInstall = .installed
                 }
             } catch {
+                let stillInstalled = ModelArchive.clip.isInstalled()
                 await MainActor.run { [weak self] in
-                    self?.clipInstall = .failed(error.localizedDescription)
+                    self?.clipInstall = stillInstalled
+                        ? .installed
+                        : .failed(error.localizedDescription)
                 }
             }
             await MainActor.run { [weak self] in self?.clipInstallTask = nil }
@@ -352,8 +362,11 @@ final class FocusViewModel: ObservableObject {
                     self?.nudenetInstall = .installed
                 }
             } catch {
+                let stillInstalled = ModelArchive.nudenet.isInstalled()
                 await MainActor.run { [weak self] in
-                    self?.nudenetInstall = .failed(error.localizedDescription)
+                    self?.nudenetInstall = stillInstalled
+                        ? .installed
+                        : .failed(error.localizedDescription)
                 }
             }
             await MainActor.run { [weak self] in self?.nudenetInstallTask = nil }
@@ -377,8 +390,14 @@ final class FocusViewModel: ObservableObject {
                     self?.depthInstall = .installed
                 }
             } catch {
+                let stillInstalled = ModelArchive.depthAnything.isInstalled()
                 await MainActor.run { [weak self] in
-                    self?.depthInstall = .failed(error.localizedDescription)
+                    if stillInstalled {
+                        self?.depthAvailable = true
+                        self?.depthInstall = .installed
+                    } else {
+                        self?.depthInstall = .failed(error.localizedDescription)
+                    }
                 }
             }
             await MainActor.run { [weak self] in self?.installTask = nil }
