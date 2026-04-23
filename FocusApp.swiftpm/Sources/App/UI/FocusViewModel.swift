@@ -170,6 +170,10 @@ final class FocusViewModel: ObservableObject {
     @Published var groinRectangles: [CGRect] = []
     @Published var eyeBars: [EyeBar] = []
     @Published var chestRectangles: [CGRect] = []
+    /// Person-silhouette mask stretched to source extent. Populated on
+    /// analyze; consumed by the .body mosaic mode to pixelate along the
+    /// actual outline instead of a loose bounding box.
+    @Published var personMask: CIImage?
     /// User-controlled mosaic toggle. Defaults on — protective default so
     /// sensitive content isn't displayed until the user explicitly opts in.
     @Published var mosaicEnabled: Bool = true
@@ -318,6 +322,7 @@ final class FocusViewModel: ObservableObject {
                     self?.groinRectangles = overlays.groinRectangles
                     self?.eyeBars = overlays.eyeBars
                     self?.chestRectangles = overlays.chestRectangles
+                    self?.personMask = overlays.personMask
                     self?.isAnalyzing = false
                     print("[ViewModel] sourceImage set, isAnalyzing=false")
                 }
@@ -353,6 +358,7 @@ final class FocusViewModel: ObservableObject {
         groinRectangles = []
         eyeBars = []
         chestRectangles = []
+        personMask = nil
         exposureInfo = nil
         errorMessage = nil
         isAnalyzing = false
@@ -382,7 +388,8 @@ final class FocusViewModel: ObservableObject {
             bodies: bodyRectangles,
             groins: groinRectangles,
             eyes: eyeBars,
-            chests: chestRectangles
+            chests: chestRectangles,
+            personMask: personMask
         )
 
         let baseName: String
@@ -427,6 +434,7 @@ final class FocusViewModel: ObservableObject {
                     self?.groinRectangles = overlays.groinRectangles
                     self?.eyeBars = overlays.eyeBars
                     self?.chestRectangles = overlays.chestRectangles
+                    self?.personMask = overlays.personMask
                     self?.isAnalyzing = false
                 }
             } catch is CancellationError {

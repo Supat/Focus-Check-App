@@ -21,6 +21,9 @@ struct FocusCompositeInputs {
     var groins: [CGRect]
     var eyes: [EyeBar]
     var chests: [CGRect]
+    /// Person-silhouette mask stretched to source extent (white = person).
+    /// When present, .body mosaic uses the outline instead of a rectangle.
+    var personMask: CIImage?
 }
 
 /// Composites the source image with a focus overlay each frame for live
@@ -101,7 +104,7 @@ final class FocusRenderer {
                        sharpness: CIImage?, depth: CIImage?, motion: CIImage?,
                        overlayHidden: Bool, mosaic: Bool, mosaicMode: MosaicMode,
                        faces: [CGRect], bodies: [CGRect], groins: [CGRect],
-                       eyes: [EyeBar], chests: [CGRect]) =
+                       eyes: [EyeBar], chests: [CGRect], personMask: CIImage?) =
             MainActor.assumeIsolated {
                 // Mosaic fires when the classifier flagged the image AND the
                 // user has mosaic enabled, OR when Force Censor is on
@@ -117,7 +120,7 @@ final class FocusRenderer {
                         viewModel.overlayHidden, applyMosaic, viewModel.mosaicMode,
                         viewModel.faceRectangles, viewModel.bodyRectangles,
                         viewModel.groinRectangles, viewModel.eyeBars,
-                        viewModel.chestRectangles)
+                        viewModel.chestRectangles, viewModel.personMask)
             }
 
         guard let source = snapshot.source else {
@@ -139,7 +142,8 @@ final class FocusRenderer {
             bodies: snapshot.bodies,
             groins: snapshot.groins,
             eyes: snapshot.eyes,
-            chests: snapshot.chests
+            chests: snapshot.chests,
+            personMask: snapshot.personMask
         )
         return Self.composite(
             inputs,
@@ -191,6 +195,15 @@ final class FocusRenderer {
                 guard !inputs.groins.isEmpty else { return inputs.source }
                 return regionMosaic(source: inputs.source, regions: inputs.groins, capDivisor: 32)
             case .body:
+                // Prefer the silhouette when Vision's segmentation request
+                // produced a mask — the outline hugs the subject so the
+                // pixelation stops at clothing edges instead of flooding the
+                // whole bounding box. Fall back to the loose rectangles when
+                // segmentation declined (low-light / occluded scenes) or to
+                // the face rect as a last resort.
+                if let mask = inputs.personMask {
+                    return silhouetteMosaic(source: inputs.source, mask: mask)
+                }
                 if !inputs.bodies.isEmpty {
                     return regionMosaic(source: inputs.source, regions: inputs.bodies, capDivisor: 64)
                 }
@@ -549,6 +562,46 @@ final class FocusRenderer {
             result = over.outputImage ?? result
         }
         return result.cropped(to: source.extent)
+    }
+
+    /// Pixelate the source, then feather the silhouette mask a touch (erodes
+    /// the 1-pixel Vision segmentation boundary so no original-resolution
+    /// skin slips through at the outline) and composite the pixelated image
+    /// through it. Block size matches the .body rect mosaic so switching
+    /// back to the bbox fallback isn't jarring.
+    private static func silhouetteMosaic(source: CIImage, mask: CIImage) -> CIImage {
+        let pixelate = CIFilter.pixellate()
+        pixelate.inputImage = source.clampedToExtent()
+        let longerSide = max(source.extent.width, source.extent.height)
+        pixelate.scale = Float(longerSide / 64)
+        pixelate.center = CGPoint(x: source.extent.midX, y: source.extent.midY)
+        let pixelated = (pixelate.outputImage ?? source).cropped(to: source.extent)
+
+        // Soft blur → hard step. Vision's .balanced mask has jagged
+        // boundaries at source resolution; a small blur followed by a
+        // steep matrix contrast pushes the transition into a clean
+        // silhouette edge without hand-tuning the mask values.
+        let blur = CIFilter.gaussianBlur()
+        blur.inputImage = mask.clampedToExtent()
+        blur.radius = Float(longerSide / 400)
+        let softened = (blur.outputImage ?? mask).cropped(to: source.extent)
+
+        let steep = softened.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": CIVector(x: 6, y: 0, z: 0, w: 0),
+            "inputGVector": CIVector(x: 6, y: 0, z: 0, w: 0),
+            "inputBVector": CIVector(x: 6, y: 0, z: 0, w: 0),
+            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1),
+            "inputBiasVector": CIVector(x: -2.4, y: -2.4, z: -2.4, w: 0)
+        ]).applyingFilter("CIColorClamp", parameters: [
+            "inputMinComponents": CIVector(x: 0, y: 0, z: 0, w: 0),
+            "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1)
+        ])
+
+        let blend = CIFilter.blendWithMask()
+        blend.inputImage = pixelated
+        blend.backgroundImage = source
+        blend.maskImage = steep
+        return (blend.outputImage ?? source).cropped(to: source.extent)
     }
 
     private static func wholeMosaic(source: CIImage) -> CIImage {

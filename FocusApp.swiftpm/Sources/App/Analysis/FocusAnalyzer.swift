@@ -58,6 +58,12 @@ actor FocusAnalyzer {
         /// Upper-torso rectangles derived from body-pose shoulder + hip
         /// joints, in source-extent coordinates. Used for the .chest mode.
         var chestRectangles: [CGRect] = []
+        /// Person-silhouette mask from Vision's segmentation request, already
+        /// stretched to the source image's extent so downstream compositing
+        /// can use it directly as a blendWithMask input. White = person,
+        /// black = background. nil when no person was detected or Vision
+        /// declined to run segmentation.
+        var personMask: CIImage?
     }
 
     private let device: MTLDevice
@@ -239,7 +245,8 @@ actor FocusAnalyzer {
             bodyRectangles: vision.bodies,
             groinRectangles: vision.groins,
             eyeBars: vision.eyes,
-            chestRectangles: vision.chests
+            chestRectangles: vision.chests,
+            personMask: vision.personMask
         )
     }
 
@@ -250,6 +257,7 @@ actor FocusAnalyzer {
         var bodies: [CGRect] = []
         var groins: [CGRect] = []
         var chests: [CGRect] = []
+        var personMask: CIImage?
     }
 
     /// Run all five Vision-based detections in a single pass. The previous
@@ -272,10 +280,18 @@ actor FocusAnalyzer {
         // we can widen the groin mosaic when the subject is turned
         // sideways. Runs alongside the 2D pose request; same CGImage.
         let bodyPose3D = VNDetectHumanBodyPose3DRequest()
+        // Person segmentation — produces an alpha mask that follows the
+        // subject's outline so the .body mosaic can pixelate along the
+        // silhouette rather than inside a loose bounding box. .balanced is
+        // the speed/quality sweet spot; .accurate is much slower and the
+        // extra edge fidelity isn't perceptible under pixelation.
+        let personSeg = VNGeneratePersonSegmentationRequest()
+        personSeg.qualityLevel = .balanced
+        personSeg.outputPixelFormat = kCVPixelFormatType_OneComponent8
 
         let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
         do {
-            try handler.perform([faceLandmarks, bodyRects, bodyPose, bodyPose3D])
+            try handler.perform([faceLandmarks, bodyRects, bodyPose, bodyPose3D, personSeg])
         } catch {
             return VisionResults()
         }
@@ -308,6 +324,22 @@ actor FocusAnalyzer {
                 results.groins.append(g)
             }
             if let c = Self.chestRect(from: obs, in: extent) { results.chests.append(c) }
+        }
+
+        // Scale the mask up to the source extent so the compositor can feed
+        // it straight into blendWithMask. The pixel buffer is smaller than
+        // the source at .balanced quality; non-uniform stretch matches our
+        // other overlay upscales.
+        if let mask = personSeg.results?.first?.pixelBuffer {
+            let maskImage = CIImage(cvPixelBuffer: mask)
+            let sx = extent.width / maskImage.extent.width
+            let sy = extent.height / maskImage.extent.height
+            let scaled = maskImage.transformed(by: CGAffineTransform(scaleX: sx, y: sy))
+            let placed = scaled.transformed(
+                by: CGAffineTransform(translationX: extent.minX - scaled.extent.minX,
+                                      y: extent.minY - scaled.extent.minY)
+            )
+            results.personMask = placed.cropped(to: extent)
         }
         return results
     }
