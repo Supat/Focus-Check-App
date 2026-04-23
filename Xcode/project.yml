@@ -43,6 +43,7 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
         MARKETING_VERSION: "1.0"
         ENABLE_PREVIEWS: YES
+        CODE_SIGN_ENTITLEMENTS: Resources/FocusApp.entitlements
         # Platforms for SwiftUI previews / Xcode build-for-running. Keep iOS
         # only to match .swiftpm; macOS native support would need a separate
         # target or SUPPORTS_MACCATALYST.

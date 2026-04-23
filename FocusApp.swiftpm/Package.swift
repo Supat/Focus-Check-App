@@ -29,7 +29,11 @@ let package = Package(
             ],
             capabilities: [
                 .photoLibrary(purposeString: "Select photos to analyze focus regions and display their filename."),
-                .fileAccess(.userSelectedFiles, mode: .readOnly)
+                .fileAccess(.userSelectedFiles, mode: .readOnly),
+                // Required for runtime model downloads (depth, NSFW). Without
+                // this the macOS app sandbox denies URLSession requests with
+                // 'server with the specified hostname could not be found'.
+                .outgoingNetworkConnections()
             ]
         )
     ],
