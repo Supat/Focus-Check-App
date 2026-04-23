@@ -156,15 +156,21 @@ actor ModelArchiveInstaller {
     /// If `root` contains exactly one top-level directory that isn't
     /// itself a `.mlmodelc`, return that inner directory so the
     /// caller moves its contents to the install path without an
-    /// extra wrapping layer. `hasDirectoryPath` on the URL alone
-    /// isn't reliable (depends on whether the trailing slash made it
-    /// through `contentsOfDirectory`), so we explicitly read the
-    /// `.isDirectoryKey` resource value.
+    /// extra wrapping layer. Filters out dotfiles and `__MACOSX`
+    /// (zip metadata folder Finder / some ditto invocations add),
+    /// so a single-real-dir archive still unwraps correctly. Uses
+    /// `.isDirectoryKey` instead of `hasDirectoryPath` because the
+    /// latter depends on whether the trailing slash made it through
+    /// `contentsOfDirectory`.
     private static func collapseSingleRootDirectory(in root: URL) -> URL? {
         let entries = (try? FileManager.default.contentsOfDirectory(
             at: root, includingPropertiesForKeys: [.isDirectoryKey]
         )) ?? []
-        let visible = entries.filter { !$0.lastPathComponent.hasPrefix(".") }
+        let ignored: Set<String> = ["__MACOSX"]
+        let visible = entries.filter {
+            let name = $0.lastPathComponent
+            return !name.hasPrefix(".") && !ignored.contains(name)
+        }
         guard visible.count == 1,
               let only = visible.first,
               only.pathExtension != "mlmodelc"

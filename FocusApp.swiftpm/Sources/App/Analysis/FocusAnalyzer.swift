@@ -252,6 +252,7 @@ actor FocusAnalyzer {
     /// Intended for diagnosing install issues on iPad Swift Playgrounds
     /// where there's no Finder — output lands in the in-app console
     /// (toggle with the text-bubble icon at the bottom of the Run view).
+    /// Resolves `/private` symlinks so relative paths print cleanly.
     func dumpInstallDirectory() {
         let fm = FileManager.default
         guard let appSupport = try? fm.url(
@@ -263,7 +264,8 @@ actor FocusAnalyzer {
             print("[Install] Application Support unavailable")
             return
         }
-        print("[Install] \(appSupport.path)")
+        let rootPath = appSupport.resolvingSymlinksInPath().path
+        print("[Install] \(rootPath)")
         guard let enumerator = fm.enumerator(
             at: appSupport,
             includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey]
@@ -275,7 +277,10 @@ actor FocusAnalyzer {
             let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey])
             let isDir = values?.isDirectory ?? false
             let size = values?.fileSize ?? 0
-            let relative = url.path.replacingOccurrences(of: appSupport.path + "/", with: "")
+            let resolved = url.resolvingSymlinksInPath().path
+            let relative = resolved.hasPrefix(rootPath + "/")
+                ? String(resolved.dropFirst(rootPath.count + 1))
+                : resolved
             if isDir {
                 print("[Install]   \(relative)/")
             } else {
