@@ -286,21 +286,39 @@ struct ContentView: View {
         return rect
     }
 
-    /// Per-subject count from NudeNet, shown alongside the exposure and
-    /// motion-blur capsules. Hides itself when the count is zero (no
-    /// subject crossed the gate) so it doesn't clutter safe photos.
+    /// Per-subject counts from NudeNet, split by level so the user can
+    /// see at a glance how many subjects fall into each bucket. Yellow =
+    /// covered (swimwear / lingerie), orange = partial (one exposed
+    /// region), red = nude (genital exposure or multiple exposed
+    /// regions). Each bucket also respects the per-subject gate; the
+    /// whole badge hides when the resulting total is zero so safe
+    /// photos don't get a clutter capsule.
     @ViewBuilder
     private var nudeSubjectsBadge: some View {
-        let flagged = viewModel.nudityLevels
-            .filter { $0 >= viewModel.nudityGate }.count
-        if flagged > 0,
+        let levels = viewModel.nudityLevels
+        let gate = viewModel.nudityGate
+        let coveredCount = levels.filter { $0 == .covered && $0 >= gate }.count
+        let partialCount = levels.filter { $0 == .partial && $0 >= gate }.count
+        let nudeCount    = levels.filter { $0 == .nude    && $0 >= gate }.count
+        let total = coveredCount + partialCount + nudeCount
+        if total > 0,
            viewModel.sourceImage != nil,
            !viewModel.overlayHidden {
-            HStack(spacing: 6) {
-                Image(systemName: "person.2.fill")
-                Text("\(flagged)/\(viewModel.nudityLevels.count)")
-                    .font(.caption.monospacedDigit())
+            HStack(spacing: 10) {
+                if coveredCount > 0 {
+                    Label("\(coveredCount)", systemImage: "person.fill")
+                        .foregroundStyle(.yellow)
+                }
+                if partialCount > 0 {
+                    Label("\(partialCount)", systemImage: "person.fill")
+                        .foregroundStyle(.orange)
+                }
+                if nudeCount > 0 {
+                    Label("\(nudeCount)", systemImage: "person.fill")
+                        .foregroundStyle(.red)
+                }
             }
+            .font(.caption.monospacedDigit())
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .background(.regularMaterial, in: Capsule())
