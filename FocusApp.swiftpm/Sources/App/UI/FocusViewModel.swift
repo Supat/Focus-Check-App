@@ -240,6 +240,13 @@ final class FocusViewModel: ObservableObject {
                 self?.nudenetInstall = nudenetInstalled ? .installed : .notInstalled
             }
         }
+        // Pre-compile installed Core ML models in the background after
+        // launch so the first analyze doesn't block on cold compile.
+        // Utility priority yields to anything the UI is doing; by the
+        // time the user picks an image the models are usually ready.
+        Task.detached(priority: .utility) {
+            await analyzer.prewarmModels()
+        }
     }
 
     /// Re-query the analyzer for Communication Safety state. Call on app

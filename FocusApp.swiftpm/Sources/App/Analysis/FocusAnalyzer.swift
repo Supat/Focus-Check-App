@@ -218,6 +218,15 @@ actor FocusAnalyzer {
         try await nudenetInstaller.install(progress: progress)
     }
 
+    /// Eagerly compile the installed Core ML models so the first analyze
+    /// after launch doesn't pay the ~1–3 s compile cost. Safe to call
+    /// from a background task once the app is idle. No-op for models
+    /// that aren't on disk.
+    func prewarmModels() {
+        _ = depthEstimator()
+        _ = nudityDetector.warm()
+    }
+
     /// Run the analysis pipeline for the given mode. Returns display-ready overlay images
     /// already upscaled to the source's extent.
     func analyze(mode: AnalysisMode) async throws -> Overlays {
@@ -227,6 +236,13 @@ actor FocusAnalyzer {
         var sharpness: CIImage?
         var depth: CIImage?
         var focalPlane: Float?
+
+        // Kick the sensitive-content classifier off as a concurrent task —
+        // it runs through SCA or NSFW MLModel on a compute path that's
+        // independent of Vision / MPS / CIContext. Awaiting it at the end
+        // hides its ~100–300 ms latency behind the rest of the pipeline.
+        async let sensitiveFuture = sensitiveContent.check(image: source, ciContext: ciContext)
+
         // Motion blur is cheap (~10 ms) and independent of the selected mode —
         // run it every time so the info badge stays accurate after mode changes.
         let motionReport = motionBlur.detect(in: source)
@@ -236,13 +252,6 @@ actor FocusAnalyzer {
         let motionOverlay = motionBlur.detectMap(in: source).flatMap {
             upscale(image: $0, toExtentOf: source)
         }
-
-        // Sensitive-content classification — binary + top class label.
-        // Off-main async; returns nil if the stack couldn't answer.
-        let sensitiveResult = await sensitiveContent.check(image: source, ciContext: ciContext)
-        let isSensitive = sensitiveResult?.isSensitive
-        let sensitiveLabel = sensitiveResult?.topLabel
-        let sensitiveConfidence = sensitiveResult?.confidence
 
         // Face / body / pose detection — consolidated into a single Vision
         // pass so the source only gets decoded to a CGImage once and the
@@ -282,6 +291,15 @@ actor FocusAnalyzer {
             }
         }
 
+        // Collect the classifier result that we kicked off at the top of
+        // analyze — by now Vision / NudeNet / sharpness / depth have all
+        // finished, so awaiting here doesn't add wall time when the
+        // classifier finished first.
+        let sensitiveResult = await sensitiveFuture
+        let isSensitive = sensitiveResult?.isSensitive
+        let sensitiveLabel = sensitiveResult?.topLabel
+        let sensitiveConfidence = sensitiveResult?.confidence
+
         return Overlays(
             sharpness: sharpness,
             depth: depth,
@@ -320,10 +338,24 @@ actor FocusAnalyzer {
     /// the landmarks request (`VNDetectFaceLandmarksRequest` is a subclass of
     /// the rectangle request); groin + chest share one body-pose request.
     private func runVision(in image: CIImage) -> VisionResults {
-        guard let cgImage = ciContext.createCGImage(image, from: image.extent) else {
+        // Downscale the Vision handler input — the full source (up to
+        // 50 MP) is far more than any of the requests need. Face /
+        // body / pose detectors internally resample anyway, and the
+        // segmentation mask at `.balanced` is already sub-resolution
+        // so the blockier output from a smaller input is
+        // indistinguishable downstream after upscale. `createCGImage`
+        // on a 50-MP CIImage is itself one of the slower steps in the
+        // pipeline — capping the long side at 1600 px turns a 400 ms
+        // decode into a 30 ms one on large photos. Boxes come back
+        // normalized to input size, which equals normalized to source
+        // size, so denormalize against `image.extent` is still correct.
+        let extent = image.extent
+        let analysisInput = visionDownsample(image)
+        guard let cgImage = ciContext.createCGImage(
+            analysisInput, from: analysisInput.extent
+        ) else {
             return VisionResults()
         }
-        let extent = image.extent
 
         let faceLandmarks = VNDetectFaceLandmarksRequest()
         let bodyRects = VNDetectHumanRectanglesRequest()
@@ -697,6 +729,24 @@ actor FocusAnalyzer {
     }
 
     // MARK: - Helpers
+
+    /// Cap the image's long side at 1600 px for Vision consumption.
+    /// Returns the original when it's already within budget so we skip
+    /// the Core Image recipe extension for typical phone-sized photos.
+    private func visionDownsample(_ image: CIImage) -> CIImage {
+        let longSide = max(image.extent.width, image.extent.height)
+        guard longSide > 1600 else { return image }
+        let scale = 1600 / longSide
+        let scaled = CIFilter.lanczosScaleTransform()
+        scaled.inputImage = image.translatedToOrigin()
+        scaled.scale = Float(scale)
+        scaled.aspectRatio = 1
+        return (scaled.outputImage ?? image).cropped(
+            to: CGRect(origin: .zero,
+                       size: CGSize(width: image.extent.width * scale,
+                                    height: image.extent.height * scale))
+        )
+    }
 
     private func upscale(texture: MTLTexture, toExtentOf source: CIImage) -> CIImage? {
         let low = CIImage(mtlTexture: texture, options: [

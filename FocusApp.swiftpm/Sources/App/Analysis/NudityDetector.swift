@@ -89,6 +89,12 @@ struct NudityDetector {
     /// forcing the MLModel load.
     var isReady: Bool { ModelArchive.nudenet.isInstalled() }
 
+    /// Trigger the classifier's lazy MLModel load without running a
+    /// prediction — used by `FocusAnalyzer.prewarmModels` to absorb
+    /// the compile cost before the user's first analyze tap. Returns
+    /// true when the classifier is actually loaded.
+    func warm() -> Bool { classifier != nil }
+
     /// Run the detector and return per-subject levels plus the raw
     /// per-part detections (for optional UI overlay). Returns empty
     /// levels when the model is unavailable or detection failed —
