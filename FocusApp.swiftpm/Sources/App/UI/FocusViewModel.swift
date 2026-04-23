@@ -263,6 +263,7 @@ final class FocusViewModel: ObservableObject {
         // Utility priority yields to anything the UI is doing; by the
         // time the user picks an image the models are usually ready.
         Task.detached(priority: .utility) {
+            await analyzer.dumpInstallDirectory()
             await analyzer.prewarmModels()
         }
     }

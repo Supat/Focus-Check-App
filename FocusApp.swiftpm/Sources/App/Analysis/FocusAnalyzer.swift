@@ -248,6 +248,42 @@ actor FocusAnalyzer {
         _ = clipScorer.warm()
     }
 
+    /// Walk `Application Support/` and print every file + byte size.
+    /// Intended for diagnosing install issues on iPad Swift Playgrounds
+    /// where there's no Finder — output lands in the in-app console
+    /// (toggle with the text-bubble icon at the bottom of the Run view).
+    func dumpInstallDirectory() {
+        let fm = FileManager.default
+        guard let appSupport = try? fm.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: false
+        ) else {
+            print("[Install] Application Support unavailable")
+            return
+        }
+        print("[Install] \(appSupport.path)")
+        guard let enumerator = fm.enumerator(
+            at: appSupport,
+            includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey]
+        ) else {
+            print("[Install] (empty or unreadable)")
+            return
+        }
+        for case let url as URL in enumerator {
+            let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey])
+            let isDir = values?.isDirectory ?? false
+            let size = values?.fileSize ?? 0
+            let relative = url.path.replacingOccurrences(of: appSupport.path + "/", with: "")
+            if isDir {
+                print("[Install]   \(relative)/")
+            } else {
+                print("[Install]   \(relative) (\(size) bytes)")
+            }
+        }
+    }
+
     /// Everything analyze() computes that doesn't depend on the chosen
     /// AnalysisMode. Cached on first full run so mode switches
     /// (Sharpness ↔ Depth ↔ Hybrid) only recompute the sharpness /
