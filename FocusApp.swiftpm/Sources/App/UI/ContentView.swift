@@ -46,7 +46,7 @@ struct ContentView: View {
                             .font(.callout)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
-                            .background(.regularMaterial, in: Capsule())
+                            .liquidBadgeBackground(in: Capsule())
                             .padding(.top, 8)
                             .transition(.move(edge: .top).combined(with: .opacity))
                     }
@@ -95,7 +95,7 @@ struct ContentView: View {
                 if viewModel.isAnalyzing {
                     ProgressView("Analyzing…")
                         .padding()
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                        .liquidBadgeBackground(in: RoundedRectangle(cornerRadius: 12))
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -175,7 +175,7 @@ struct ContentView: View {
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
-                .background(.regularMaterial, in: Capsule())
+                .liquidBadgeBackground(in: Capsule())
             }
         }
     }
@@ -204,7 +204,7 @@ struct ContentView: View {
             // .ultraThinMaterial still renders mostly opaque on this layer;
             // swap for an explicit 40%-black fill so the image clearly shows
             // through the capsule while the coloured text stays legible.
-            .background(Color.black.opacity(0.4), in: Capsule())
+            .liquidBadgeBackground(tint: Color.black.opacity(0.4), in: Capsule())
         }
     }
 
@@ -321,7 +321,7 @@ struct ContentView: View {
             .font(.caption.monospacedDigit())
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
-            .background(.regularMaterial, in: Capsule())
+            .liquidBadgeBackground(in: Capsule())
         }
     }
 
@@ -345,7 +345,7 @@ struct ContentView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
-            .background(.regularMaterial, in: Capsule())
+            .liquidBadgeBackground(in: Capsule())
         }
     }
 
@@ -383,4 +383,38 @@ private struct ShareSheet: UIViewControllerRepresentable {
 
     func updateUIViewController(_ uiViewController: UIActivityViewController,
                                 context: Context) {}
+}
+
+/// Badge background that adopts Liquid Glass on iOS / iPadOS 26+ and
+/// falls back to the pre-26 material (or a tint fill, if supplied) on
+/// earlier systems. `compiler(>=6.2)` gates the `.glassEffect` symbol
+/// so the code still builds on older Xcode / Swift Playgrounds SDKs —
+/// Liquid Glass lights up automatically when built against an iOS 26+
+/// SDK and run on a device that supports it.
+extension View {
+    @ViewBuilder
+    func liquidBadgeBackground<S: Shape>(tint: Color? = nil, in shape: S) -> some View {
+        #if compiler(>=6.2)
+        if #available(iOS 26.0, macOS 26.0, *) {
+            if let tint {
+                self.glassEffect(.regular.tint(tint), in: shape)
+            } else {
+                self.glassEffect(.regular, in: shape)
+            }
+        } else {
+            legacyBadgeBackground(tint: tint, in: shape)
+        }
+        #else
+        legacyBadgeBackground(tint: tint, in: shape)
+        #endif
+    }
+
+    @ViewBuilder
+    private func legacyBadgeBackground<S: Shape>(tint: Color?, in shape: S) -> some View {
+        if let tint {
+            self.background(tint, in: shape)
+        } else {
+            self.background(.regularMaterial, in: shape)
+        }
+    }
 }
