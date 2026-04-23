@@ -105,6 +105,62 @@ struct OverlayControls: View {
 
     @ViewBuilder
     private var mosaicToggleRow: some View {
+        // NudeNet absent: one row, mosaic cluster only. Installed: try one
+        // row first, fall back to stacked rows when the viewport is too
+        // narrow (portrait iPad, Stage Manager, split view). ViewThatFits
+        // picks the first variant whose intrinsic width fits the available
+        // horizontal space.
+        if viewModel.nudenetInstall == .installed {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    Spacer()
+                    perSubjectCluster
+                    mosaicCluster
+                }
+                VStack(alignment: .trailing, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Spacer()
+                        perSubjectCluster
+                    }
+                    HStack(spacing: 8) {
+                        Spacer()
+                        mosaicCluster
+                    }
+                }
+            }
+        } else {
+            HStack(spacing: 8) {
+                Spacer()
+                mosaicCluster
+            }
+        }
+    }
+
+    /// Per-subject NudeNet gate. Caller is responsible for only rendering
+    /// this when NudeNet is installed — the picker still needs a valid
+    /// `nudityGate` binding either way, but the label is meaningless
+    /// without detections to gate.
+    @ViewBuilder
+    private var perSubjectCluster: some View {
+        Label("Per subject", systemImage: "person.crop.square.filled.and.at.rectangle")
+            .font(.caption)
+        Picker("Per-subject gate", selection: $viewModel.nudityGate) {
+            Text("All").tag(NudityLevel.none)
+            Text("Covered+").tag(NudityLevel.covered)
+            Text("Partial+").tag(NudityLevel.partial)
+            Text("Nude").tag(NudityLevel.nude)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .controlSize(.small)
+        .frame(width: 280)
+    }
+
+    /// The mosaic mode picker + enable + force toggles, extracted so the
+    /// row-layout switch above can reuse it in both the single-row and
+    /// stacked-row variants.
+    @ViewBuilder
+    private var mosaicCluster: some View {
         // The mode picker is usable whenever at least one of the mosaic paths
         // can fire — either the classifier-gated one (toggle + SCA ready) or
         // Force Censor (which bypasses the classifier entirely).
@@ -112,49 +168,29 @@ struct OverlayControls: View {
             viewModel.mosaicEnabled && viewModel.sensitiveContentAvailability.isReady
         let pickerActive = classifierPath || viewModel.forceCensor
 
-        HStack(spacing: 8) {
-            Spacer()
-            // Per-subject gate leads the row — only drawn once NudeNet is
-            // installed, otherwise the mosaic cluster stays at the left
-            // edge as before.
-            if viewModel.nudenetInstall == .installed {
-                Label("Per subject", systemImage: "person.crop.square.filled.and.at.rectangle")
-                    .font(.caption)
-                Picker("Per-subject gate", selection: $viewModel.nudityGate) {
-                    Text("All").tag(NudityLevel.none)
-                    Text("Covered+").tag(NudityLevel.covered)
-                    Text("Partial+").tag(NudityLevel.partial)
-                    Text("Nude").tag(NudityLevel.nude)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .controlSize(.small)
-                .frame(width: 280)
+        Label("Mosaic", systemImage: "eye.slash")
+            .font(.caption)
+        Picker("Mosaic mode", selection: $viewModel.mosaicMode) {
+            ForEach(MosaicMode.allCases) { mode in
+                Text(mode.rawValue).tag(mode)
             }
-            Label("Mosaic", systemImage: "eye.slash")
-                .font(.caption)
-            Picker("Mosaic mode", selection: $viewModel.mosaicMode) {
-                ForEach(MosaicMode.allCases) { mode in
-                    Text(mode.rawValue).tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .controlSize(.small)
-            .frame(width: 420)
-            .disabled(!pickerActive)
-            Toggle("", isOn: $viewModel.mosaicEnabled)
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.small)
-                .disabled(!viewModel.sensitiveContentAvailability.isReady)
-            Label("Force", systemImage: "eye.slash.circle.fill")
-                .font(.caption)
-            Toggle("", isOn: $viewModel.forceCensor)
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.small)
         }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .controlSize(.small)
+        .frame(width: 420)
+        .disabled(!pickerActive)
+        Toggle("", isOn: $viewModel.mosaicEnabled)
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .disabled(!viewModel.sensitiveContentAvailability.isReady)
+        Label("Force", systemImage: "eye.slash.circle.fill")
+            .font(.caption)
+        Toggle("", isOn: $viewModel.forceCensor)
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.small)
     }
 
     @ViewBuilder
