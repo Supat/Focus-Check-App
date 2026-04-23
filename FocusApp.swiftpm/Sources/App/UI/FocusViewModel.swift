@@ -416,9 +416,11 @@ final class FocusViewModel: ObservableObject {
         // The brief frame of new-overlays-on-old-image that SwiftUI +
         // MTKView can produce at the transition is the lesser of the
         // two evils; overlays and sourceImage are updated together at
-        // the bottom of the completion block.
-        exposureInfo = ExposureInfo.read(from: url)
-        sourceName = name
+        // the bottom of the completion block. Same reason applies to
+        // exposureInfo and sourceName — they get set in the completion
+        // block rather than synchronously here so the EXIF capsule and
+        // the title don't flip to the new image's metadata while the
+        // previous image is still on screen.
         refreshSensitiveContentAvailability()
 
         let mode = self.mode
@@ -430,12 +432,18 @@ final class FocusViewModel: ObservableObject {
                 let image = try await analyzer.loadImage(from: url)
                 print("[ViewModel] loaded CIImage extent=\(image.extent)")
                 try Task.checkCancellation()
+                // Read EXIF off the source URL on the worker — quick
+                // metadata-only read with no pixel decode. Hand the
+                // result back to the main actor alongside the image.
+                let exposure = ExposureInfo.read(from: url)
                 print("[ViewModel] analyze mode=\(mode)")
                 let overlays = try await analyzer.analyze(mode: mode)
                 print("[ViewModel] analyze done — sourceImage about to set")
                 try Task.checkCancellation()
                 await MainActor.run { [weak self] in
                     self?.sourceImage = image
+                    self?.sourceName = name
+                    self?.exposureInfo = exposure
                     self?.sharpnessOverlay = overlays.sharpness
                     self?.depthOverlay = overlays.depth
                     self?.focalPlane = overlays.focalPlane
