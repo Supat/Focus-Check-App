@@ -376,7 +376,7 @@ final class FocusViewModel: ObservableObject {
             sharpness: sharpnessOverlay,
             depth: depthOverlay,
             motion: motionOverlay,
-            mosaic: (isSensitive == true) && mosaicEnabled,
+            mosaic: forceCensor || ((isSensitive == true) && mosaicEnabled),
             mosaicMode: mosaicMode,
             faces: faceRectangles,
             bodies: bodyRectangles,
