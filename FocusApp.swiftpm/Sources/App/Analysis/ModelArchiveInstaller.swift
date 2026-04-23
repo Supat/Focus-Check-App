@@ -72,10 +72,17 @@ struct ModelArchive: Sendable {
     ///     [Float]}` records, embeddings normalized and produced by the
     ///     *matching* text encoder at conversion time.
     /// The installer uses `kind: .bundle` to keep both files together.
+    ///
+    /// **Version**: `CLIP-v2` — bumped from `CLIP` so existing v1
+    /// installs (which landed double-nested because of an installer bug)
+    /// get orphaned under `Application Support/CLIP/` and a fresh
+    /// download lands cleanly at `Application Support/CLIP-v2/`. Clean
+    /// up v1 manually via iPad Settings → General → iPad Storage →
+    /// FocusApp → Offload, or ignore it (v2 is what the code reads).
     static let clip = ModelArchive(
-        directoryName: "CLIP",
+        directoryName: "CLIP-v2",
         sourceURL: URL(string:
-            "https://github.com/Supat/Focus-Check-App/releases/download/clip-model-v1/CLIP.zip"
+            "https://github.com/Supat/Focus-Check-App/releases/download/clip-model-v2/CLIP.zip"
         )!,
         kind: .bundle
     )
