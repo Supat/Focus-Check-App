@@ -1,5 +1,6 @@
 import Foundation
 import CoreImage
+import CoreImage.CIFilterBuiltins
 import CoreML
 import Vision
 
@@ -67,21 +68,31 @@ struct NudityDetector {
             return Array(repeating: .none, count: bodies.count)
         }
 
-        return bodies.map { body -> NudityLevel in
-            // Assign each detection to this body when ≥ 50 % of the
-            // detection's area falls inside the body box — stricter than
-            // a "center inside" test but still tolerant of the loose
-            // VNDetectHumanRectangles boxes.
-            let assigned = detections.filter { detection in
-                let overlap = body.intersection(detection.rect)
-                guard !overlap.isNull, detection.rect.width > 0, detection.rect.height > 0 else {
-                    return false
+        // Bucket detections per body by maximum intersection area —
+        // each detection lands with whichever body it overlaps most.
+        // Any positive overlap is enough to attribute (the earlier
+        // "≥ 50 % inside the body box" rule dropped valid detections
+        // when the Vision body rect was tight or loose in the wrong
+        // direction). Detections with no overlap against any body are
+        // discarded.
+        var bags: [[NudityDetection]] = Array(repeating: [], count: bodies.count)
+        for det in detections {
+            var bestIdx: Int? = nil
+            var bestArea: CGFloat = 0
+            for (i, body) in bodies.enumerated() {
+                let inter = body.intersection(det.rect)
+                guard !inter.isNull else { continue }
+                let area = inter.width * inter.height
+                if area > bestArea {
+                    bestArea = area
+                    bestIdx = i
                 }
-                let detArea = detection.rect.width * detection.rect.height
-                return (overlap.width * overlap.height) / detArea >= 0.5
             }
-            return aggregate(assigned)
+            if let idx = bestIdx {
+                bags[idx].append(det)
+            }
         }
+        return bags.map(aggregate)
     }
 
     /// Map a bag of detections attributed to one subject into a level.
@@ -138,9 +149,10 @@ private final class NudityClassifier {
     private let inputSize: CGSize
 
     /// Per-detection confidence floor — below this the detection is
-    /// dropped. Create ML-exported object detectors already apply an
-    /// internal threshold; this is a secondary guard.
-    private let scoreThreshold: Float = 0.25
+    /// dropped. Matches NudeNet's own Python default (0.2) rather than
+    /// YOLO's generic 0.25; higher values dropped mid-confidence
+    /// matches on obvious subjects.
+    private let scoreThreshold: Float = 0.2
 
     /// Class labels in confidence-column order. NudeNet v3's default
     /// label set; override if the maintainer trained a different set.
@@ -213,13 +225,52 @@ private final class NudityClassifier {
         self.labels = meta.isEmpty ? Self.defaultLabels : meta
     }
 
+    /// Aspect-preserving letterbox parameters shared by the detect path
+    /// and the coordinate-mapping helpers. Stretching the image to the
+    /// model's square input distorts non-square photos enough to drop
+    /// valid subject detections; letterboxing matches how YOLOv5/v8 were
+    /// trained, so the detector behaves the way it was intended to.
+    private struct Letterbox {
+        let scale: CGFloat      // input-pixel per source-pixel
+        let offsetX: CGFloat    // pad at left / right in input-pixel space
+        let offsetY: CGFloat    // pad at top / bottom in input-pixel space
+        let inputSize: CGSize
+        let sourceExtent: CGRect
+
+        /// Build a source-extent CGRect (CIImage Y-up) from a detection
+        /// expressed in input-pixel top-down space (cx, cy, w, h).
+        func sourceRect(cx: CGFloat, cy: CGFloat, w: CGFloat, h: CGFloat) -> CGRect {
+            let srcCx = (cx - offsetX) / scale
+            let srcCyTopDown = (cy - offsetY) / scale
+            let srcW = w / scale
+            let srcH = h / scale
+            return CGRect(
+                x: srcCx - srcW / 2 + sourceExtent.minX,
+                y: sourceExtent.height - srcCyTopDown - srcH / 2 + sourceExtent.minY,
+                width: srcW,
+                height: srcH
+            )
+        }
+
+        /// Create ML variant: same conversion but from normalized [0, 1]
+        /// inputs by first scaling to input-pixel space.
+        func sourceRectFromNormalized(cx: CGFloat, cy: CGFloat, w: CGFloat, h: CGFloat) -> CGRect {
+            sourceRect(
+                cx: cx * inputSize.width,
+                cy: cy * inputSize.height,
+                w: w * inputSize.width,
+                h: h * inputSize.height
+            )
+        }
+    }
+
     /// Run one detector pass over the full image. Returns per-detection
     /// records in source-extent coordinates.
     fileprivate func detect(in image: CIImage,
                             ciContext: CIContext) -> [NudityDetection] {
         let w = Int(inputSize.width)
         let h = Int(inputSize.height)
-        let resized = image.stretched(to: inputSize)
+        let letterboxedInput = letterbox(image: image, into: inputSize)
 
         var pixelBuffer: CVPixelBuffer?
         let attrs: [CFString: Any] = [kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary]
@@ -228,28 +279,63 @@ private final class NudityClassifier {
                             attrs as CFDictionary,
                             &pixelBuffer)
         guard let pb = pixelBuffer else { return [] }
-        ciContext.render(resized, to: pb)
+        ciContext.render(letterboxedInput.image, to: pb)
 
         do {
             let features = try MLDictionaryFeatureProvider(dictionary: [
                 inputName: MLFeatureValue(pixelBuffer: pb)
             ])
             let result = try model.prediction(from: features)
-            return parseDetections(from: result, sourceExtent: image.extent)
+            return parseDetections(from: result, letterbox: letterboxedInput.box)
         } catch {
             return []
         }
     }
 
+    /// Fit `image` into a centered region of a `size × size` canvas and
+    /// pad with YOLO's customary 114/255 gray. Returns the composed CIImage
+    /// plus the Letterbox params used, so the caller can undo the transform
+    /// when mapping detection boxes back to source coordinates.
+    private func letterbox(image: CIImage, into size: CGSize) -> (image: CIImage, box: Letterbox) {
+        let src = image.extent
+        let scale = min(size.width / src.width, size.height / src.height)
+        let scaledW = src.width * scale
+        let scaledH = src.height * scale
+        let offsetX = (size.width - scaledW) / 2
+        let offsetY = (size.height - scaledH) / 2
+
+        let scaled = image.translatedToOrigin()
+            .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        let placed = scaled
+            .transformed(by: CGAffineTransform(translationX: offsetX, y: offsetY))
+
+        let pad = CIImage(color: CIColor(red: 114/255, green: 114/255, blue: 114/255))
+            .cropped(to: CGRect(origin: .zero, size: size))
+        let over = CIFilter.sourceOverCompositing()
+        over.inputImage = placed
+        over.backgroundImage = pad
+        let composed = (over.outputImage ?? placed)
+            .cropped(to: CGRect(origin: .zero, size: size))
+
+        let box = Letterbox(
+            scale: scale,
+            offsetX: offsetX,
+            offsetY: offsetY,
+            inputSize: size,
+            sourceExtent: src
+        )
+        return (composed, box)
+    }
+
     private func parseDetections(from result: MLFeatureProvider,
-                                 sourceExtent: CGRect) -> [NudityDetection] {
+                                 letterbox: Letterbox) -> [NudityDetection] {
         // Path 1: Create ML object-detector format — the clean case, NMS
         // already applied inside the model. Outputs are paired multi-arrays
         // `coordinates` (Nx4, normalized [cx,cy,w,h]) + `confidence` (NxC).
         if let coords = result.featureValue(for: coordinatesName)?.multiArrayValue,
            let conf = result.featureValue(for: confidenceName)?.multiArrayValue,
            coords.shape.count >= 2, conf.shape.count >= 2 {
-            return parseCreateMLDetections(coords: coords, conf: conf, sourceExtent: sourceExtent)
+            return parseCreateMLDetections(coords: coords, conf: conf, letterbox: letterbox)
         }
 
         // Path 2: raw YOLO tensor from coremltools-converted ONNX — one
@@ -257,7 +343,7 @@ private final class NudityClassifier {
         // and accept the first one whose shape matches a YOLO layout.
         for name in result.featureNames {
             guard let array = result.featureValue(for: name)?.multiArrayValue else { continue }
-            if let detections = parseYOLODetections(array: array, sourceExtent: sourceExtent) {
+            if let detections = parseYOLODetections(array: array, letterbox: letterbox) {
                 return classAgnosticNMS(detections, iouThreshold: 0.45)
             }
         }
@@ -268,7 +354,7 @@ private final class NudityClassifier {
 
     private func parseCreateMLDetections(coords: MLMultiArray,
                                          conf: MLMultiArray,
-                                         sourceExtent: CGRect) -> [NudityDetection] {
+                                         letterbox: Letterbox) -> [NudityDetection] {
         let count = coords.shape.first?.intValue ?? 0
         guard count > 0 else { return [] }
         let classCount = conf.shape[1].intValue
@@ -290,20 +376,15 @@ private final class NudityClassifier {
             }
             guard topScore >= scoreThreshold, topClass < labels.count else { continue }
 
-            // Create ML emits normalized [cx, cy, w, h] with Y measured
-            // from the top. CGRect uses min-y with Y-up — flip via
-            // y_ciimage_min = 1 - (cy + h/2).
+            // Create ML emits normalized [cx, cy, w, h] in the letterboxed
+            // input's coordinate space. Undo the letterbox to land in
+            // source-extent CIImage Y-up coords.
             let cx = CGFloat(coords[i * strideBox + 0].floatValue)
             let cy = CGFloat(coords[i * strideBox + 1].floatValue)
             let bw = CGFloat(coords[i * strideBox + 2].floatValue)
             let bh = CGFloat(coords[i * strideBox + 3].floatValue)
 
-            let rect = CGRect(
-                x: (cx - bw / 2) * sourceExtent.width + sourceExtent.minX,
-                y: (1 - cy - bh / 2) * sourceExtent.height + sourceExtent.minY,
-                width: bw * sourceExtent.width,
-                height: bh * sourceExtent.height
-            )
+            let rect = letterbox.sourceRectFromNormalized(cx: cx, cy: cy, w: bw, h: bh)
             detections.append(NudityDetection(
                 rect: rect,
                 label: labels[topClass],
@@ -325,9 +406,9 @@ private final class NudityClassifier {
     ///   * YOLOv8: `[1, 4+C, N]` — channels-first, no objectness column
     ///
     /// Coords are in model-input pixel space (0...inputSize); this decoder
-    /// normalizes to [0,1] and then maps to source extent.
+    /// undoes the letterbox to land in source-extent CIImage coords.
     private func parseYOLODetections(array: MLMultiArray,
-                                     sourceExtent: CGRect) -> [NudityDetection]? {
+                                     letterbox: Letterbox) -> [NudityDetection]? {
         let shape = array.shape.map(\.intValue)
         guard shape.count == 3, shape[0] == 1 else { return nil }
 
@@ -359,8 +440,6 @@ private final class NudityClassifier {
         }
 
         let classOffset = hasObjectness ? 5 : 4
-        let invInputW = 1 / Float(inputSize.width)
-        let invInputH = 1 / Float(inputSize.height)
 
         // Index helper. For `[1, F, N]` (YOLOv8), stride over anchors.
         // For `[1, N, F]` (YOLOv5), stride over features.
@@ -399,17 +478,14 @@ private final class NudityClassifier {
             }()
             guard score >= scoreThreshold, topClass < classCount else { continue }
 
-            let cx = read(anchor: a, feat: 0) * invInputW
-            let cy = read(anchor: a, feat: 1) * invInputH
-            let bw = read(anchor: a, feat: 2) * invInputW
-            let bh = read(anchor: a, feat: 3) * invInputH
-
-            // YOLO boxes are top-down; flip to CIImage Y-up.
-            let rect = CGRect(
-                x: CGFloat(cx - bw / 2) * sourceExtent.width + sourceExtent.minX,
-                y: CGFloat(1 - cy - bh / 2) * sourceExtent.height + sourceExtent.minY,
-                width: CGFloat(bw) * sourceExtent.width,
-                height: CGFloat(bh) * sourceExtent.height
+            // YOLO coords are input-pixel, top-down — hand to the
+            // letterbox helper to undo the aspect-fit transform and flip
+            // to source-extent CIImage Y-up.
+            let rect = letterbox.sourceRect(
+                cx: CGFloat(read(anchor: a, feat: 0)),
+                cy: CGFloat(read(anchor: a, feat: 1)),
+                w: CGFloat(read(anchor: a, feat: 2)),
+                h: CGFloat(read(anchor: a, feat: 3))
             )
             detections.append(NudityDetection(
                 rect: rect,
