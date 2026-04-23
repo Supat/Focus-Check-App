@@ -328,10 +328,11 @@ actor FocusAnalyzer {
 
         // Scale the mask up to the source extent so the compositor can feed
         // it straight into blendWithMask. The pixel buffer is smaller than
-        // the source at .balanced quality; non-uniform stretch matches our
-        // other overlay upscales.
+        // the source at .balanced quality; `samplingNearest()` preserves
+        // the block-aligned boundary instead of bilinearly smoothing it
+        // into a feathered edge, which keeps the silhouette visibly jagged.
         if let mask = personSeg.results?.first?.pixelBuffer {
-            let maskImage = CIImage(cvPixelBuffer: mask)
+            let maskImage = CIImage(cvPixelBuffer: mask).samplingNearest()
             let sx = extent.width / maskImage.extent.width
             let sy = extent.height / maskImage.extent.height
             let scaled = maskImage.transformed(by: CGAffineTransform(scaleX: sx, y: sy))
