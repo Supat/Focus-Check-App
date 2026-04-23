@@ -134,11 +134,12 @@ private struct PHPickerSheet: UIViewControllerRepresentable {
             parent.onStart()
             let suggested = result.itemProvider.suggestedName
             let onPick = parent.onPick
+            let onError = parent.onError
 
             result.itemProvider.loadFileRepresentation(forTypeIdentifier: uti) { tempURL, error in
                 if let error {
                     Task { @MainActor in
-                        parent.onError("Couldn't load photo: \(error.localizedDescription)")
+                        onError("Couldn't load photo: \(error.localizedDescription)")
                     }
                     return
                 }

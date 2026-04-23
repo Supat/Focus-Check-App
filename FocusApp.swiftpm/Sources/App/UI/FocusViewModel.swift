@@ -225,7 +225,7 @@ final class FocusViewModel: ObservableObject {
         let analyzer = self.analyzer
         nsfwInstallTask = Task { [weak self] in
             do {
-                try await analyzer.installNSFWModel { p in
+                try await analyzer.installNSFWModel { [weak self] p in
                     Task { @MainActor [weak self] in
                         self?.nsfwInstall = .downloading(progress: p)
                     }
@@ -251,7 +251,7 @@ final class FocusViewModel: ObservableObject {
         let analyzer = self.analyzer
         installTask = Task { [weak self] in
             do {
-                try await analyzer.installDepthModel { p in
+                try await analyzer.installDepthModel { [weak self] p in
                     // Progress callback may arrive on any thread — hop to main.
                     Task { @MainActor [weak self] in
                         self?.depthInstall = .downloading(progress: p)

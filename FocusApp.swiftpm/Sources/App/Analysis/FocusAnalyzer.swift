@@ -277,27 +277,26 @@ actor FocusAnalyzer {
 
         var results = VisionResults()
 
-        // Face rects + eye bars from the single landmarks request.
-        if let faces = faceLandmarks.results as? [VNFaceObservation] {
-            for obs in faces {
-                results.faces.append(Self.denormalize(obs.boundingBox, in: extent))
-                if let bar = Self.eyeBar(from: obs, in: extent) {
-                    results.eyes.append(bar)
-                }
+        // Face rects + eye bars from the single landmarks request. Vision's
+        // `.results` is already `[VNFaceObservation]?` on modern SDKs — the
+        // previous `as? [VNFaceObservation]` downcast was a no-op Swift 6
+        // warned about.
+        for obs in faceLandmarks.results ?? [] {
+            results.faces.append(Self.denormalize(obs.boundingBox, in: extent))
+            if let bar = Self.eyeBar(from: obs, in: extent) {
+                results.eyes.append(bar)
             }
         }
 
         // Full-body rectangles.
-        if let bodies = bodyRects.results as? [VNHumanObservation] {
-            results.bodies = bodies.map { Self.denormalize($0.boundingBox, in: extent) }
+        for obs in bodyRects.results ?? [] {
+            results.bodies.append(Self.denormalize(obs.boundingBox, in: extent))
         }
 
         // Groin + chest from the shared pose observations.
-        if let poses = bodyPose.results as? [VNHumanBodyPoseObservation] {
-            for obs in poses {
-                if let g = Self.groinRect(from: obs, in: extent) { results.groins.append(g) }
-                if let c = Self.chestRect(from: obs, in: extent) { results.chests.append(c) }
-            }
+        for obs in bodyPose.results ?? [] {
+            if let g = Self.groinRect(from: obs, in: extent) { results.groins.append(g) }
+            if let c = Self.chestRect(from: obs, in: extent) { results.chests.append(c) }
         }
         return results
     }
