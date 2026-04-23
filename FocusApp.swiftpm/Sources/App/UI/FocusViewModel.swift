@@ -271,6 +271,7 @@ final class FocusViewModel: ObservableObject {
     }
 
     func load(url: URL, name: String) {
+        print("[ViewModel] load url=\(url.path) name=\(name)")
         currentTask?.cancel()
         isAnalyzing = true
         errorMessage = nil
@@ -288,9 +289,13 @@ final class FocusViewModel: ObservableObject {
 
         currentTask = Task.detached(priority: .userInitiated) { [weak self] in
             do {
+                print("[ViewModel] loadImage on analyzer…")
                 let image = try await analyzer.loadImage(from: url)
+                print("[ViewModel] loaded CIImage extent=\(image.extent)")
                 try Task.checkCancellation()
+                print("[ViewModel] analyze mode=\(mode)")
                 let overlays = try await analyzer.analyze(mode: mode)
+                print("[ViewModel] analyze done — sourceImage about to set")
                 try Task.checkCancellation()
                 await MainActor.run { [weak self] in
                     self?.sourceImage = image
@@ -308,10 +313,12 @@ final class FocusViewModel: ObservableObject {
                     self?.eyeBars = overlays.eyeBars
                     self?.chestRectangles = overlays.chestRectangles
                     self?.isAnalyzing = false
+                    print("[ViewModel] sourceImage set, isAnalyzing=false")
                 }
             } catch is CancellationError {
-                // Superseded by a newer load — stay silent.
+                print("[ViewModel] load cancelled")
             } catch {
+                print("[ViewModel] load FAIL: \(error)")
                 await MainActor.run { [weak self] in
                     self?.errorMessage = error.localizedDescription
                     self?.isAnalyzing = false

@@ -65,32 +65,23 @@ struct ImageImporter: View {
     }
 
     private func deliver(url: URL, fromScoped: Bool) {
-        // `startAccessingSecurityScopedResource` returns false for URLs that
-        // don't need scoped access (common on iOS + some macOS paths). Treat
-        // that as "no scope to juggle" and try the read anyway — failing
-        // early here would drop legitimate picks. Only stop access if we
-        // actually started it.
+        print("[Importer] deliver url=\(url.path) scoped=\(fromScoped)")
         let didStart = fromScoped && url.startAccessingSecurityScopedResource()
         defer { if didStart { url.stopAccessingSecurityScopedResource() } }
+        print("[Importer] startAccessing=\(didStart) file exists=\(FileManager.default.fileExists(atPath: url.path))")
 
         do {
-            // Read the full file contents into Data first, then write our
-            // own tmp copy. This is more robust under macOS sandbox than
-            // FileManager.copyItem — copyItem occasionally fails on scoped
-            // URLs even with user-selected.read-only granted, while a
-            // plain file-open read works.
             let data = try Data(contentsOf: url, options: .mappedIfSafe)
             let ext = url.pathExtension.isEmpty ? "img" : url.pathExtension
             let tmp = FileManager.default.temporaryDirectory
                 .appendingPathComponent(UUID().uuidString)
                 .appendingPathExtension(ext)
             try data.write(to: tmp, options: .atomic)
+            print("[Importer] read \(data.count) bytes → wrote \(tmp.lastPathComponent) → onPick")
             onPick(tmp, url.lastPathComponent)
         } catch {
-            // Surface in both the UI capsule and the Playgrounds console
-            // so the user can see it either way.
             let message = "Couldn't read “\(url.lastPathComponent)”: \(error.localizedDescription)"
-            print("[ImageImporter] \(message) — url=\(url) scoped=\(fromScoped) didStart=\(didStart)")
+            print("[Importer] FAIL \(message)")
             onError(message)
         }
     }
