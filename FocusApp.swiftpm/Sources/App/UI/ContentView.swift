@@ -89,6 +89,7 @@ struct ContentView: View {
                                     }
                                 )
                             nudityLabelOverlay(in: geo.size)
+                            nudeSubjectHeadBadges(in: geo.size)
                         }
                     }
                 }
@@ -250,6 +251,30 @@ struct ContentView: View {
         }
     }
 
+    /// Floating per-subject warning badge placed above each body whose
+    /// NudeNet level is `.covered` or higher. Colour matches the
+    /// counter's legend — yellow / orange / red for covered / partial /
+    /// nude. Independent of the Labels overlay and the per-subject
+    /// gate: this is a persistent per-person summary so the viewer can
+    /// see at a glance which subjects are flagged and how severely.
+    @ViewBuilder
+    private func nudeSubjectHeadBadges(in size: CGSize) -> some View {
+        if !viewModel.overlayHidden,
+           let extent = viewModel.sourceImage?.extent,
+           extent.width > 0, extent.height > 0,
+           viewModel.nudityLevels.count == viewModel.bodyRectangles.count {
+            ForEach(Array(viewModel.bodyRectangles.enumerated()), id: \.offset) { index, body in
+                let level = viewModel.nudityLevels[index]
+                if level >= .covered {
+                    let rect = viewRect(for: body, source: extent, in: size)
+                    SubjectHeadBadge(level: level)
+                        .position(x: rect.midX, y: max(rect.minY - 18, 20))
+                        .allowsHitTesting(false)
+                }
+            }
+        }
+    }
+
     /// Map a source-extent CIImage rect (Y-up) into a SwiftUI view rect
     /// (Y-down) that reflects the same aspect-fit + zoom transform the
     /// Metal renderer applies. Must stay in sync with `FocusRenderer.fit`.
@@ -387,6 +412,32 @@ private struct ShareSheet: UIViewControllerRepresentable {
 
     func updateUIViewController(_ uiViewController: UIActivityViewController,
                                 context: Context) {}
+}
+
+/// Small round warning glyph rendered above each flagged subject's
+/// head. Colour is driven by the subject's aggregated NudeNet level —
+/// yellow / orange / red for covered / partial / nude — matching the
+/// per-subject counter badge so the legend stays consistent.
+private struct SubjectHeadBadge: View {
+    let level: NudityLevel
+
+    var body: some View {
+        Image(systemName: "exclamationmark.shield.fill")
+            .font(.title3)
+            .foregroundStyle(tint)
+            .padding(6)
+            .background(Color.black.opacity(0.45), in: Circle())
+            .overlay(Circle().strokeBorder(tint.opacity(0.8), lineWidth: 1))
+    }
+
+    private var tint: Color {
+        switch level {
+        case .covered: return .yellow
+        case .partial: return .orange
+        case .nude:    return .red
+        case .none:    return .clear
+        }
+    }
 }
 
 /// Badge background that adopts Liquid Glass on iOS / iPadOS 26+ and
