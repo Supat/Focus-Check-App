@@ -63,7 +63,6 @@ enum MosaicMode: String, CaseIterable, Identifiable {
     case groin   = "Groin"
     case body    = "Body"
     case nudity  = "Nudity"
-    case whole   = "Whole"
     var id: String { rawValue }
 }
 

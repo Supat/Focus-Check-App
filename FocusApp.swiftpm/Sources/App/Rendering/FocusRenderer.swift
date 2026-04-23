@@ -273,8 +273,6 @@ final class FocusRenderer {
                 guard !inputs.nudityDetections.isEmpty else { return inputs.source }
                 let regions = inputs.nudityDetections.map(\.rect)
                 return regionMosaic(source: inputs.source, regions: regions, capDivisor: 32)
-            case .whole:
-                return wholeMosaic(source: inputs.source)
             }
         }()
 
@@ -712,15 +710,6 @@ final class FocusRenderer {
         blend.backgroundImage = source
         blend.maskImage = stepped
         return (blend.outputImage ?? source).cropped(to: source.extent)
-    }
-
-    private static func wholeMosaic(source: CIImage) -> CIImage {
-        let pixelate = CIFilter.pixellate()
-        pixelate.inputImage = source.clampedToExtent()
-        let longerSide = max(source.extent.width, source.extent.height)
-        pixelate.scale = Float(longerSide / 64 * 1.5)
-        pixelate.center = CGPoint(x: source.extent.midX, y: source.extent.midY)
-        return (pixelate.outputImage ?? source).cropped(to: source.extent)
     }
 
     private static func regionMosaic(source: CIImage,
