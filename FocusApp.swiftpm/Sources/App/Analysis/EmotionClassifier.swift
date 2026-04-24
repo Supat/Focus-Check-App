@@ -359,7 +359,7 @@ private final class EmoNetModel {
             // face crop is wrong or the preprocessing is mismatched
             // with the training distribution.
             print(String(
-                format: "[EmoNet] predict: label=%@ top=%.2f rawV=%.3f rawA=%.3f",
+                format: "[EmoNet v3] label=%@ top=%.2f rawV=%.3f rawA=%.3f",
                 String(describing: topLabel), topScore, valence, arousal
             ))
 
