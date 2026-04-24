@@ -153,10 +153,20 @@ struct ContentView: View {
                         }
                     }
                 }
-                if viewModel.isAnalyzing {
-                    ProgressView("Analyzing…")
-                        .padding()
-                        .liquidBadgeBackground(in: RoundedRectangle(cornerRadius: 12))
+                if let progress = viewModel.analysisProgress {
+                    VStack(spacing: 8) {
+                        ProgressView(value: progress.fraction)
+                            .frame(width: 220)
+                        if !progress.label.isEmpty {
+                            Text(progress.label)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
+                    }
+                    .padding()
+                    .liquidBadgeBackground(in: RoundedRectangle(cornerRadius: 12))
+                    .animation(.easeOut(duration: 0.15), value: progress.fraction)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

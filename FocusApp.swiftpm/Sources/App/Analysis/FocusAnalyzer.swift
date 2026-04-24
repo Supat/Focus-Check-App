@@ -361,10 +361,27 @@ actor FocusAnalyzer {
     private var cachedNonMode: NonModeResults?
 
     /// Run the analysis pipeline for the given mode. Returns display-ready overlay images
-    /// already upscaled to the source's extent.
-    func analyze(mode: AnalysisMode) async throws -> Overlays {
+    /// already upscaled to the source's extent. `progress` (optional)
+    /// reports fractional completion [0, 1] with a short label naming
+    /// the stage about to run — fires before each stage so the UI
+    /// label matches what the bar is about to wait on. Fixed-weight
+    /// per stage: unequal real-world timing produces some jump, but
+    /// the total is bounded.
+    func analyze(mode: AnalysisMode,
+                 progress: (@Sendable (Double, String?) -> Void)? = nil) async throws -> Overlays {
         guard let source else { throw AnalysisError.imageDecodeFailed }
         try Task.checkCancellation()
+
+        // Step accounting — skips the non-mode stages entirely when
+        // the cache hits (mode-only reanalyze).
+        let needsNonMode = (cachedNonMode == nil)
+        let nonModeSteps = needsNonMode ? 8 : 0
+        let totalSteps = nonModeSteps + 1
+        var stepsDone = 0
+        func tick(_ label: String) {
+            progress?(Double(stepsDone) / Double(totalSteps), label)
+            stepsDone += 1
+        }
 
         // Non-mode-dependent pipeline — cached across mode changes on the
         // same source so `reanalyze()` short-circuits to just sharpness /
@@ -378,18 +395,23 @@ actor FocusAnalyzer {
             // overlaps with the rest of the non-mode pipeline.
             async let sensitiveFuture = sensitiveContent.check(image: source, ciContext: ciContext)
 
+            tick("Detecting motion blur")
             let motionReport = motionBlur.detect(in: source)
             let motionOverlay = motionBlur.detectMap(in: source).flatMap {
                 upscale(image: $0, toExtentOf: source)
             }
+            tick("Running Vision")
             let vision = runVision(in: source)
+            tick("Classifying nudity")
             let nudity = nudityDetector.analyze(
                 image: source, bodies: vision.bodies, ciContext: ciContext
             )
+            tick("Scoring context")
             // Zero-shot context scoring via CLIP. Returns [] when the
             // model archive isn't installed so downstream UI just hides
             // the Context badge.
             let clipMatches = clipScorer.score(image: source, ciContext: ciContext)
+            tick("Classifying emotions")
             // Per-face emotion classification via FER+. Same caching +
             // empty-when-missing contract as the other optional tiers.
             let faceEmotions = emotionClassifier.classify(
@@ -398,6 +420,7 @@ actor FocusAnalyzer {
                 in: source,
                 ciContext: ciContext
             )
+            tick("Estimating pain")
             // Per-face PSPI via OpenGraphAU + Vision-derived AU43.
             // Same empty-when-missing contract as the emotion tier.
             let painScores = painDetector.classify(
@@ -407,14 +430,16 @@ actor FocusAnalyzer {
                 in: source,
                 ciContext: ciContext
             )
-            // Per-face age + gender via yu4u EfficientNetB3. Empty
-            // array when the model isn't installed.
+            tick("Estimating age")
+            // Per-face age via SSR-Net. Empty array when the model
+            // isn't installed.
             let ageEstimations = ageEstimator.estimate(
                 faces: vision.faces,
                 rolls: vision.faceRolls,
                 in: source,
                 ciContext: ciContext
             )
+            tick("Checking sensitive content")
             let sensitive = await sensitiveFuture
 
             let computed = NonModeResults(
@@ -437,6 +462,14 @@ actor FocusAnalyzer {
         var depth: CIImage?
         var focalPlane: Float?
 
+        let modeLabel: String
+        switch mode {
+        case .sharpness: modeLabel = "Computing sharpness"
+        case .depth:     modeLabel = "Estimating depth"
+        case .hybrid:    modeLabel = "Computing sharpness + depth"
+        }
+        tick(modeLabel)
+
         switch mode {
         case .sharpness:
             let tex = try laplacian.sharpnessMap(from: source, ciContext: ciContext)
@@ -458,6 +491,7 @@ actor FocusAnalyzer {
                 }
             }
         }
+        progress?(1.0, nil)
 
         let vision = nonMode.vision
         let nudity = nonMode.nudity

@@ -53,6 +53,15 @@ enum DepthInstallState: Equatable {
     case failed(String)
 }
 
+/// Snapshot of where the analysis pipeline is. Reported from
+/// `FocusAnalyzer.analyze`'s progress callback and mirrored into
+/// the view model so the main content view can render a determinate
+/// progress bar with the currently-running stage's name.
+struct AnalysisProgress: Equatable, Sendable {
+    var fraction: Double
+    var label: String
+}
+
 /// Which region the mosaic covers when the user has the mosaic toggle on.
 /// .eyes uses a solid black bar rather than pixelate; the others pixelate.
 enum MosaicMode: String, CaseIterable, Identifiable {
@@ -256,6 +265,11 @@ final class FocusViewModel: ObservableObject {
     /// shape as the other optional model tiers.
     @Published var ageInstall: DepthInstallState = .notInstalled
     @Published var isAnalyzing: Bool = false
+    /// Fractional progress + current-stage label from the analysis
+    /// pipeline. nil while idle. The bar is fixed-weight per stage
+    /// (each step counts equally regardless of timing), so the
+    /// fraction is a rough position indicator, not calibrated time.
+    @Published var analysisProgress: AnalysisProgress?
     @Published var errorMessage: String?
     @Published var depthAvailable: Bool = false
     @Published var depthInstall: DepthInstallState = .notInstalled
@@ -532,6 +546,7 @@ final class FocusViewModel: ObservableObject {
         print("[ViewModel] load url=\(url.path) name=\(name)")
         currentTask?.cancel()
         isAnalyzing = true
+        analysisProgress = AnalysisProgress(fraction: 0, label: "Loading image")
         errorMessage = nil
         // Deliberately don't clear the derived overlay state here. The
         // previous image is still on screen while the new analysis
@@ -561,7 +576,14 @@ final class FocusViewModel: ObservableObject {
                 // result back to the main actor alongside the image.
                 let exposure = ExposureInfo.read(from: url)
                 print("[ViewModel] analyze mode=\(mode)")
-                let overlays = try await analyzer.analyze(mode: mode)
+                let overlays = try await analyzer.analyze(mode: mode) { [weak self] fraction, label in
+                    Task { @MainActor in
+                        self?.analysisProgress = AnalysisProgress(
+                            fraction: fraction,
+                            label: label ?? ""
+                        )
+                    }
+                }
                 print("[ViewModel] analyze done — sourceImage about to set")
                 try Task.checkCancellation()
                 await MainActor.run { [weak self] in
@@ -590,15 +612,20 @@ final class FocusViewModel: ObservableObject {
                     self?.painScores = overlays.painScores
                     self?.ageEstimations = overlays.ageEstimations
                     self?.isAnalyzing = false
+                    self?.analysisProgress = nil
                     print("[ViewModel] sourceImage set, isAnalyzing=false")
                 }
             } catch is CancellationError {
                 print("[ViewModel] load cancelled")
+                await MainActor.run { [weak self] in
+                    self?.analysisProgress = nil
+                }
             } catch {
                 print("[ViewModel] load FAIL: \(error)")
                 await MainActor.run { [weak self] in
                     self?.errorMessage = error.localizedDescription
                     self?.isAnalyzing = false
+                    self?.analysisProgress = nil
                 }
             }
         }
@@ -635,6 +662,7 @@ final class FocusViewModel: ObservableObject {
         exposureInfo = nil
         errorMessage = nil
         isAnalyzing = false
+        analysisProgress = nil
         zoomScale = 1.0
         zoomAnchor = CGPoint(x: 0.5, y: 0.5)
         zoomPanOffset = .zero
@@ -691,11 +719,19 @@ final class FocusViewModel: ObservableObject {
         guard sourceImage != nil else { return }
         currentTask?.cancel()
         isAnalyzing = true
+        analysisProgress = AnalysisProgress(fraction: 0, label: "Re-analyzing")
         let mode = self.mode
         let analyzer = self.analyzer
         currentTask = Task.detached(priority: .userInitiated) { [weak self] in
             do {
-                let overlays = try await analyzer.analyze(mode: mode)
+                let overlays = try await analyzer.analyze(mode: mode) { [weak self] fraction, label in
+                    Task { @MainActor in
+                        self?.analysisProgress = AnalysisProgress(
+                            fraction: fraction,
+                            label: label ?? ""
+                        )
+                    }
+                }
                 try Task.checkCancellation()
                 await MainActor.run { [weak self] in
                     self?.sharpnessOverlay = overlays.sharpness
@@ -720,13 +756,18 @@ final class FocusViewModel: ObservableObject {
                     self?.painScores = overlays.painScores
                     self?.ageEstimations = overlays.ageEstimations
                     self?.isAnalyzing = false
+                    self?.analysisProgress = nil
                 }
             } catch is CancellationError {
                 // Swallow — a newer analyze is in flight.
+                await MainActor.run { [weak self] in
+                    self?.analysisProgress = nil
+                }
             } catch {
                 await MainActor.run { [weak self] in
                     self?.errorMessage = error.localizedDescription
                     self?.isAnalyzing = false
+                    self?.analysisProgress = nil
                 }
             }
         }
