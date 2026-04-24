@@ -163,23 +163,34 @@ struct NudityDetector {
     }
 
     /// Pick the gender implied by the FACE_MALE / FACE_FEMALE detections
-    /// in a body's bag. Highest-confidence face wins when NudeNet fires
-    /// both labels on the same subject (rare but possible when the face
-    /// is partially obscured). Returns `.unknown` when no face-branch
+    /// in a body's bag. Returns `.unknown` when no face-branch
     /// detection was attributed to this body.
+    ///
+    /// Naive argmax over the two labels biases toward female because
+    /// NudeNet's FACE_FEMALE head comes in systematically higher-
+    /// confidence than FACE_MALE on ambiguous faces — the training
+    /// data skew that also motivates the male-genital threshold
+    /// lowering above. Fix: take the best score per gender and
+    /// require female to beat male by a `femaleMargin` before
+    /// committing. On a tie (or small female lead), go male.
     private func inferGender(from detections: [NudityDetection]) -> SubjectGender {
-        var best: (gender: SubjectGender, confidence: Float) = (.unknown, 0)
+        var bestMale: Float = 0
+        var bestFemale: Float = 0
         for det in detections {
             let upper = det.label.uppercased()
-            let gender: SubjectGender?
-            if upper == "FACE_MALE"        { gender = .male }
-            else if upper == "FACE_FEMALE" { gender = .female }
-            else                           { gender = nil }
-            if let g = gender, det.confidence > best.confidence {
-                best = (g, det.confidence)
-            }
+            if upper == "FACE_MALE"        { bestMale = max(bestMale, det.confidence) }
+            else if upper == "FACE_FEMALE" { bestFemale = max(bestFemale, det.confidence) }
         }
-        return best.gender
+        // No face labels attributed → can't commit.
+        if bestMale == 0, bestFemale == 0 { return .unknown }
+        // Only one head fired → take that one.
+        if bestMale == 0 { return .female }
+        if bestFemale == 0 { return .male }
+        // Both fired → require female to beat male by a margin.
+        // 0.15 reflects the observed band offset (female 0.40–0.60,
+        // male 0.20–0.45 on the same subject); tunable.
+        let femaleMargin: Float = 0.15
+        return bestFemale >= bestMale + femaleMargin ? .female : .male
     }
 
     /// Map a bag of detections attributed to one subject into a level.
