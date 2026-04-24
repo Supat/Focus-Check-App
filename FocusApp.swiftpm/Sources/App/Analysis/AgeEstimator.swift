@@ -37,19 +37,21 @@ struct AgeEstimator {
 
     func warm() -> Bool { model != nil }
 
-    /// Run the estimator for every face. `rolls` is parallel to
-    /// `faces` and lets us de-rotate the crop before resizing, matching
-    /// the axis-aligned inputs the model saw during training.
+    /// Run the estimator for every face. `rolls` is accepted for API
+    /// parity with the sibling per-face tiers but is **not** applied
+    /// — yu4u's training pipeline feeds axis-aligned crops straight
+    /// from dlib and relies on `albumentations.ShiftScaleRotate` for
+    /// rotation invariance. De-rotating in Swift shifts the crop
+    /// composition in a way the model wasn't specifically trained
+    /// for, so we leave the rectangle axis-aligned.
     func estimate(faces: [CGRect],
-                  rolls: [CGFloat],
+                  rolls _: [CGFloat],
                   in image: CIImage,
                   ciContext: CIContext) -> [AgeGenderPrediction?] {
         guard let model else { return [] }
         guard !faces.isEmpty else { return [] }
-        return faces.enumerated().map { idx, face -> AgeGenderPrediction? in
-            let roll = idx < rolls.count ? rolls[idx] : 0
-            return model.predict(face: face, roll: roll,
-                                 source: image, ciContext: ciContext)
+        return faces.map { face -> AgeGenderPrediction? in
+            model.predict(face: face, source: image, ciContext: ciContext)
         }
     }
 }
@@ -75,10 +77,15 @@ private final class AgeGenderModel {
             throw AnalysisError.modelMissing
         }
         let config = MLModelConfiguration()
-        // EfficientNetB3 is ANE-friendly — the MobileNet-style depthwise
-        // conv blocks map cleanly. Leave `.all` so Core ML picks the
-        // best compute unit at runtime.
-        config.computeUnits = .all
+        // `.cpuAndGPU` rather than `.all` — the ANE runs EfficientNetB3
+        // in F16, which is fine for the argmax-flavored emotion / pain
+        // tiers but bites this one. The age head is a 101-bin softmax
+        // whose expectation (`Σ i · p_i`) weights the long-tail bins
+        // (ages 80+) heavily, and F16 underflow on their tiny
+        // probabilities shifts the mean by 2–5 years on real faces.
+        // GPU F32 keeps the distribution faithful; one-shot per-photo
+        // inference makes the latency cost irrelevant.
+        config.computeUnits = .cpuAndGPU
         do {
             self.model = try MLModel(contentsOf: url, configuration: config)
         } catch {
@@ -122,38 +129,41 @@ private final class AgeGenderModel {
               + "age=\(ageOutputName) gender=\(genderOutputName)")
     }
 
-    /// Rotate + square-crop + resize the face into the model's 224²
+    /// Crop + anisotropically resize the face into the model's 224²
     /// input, run inference twice (original + horizontal flip) so we
     /// can average the two probability distributions, and compose the
     /// age/gender result. Horizontal-flip TTA costs one extra
     /// inference per face — EfficientNetB3 is ~15 ms on the ANE so
     /// per-face latency lands around 30–40 ms, well under the
     /// budget a user perceives for a one-shot analyze.
+    ///
+    /// Preprocessing exactly mirrors yu4u's demo.py:
+    ///
+    ///     xw1 = x1 - margin·w;  yw1 = y1 - margin·h
+    ///     xw2 = x2 + margin·w;  yw2 = y2 + margin·h
+    ///     face = cv2.resize(img[yw1:yw2+1, xw1:xw2+1], (224, 224))
+    ///
+    /// i.e. crop a rectangle expanded by 40 % of the face box's
+    /// width and height on each side, then stretch **non-uniformly**
+    /// to 224×224. A square crop (what v1/v2 did) over-pads the
+    /// shorter axis and the model reads that as "wrong scale".
     func predict(face: CGRect,
-                 roll: CGFloat,
                  source: CIImage,
                  ciContext: CIContext) -> AgeGenderPrediction? {
         guard face.width >= 8, face.height >= 8 else { return nil }
 
-        // yu4u's training recipe crops faces with `--margin 0.4` around
-        // the detector box — 40 % extra on *each* side, i.e. a square
-        // crop whose side is `1 + 2·margin = 1.8` times the face box.
-        // v1 used 1.4 which is the wrong interpretation (40 % total,
-        // 20 % each side); 1.8 matches what the pretrained weights
-        // were trained on — hair + jawline + neck context included.
-        let marginFactor: CGFloat = 1.8
-        let halfSide = max(face.width, face.height) * marginFactor / 2
-        let faceCenter = CGPoint(x: face.midX, y: face.midY)
-        let outputHalf = inputSize.width / 2
-        let scale = outputHalf / halfSide
+        // yu4u's `--margin 0.4` — 40 % of the face box's width/height
+        // extended on each side. Total crop = face · (1 + 2 · margin).
+        let margin: CGFloat = 0.4
+        let cropRect = face.insetBy(dx: -margin * face.width,
+                                    dy: -margin * face.height)
 
+        let scaleX = inputSize.width / cropRect.width
+        let scaleY = inputSize.height / cropRect.height
         let transform = CGAffineTransform.identity
-            .concatenating(CGAffineTransform(translationX: -faceCenter.x,
-                                             y: -faceCenter.y))
-            .concatenating(CGAffineTransform(rotationAngle: -roll))
-            .concatenating(CGAffineTransform(scaleX: scale, y: scale))
-            .concatenating(CGAffineTransform(translationX: outputHalf,
-                                             y: outputHalf))
+            .concatenating(CGAffineTransform(translationX: -cropRect.minX,
+                                             y: -cropRect.minY))
+            .concatenating(CGAffineTransform(scaleX: scaleX, y: scaleY))
         let resized = source
             .clampedToExtent()
             .transformed(by: transform)
@@ -163,7 +173,9 @@ private final class AgeGenderModel {
         // the output square. Face classification + regression tasks
         // are near-symmetric under this transform, so averaging the
         // two prediction distributions smooths over whatever side-of-
-        // face bias the single crop picked up.
+        // face bias the single crop picked up. yu4u's training used
+        // `albumentations.HorizontalFlip(p=0.5)` so the model is
+        // explicitly flip-invariant.
         let flipped = resized
             .transformed(by: CGAffineTransform(scaleX: -1, y: 1)
                 .translatedBy(x: -inputSize.width, y: 0))
@@ -202,12 +214,21 @@ private final class AgeGenderModel {
         let (gender, confidence): (SubjectGender, Float) =
             pMale >= pFemale ? (.male, pMale) : (.female, pFemale)
 
-        return AgeGenderPrediction(
+        let prediction = AgeGenderPrediction(
             age: max(0, min(100, mean)),
             ageStdev: stdev.isFinite ? stdev : 0,
             gender: gender,
             genderConfidence: confidence
         )
+        print(String(
+            format: "[AgeGender] face=(%.0f,%.0f,%.0f,%.0f) age=%.1f±%.1f gender=%@ (P[F,M]=%.2f,%.2f)",
+            Double(face.origin.x), Double(face.origin.y),
+            Double(face.width), Double(face.height),
+            Double(prediction.age), Double(prediction.ageStdev),
+            prediction.gender == .male ? "M" : "F",
+            Double(pFemale), Double(pMale)
+        ))
+        return prediction
     }
 
     /// Render `crop` into a 224² BGRA pixel buffer, run one inference,
