@@ -128,6 +128,84 @@ private final class AgeGenderModel {
 
         print("[AgeGender] loaded input=\(inputName) "
               + "age=\(ageOutputName) gender=\(genderOutputName)")
+
+        // Self-test on synthetic solid colors. Compare against
+        // expected macOS Keras predictions so we can tell whether
+        // iOS Core ML is handling the BGR pixel buffer correctly.
+        //
+        // Expected (macOS host Core ML with the same .mlpackage):
+        //   BGR(0,0,0)     age≈50.5  P[F]≈0.91
+        //   BGR(128,128,128) age≈42.0 P[F]≈0.28
+        //   BGR(220,100,30) age≈44.2 P[F]≈0.51   ← our asymmetric probe
+        for (label, b, g, r) in [
+            ("black", UInt8(0),   UInt8(0),   UInt8(0)),
+            ("gray",  UInt8(128), UInt8(128), UInt8(128)),
+            ("probe", UInt8(220), UInt8(100), UInt8(30)),
+        ] {
+            guard let pb = makeSolidBGRA(width: 224, height: 224,
+                                         b: b, g: g, r: r) else { continue }
+            if let (age, gender) = rawInference(pixelBuffer: pb) {
+                var mean: Float = 0
+                for i in 0..<age.count { mean += Float(i) * age[i] }
+                print(String(
+                    format: "[AgeGender] self-test %@ BGR(%d,%d,%d): age=%.1f P[F,M]=%.3f,%.3f",
+                    label, Int(b), Int(g), Int(r),
+                    Double(mean),
+                    Double(gender[0]), Double(gender[1])
+                ))
+            }
+        }
+    }
+
+    /// Allocate a 32BGRA CVPixelBuffer of the given size filled with
+    /// a constant BGR colour. Alpha is 255. Only used by the init-
+    /// time self-test.
+    private func makeSolidBGRA(width w: Int, height h: Int,
+                               b: UInt8, g: UInt8, r: UInt8) -> CVPixelBuffer? {
+        var pb: CVPixelBuffer?
+        let attrs: [CFString: Any] = [kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary]
+        CVPixelBufferCreate(kCFAllocatorDefault, w, h,
+                            kCVPixelFormatType_32BGRA,
+                            attrs as CFDictionary, &pb)
+        guard let pb else { return nil }
+        CVPixelBufferLockBaseAddress(pb, [])
+        if let base = CVPixelBufferGetBaseAddress(pb) {
+            let bpr = CVPixelBufferGetBytesPerRow(pb)
+            for y in 0..<h {
+                let row = base.advanced(by: y * bpr)
+                    .assumingMemoryBound(to: UInt8.self)
+                for x in 0..<w {
+                    row[x * 4 + 0] = b
+                    row[x * 4 + 1] = g
+                    row[x * 4 + 2] = r
+                    row[x * 4 + 3] = 255
+                }
+            }
+        }
+        CVPixelBufferUnlockBaseAddress(pb, [])
+        return pb
+    }
+
+    /// Run one inference directly on a ready-made pixel buffer,
+    /// bypassing the crop / render path. Used only by the self-test.
+    private func rawInference(pixelBuffer pb: CVPixelBuffer) -> (age: [Float], gender: [Float])? {
+        do {
+            let features = try MLDictionaryFeatureProvider(dictionary: [
+                inputName: MLFeatureValue(pixelBuffer: pb)
+            ])
+            let result = try model.prediction(from: features)
+            guard let ageMA = result.featureValue(for: ageOutputName)?.multiArrayValue,
+                  ageMA.count >= Self.numAgeBins,
+                  let genderMA = result.featureValue(for: genderOutputName)?.multiArrayValue,
+                  genderMA.count >= 2
+            else { return nil }
+            var age = [Float](repeating: 0, count: Self.numAgeBins)
+            for i in 0..<Self.numAgeBins { age[i] = ageMA[i].floatValue }
+            return (age, [genderMA[0].floatValue, genderMA[1].floatValue])
+        } catch {
+            print("[AgeGender] self-test inference failed: \(error)")
+            return nil
+        }
     }
 
     /// Crop + anisotropically resize the face into the model's 224²
