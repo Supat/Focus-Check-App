@@ -296,6 +296,31 @@ private final class EmoNetModel {
             colorSpace: sRGB
         )
 
+        // Dump the center pixel of the rendered BGRA buffer so we can
+        // tell whether two different preprocessing runs actually
+        // produce different inputs to the model. If the pixel bytes
+        // are identical across commits that changed crop / colorspace
+        // then the transform+render chain is silently broken; if they
+        // differ but the model still saturates, the failure is in the
+        // model itself (weights, channel order, normalization).
+        CVPixelBufferLockBaseAddress(pb, .readOnly)
+        var centerBGRA: (UInt8, UInt8, UInt8, UInt8) = (0, 0, 0, 0)
+        if let base = CVPixelBufferGetBaseAddress(pb) {
+            let stride = CVPixelBufferGetBytesPerRow(pb)
+            let cy = h / 2
+            let cx = w / 2
+            let p = base.advanced(by: cy * stride + cx * 4)
+                .assumingMemoryBound(to: UInt8.self)
+            centerBGRA = (p[0], p[1], p[2], p[3])
+        }
+        CVPixelBufferUnlockBaseAddress(pb, .readOnly)
+        print(String(
+            format: "[EmoNet v4] face=(%.0f,%.0f,%.0f,%.0f) roll=%.3f scale=%.4f centerBGRA=(%d,%d,%d,%d)",
+            face.origin.x, face.origin.y, face.width, face.height,
+            Double(roll), Double(scale),
+            Int(centerBGRA.0), Int(centerBGRA.1), Int(centerBGRA.2), Int(centerBGRA.3)
+        ))
+
         do {
             let features = try MLDictionaryFeatureProvider(dictionary: [
                 inputName: MLFeatureValue(pixelBuffer: pb)
@@ -359,7 +384,7 @@ private final class EmoNetModel {
             // face crop is wrong or the preprocessing is mismatched
             // with the training distribution.
             print(String(
-                format: "[EmoNet v3] label=%@ top=%.2f rawV=%.3f rawA=%.3f",
+                format: "[EmoNet v4] label=%@ top=%.2f rawV=%.3f rawA=%.3f",
                 String(describing: topLabel), topScore, valence, arousal
             ))
 
