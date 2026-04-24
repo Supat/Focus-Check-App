@@ -356,40 +356,27 @@ private final class AgeGenderModel {
         CVPixelBufferLockBaseAddress(pb, .readOnly)
         if let base = CVPixelBufferGetBaseAddress(pb) {
             let bytesPerRow = CVPixelBufferGetBytesPerRow(pb)
-            var bSum: Int = 0, gSum: Int = 0, rSum: Int = 0
-            var aSum: Int = 0
-            // Histogram buckets for the luminance proxy (B+G+R)/3 so
-            // we can detect bimodal / high-contrast content that
-            // drives the model into saturation. 5 buckets of width 51.
-            var lumaHist = [Int](repeating: 0, count: 5)
-            var extremeCount = 0
-            var count = 0
-            let step = 14  // 16 samples per row/column
-            for y in stride(from: 0, to: h, by: step) {
-                for x in stride(from: 0, to: w, by: step) {
-                    let p = base.advanced(by: y * bytesPerRow + x * 4)
-                        .assumingMemoryBound(to: UInt8.self)
-                    let b = Int(p[0]), g = Int(p[1]), r = Int(p[2]), a = Int(p[3])
-                    bSum += b; gSum += g; rSum += r; aSum += a
-                    count += 1
-                    let luma = (b + g + r) / 3
-                    let bucket = min(4, luma / 51)
-                    lumaHist[bucket] += 1
-                    if luma <= 8 || luma >= 247 { extremeCount += 1 }
+            func luma(x: Int, y: Int) -> Int {
+                let p = base.advanced(by: y * bytesPerRow + x * 4)
+                    .assumingMemoryBound(to: UInt8.self)
+                return (Int(p[0]) + Int(p[1]) + Int(p[2])) / 3
+            }
+            // 5x5 grid of luma values — face regions (eyes, cheeks,
+            // mouth) should produce clearly different values at
+            // different positions; uniform darkness at all 25 points
+            // means the face isn't actually in the buffer.
+            var rows: [String] = []
+            for gy in 0..<5 {
+                let y = min(h - 1, Int(Double(gy) * Double(h - 1) / 4.0))
+                var row: [String] = []
+                for gx in 0..<5 {
+                    let x = min(w - 1, Int(Double(gx) * Double(w - 1) / 4.0))
+                    row.append(String(format: "%3d", luma(x: x, y: y)))
                 }
+                rows.append(row.joined(separator: " "))
             }
-            if count > 0 {
-                let pct = (0..<5).map { Int(Double(lumaHist[$0]) / Double(count) * 100) }
-                print(String(format: "[AgeGender] crop mean B=%.0f G=%.0f R=%.0f A=%.0f (n=%d) "
-                             + "luma%%=[0-51:%d,52-102:%d,103-153:%d,154-204:%d,205-255:%d] "
-                             + "extreme%%=%d",
-                             Double(bSum) / Double(count),
-                             Double(gSum) / Double(count),
-                             Double(rSum) / Double(count),
-                             Double(aSum) / Double(count), count,
-                             pct[0], pct[1], pct[2], pct[3], pct[4],
-                             Int(Double(extremeCount) / Double(count) * 100)))
-            }
+            print("[AgeGender] 5x5 luma grid (top-down):")
+            for r in rows { print("[AgeGender]   \(r)") }
         }
         CVPixelBufferUnlockBaseAddress(pb, .readOnly)
 
