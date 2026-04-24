@@ -313,6 +313,16 @@ private final class EmoNetModel {
             let arousal = (result.featureValue(for: arousalOutput)?
                 .multiArrayValue?[0].floatValue) ?? 0
 
+            // Diagnostic: raw V/A and top-class from the model, before
+            // clamping. If both pin to ±1 on every image, the heads
+            // are saturating on out-of-distribution input — either the
+            // face crop is wrong or the preprocessing is mismatched
+            // with the training distribution.
+            print(String(
+                format: "[EmoNet] predict: label=%@ top=%.2f rawV=%.3f rawA=%.3f",
+                String(describing: topLabel), topScore, valence, arousal
+            ))
+
             // EmoNet doesn't regress dominance, so project D from the
             // 8-class softmax via Mehrabian's anchors. Same trick we
             // used for FER+, applied only to the dominance axis now.
