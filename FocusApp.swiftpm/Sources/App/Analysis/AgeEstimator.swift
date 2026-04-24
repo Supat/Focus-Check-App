@@ -231,9 +231,16 @@ private final class AgeGenderModel {
                  ciContext: CIContext) -> AgeGenderPrediction? {
         guard face.width >= 8, face.height >= 8 else { return nil }
 
-        // yu4u's `--margin 0.4` — 40 % of the face box's width/height
-        // extended on each side. Total crop = face · (1 + 2 · margin).
-        let margin: CGFloat = 0.4
+        // Margin controls how much context around the detected face
+        // the model sees. yu4u's training default was 0.4 (40 % on
+        // each side) but empirically that was scooping up too much
+        // of the surrounding frame on photos with dark backgrounds
+        // or dark clothing — the model saturates to its "dark input"
+        // hallucination (age ≈ 50, P[F] ≈ 0.91). A tighter 0.1
+        // margin still gives a little hair + jawline context while
+        // keeping the frame dominated by actual face pixels. If this
+        // helps, revisit 0.2 as a middle ground.
+        let margin: CGFloat = 0.1
         let cropRect = face.insetBy(dx: -margin * face.width,
                                     dy: -margin * face.height)
 
@@ -409,7 +416,11 @@ private final class AgeGenderModel {
                ) {
                 CGImageDestinationAddImage(dest, cg, nil)
                 if CGImageDestinationFinalize(dest) {
-                    print("[AgeGender] crop dumped to \(png.lastPathComponent)")
+                    // Print the absolute path so the user can navigate
+                    // via Finder → ⌘⇧G on macOS Designed-for-iPad. On
+                    // iOS the file also shows in Files.app under
+                    // "On My iPad" → FocusApp.
+                    print("[AgeGender] crop dumped to \(png.path)")
                 }
             }
         }
