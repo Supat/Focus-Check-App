@@ -12,6 +12,11 @@ graph handles its own normalization). The Swift side pre-crops each
 face rectangle from VNDetectFaceLandmarksRequest, converts to grayscale,
 and resamples to 64² before running this model.
 
+Install prerequisites (onnx-simplifier resolves FER+'s SAME_UPPER
+auto_pad attribute into explicit pads, which onnx2torch needs):
+
+    pip install onnx onnx-simplifier onnx2torch torch coremltools
+
 Download the ONNX once:
 
     curl -L -o emotion-ferplus-8.onnx \\
@@ -31,6 +36,7 @@ then compile + publish per CLAUDE.md:
 """
 
 import onnx
+import onnxsim
 import onnx2torch
 import torch
 import coremltools as ct
@@ -41,7 +47,15 @@ INPUT_SIZE = 64
 
 def main() -> None:
     graph = onnx.load(ONNX_PATH)
-    pt_model = onnx2torch.convert(graph).eval()
+
+    # onnx2torch can't handle ONNX Conv layers with `auto_pad =
+    # SAME_UPPER / SAME_LOWER`. onnx-simplifier resolves those into
+    # explicit pad values and also constant-folds shape ops, leaving
+    # a graph onnx2torch consumes cleanly.
+    simplified, passed = onnxsim.simplify(graph)
+    assert passed, "onnx-simplifier failed to verify the simplified graph."
+
+    pt_model = onnx2torch.convert(simplified).eval()
 
     # FER+ expects single-channel (grayscale) input at (1, 1, 64, 64).
     dummy = torch.rand(1, 1, INPUT_SIZE, INPUT_SIZE) * 255
