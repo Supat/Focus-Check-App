@@ -144,34 +144,28 @@ struct ModelArchive: Sendable {
         )!
     )
 
-    /// yu4u/age-gender-estimation (EfficientNetB3) — per-face age +
-    /// gender classifier. 224² RGB input, two softmax heads:
-    /// `pred_gender` [1, 2] (female / male) and `pred_age` [1, 101]
-    /// (probability over ages 0…100; expectation gives a continuous
-    /// estimate, std-dev gives uncertainty).
+    /// shamangary/SSR-Net (IJCAI'18) — compact age-only regression
+    /// network. 64² BGR input, single scalar output in [0, 100].
+    /// Uses a custom `SSR_module` layer (soft stagewise regression)
+    /// that's registered at model-load time via an MLCustomLayer
+    /// subclass (`SSRModule`, defined in `AgeEstimator.swift`).
     ///
-    /// Supersedes NudeNet's FACE_* branch for per-subject gender when
-    /// installed — this model is face-specific and trained for the
-    /// task instead of inferred as a side-effect of body-part
-    /// detection.
+    /// Replaces the earlier yu4u EfficientNetB3 model which showed a
+    /// systematic bias toward predicting "adult female" on on-device
+    /// inputs. SSR-Net is age-only; gender now falls back to
+    /// NudeNet's FACE_* inference exclusively.
     ///
-    /// **License**: code is MIT, but the IMDB-WIKI training set is
-    /// "academic research only". Treat the compiled model the same
-    /// way we treat EmoNet / OpenGraphAU — fine for Playgrounds /
-    /// local dev; do not bundle in a signed App Store build.
+    /// **License**: Apache-2.0 code, trained on MORPH2 / IMDB-WIKI.
+    /// Same research-only footing as the other optional tiers — do
+    /// not bundle in signed App Store builds.
     ///
-    /// **Version**: `AgeGender-v2` directory, `age-model-v2` tag.
-    /// Bump the pair together when the export pipeline changes.
-    /// v2 fixes a systematic bias caused by a BGR/RGB channel-order
-    /// mismatch between yu4u's training (OpenCV BGR, no swap) and our
-    /// v1 Core ML ImageType (default RGB). The re-exported v2 model
-    /// declares `color_layout=BGR` so inference matches training.
-    /// v2 also widens the Swift-side face crop margin from 1.4 to
-    /// 1.8 to match the upstream `--margin 0.4` (40 % on each side).
-    static let ageGender = ModelArchive(
-        directoryName: "AgeGender-v2.mlmodelc",
+    /// **Version**: `SSRNet-v1` directory, `age-model-v3` tag (v1/v2
+    /// were the retired yu4u model). Bump the pair together when the
+    /// export pipeline changes.
+    static let age = ModelArchive(
+        directoryName: "SSRNet-v1.mlmodelc",
         sourceURL: URL(string:
-            "https://github.com/Supat/Focus-Check-App/releases/download/age-model-v2/AgeGender.mlmodelc.zip"
+            "https://github.com/Supat/Focus-Check-App/releases/download/age-model-v3/SSRNet.mlmodelc.zip"
         )!
     )
 

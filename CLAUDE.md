@@ -145,34 +145,31 @@ inside the non-mode-dependent cache so mode switches don't re-run it.
   set mixes nudity / scene / safe-art / medical / minor-presence
   anchors so the top match functions as a coarse context label.
 
-### Per-face age + gender estimation (yu4u EfficientNetB3, optional)
+### Per-face age estimation (SSR-Net, optional)
 Sixth tier, complementary to the other per-face tiers: `AgeEstimator`
-runs a downloaded EfficientNetB3 model per face to get a continuous
-age estimate and a binary gender classification. The model's two
-softmax heads are reduced Swift-side:
+runs a downloaded SSR-Net model per face and emits a single scalar
+age in [0, 100]. SSR-Net is age-only — gender comes from NudeNet's
+FACE_* branch (`nudityGenders`) exclusively.
 
-- age = `Σ i · p_i` over 101 bins (0…100), clamped to [0, 100]
-- ageStdev = `sqrt(Σ (i − μ)² · p_i)` — spread of the distribution,
-  surfaced as an uncertainty band in the head-badge readout
-- gender = argmax of the 2-class head; `genderConfidence` lets the
-  UI collapse below-threshold calls back to `.unknown`
+Architecturally this model is a stack of 3-stage MobileNet-like
+blocks followed by a custom "Soft Stagewise Regression" combine
+step. Upstream's coremltools converter couldn't inline the combine
+math, so it's implemented as an `MLCustomLayer` (`SSRModule` at
+the bottom of `AgeEstimator.swift`). Core ML loads the `.mlmodelc`
+and resolves the custom class by `@objc` name — no registry call
+needed on the Swift side.
 
-Gender precedence: when this model's prediction clears a 0.6
-confidence floor, it supersedes NudeNet's body-context gender
-inference at the display layer. NudeNet's gender remains the
-fallback for subjects this model didn't score.
-
-- Model: yu4u/age-gender-estimation v0.6 release
-  (`EfficientNetB3_224_weights.11-3.44.hdf5`, MAE 3.44 on IMDB-WIKI)
-- Input: 224² RGB in [0, 255] (EfficientNet's Rescaling + Normalization
-  layers are baked into the graph)
-- License: MIT code, **but the IMDB-WIKI training data is
-  "academic research only"** — treat the compiled model the same
-  way as EmoNet / OpenGraphAU; do not ship in signed App Store builds
-- Known bias caveats: IMDB-WIKI skews toward lighter-skinned faces
-  and celebrity-age labels, so confidence should be read as ordinal
-  rather than calibrated. Presenting "mean ± stdev" instead of a
-  point estimate communicates that honestly.
+- Model: shamangary/SSR-Net stage_num [3, 3, 3], 0.32 MB uncompiled
+- Input: 64² BGR in [0, 255] (no baked-in preprocessing — feed raw
+  pixel bytes). The Core ML spec's `colorSpace` was flipped from
+  the upstream RGB default to BGR because SSR-Net's training
+  pipeline reads with `cv2.imread` (BGR) and never swaps.
+- Output: single scalar age. No distribution → no uncertainty band
+- License: Apache-2.0 code, trained on MORPH2 / IMDB / WIKI —
+  research-only training data. Treat the same as EmoNet /
+  OpenGraphAU; do not ship in signed App Store builds.
+- Replaces the earlier yu4u/age-gender-estimation v2 model which
+  had a strong "adult female" bias on real-device inputs.
 
 ### Per-face pain detection (OpenGraphAU + PSPI, optional)
 Fifth tier, complementary to the emotion classifier: `PainDetector`
@@ -359,7 +356,7 @@ struct ModelArchive {
 - `ModelArchive.clip` → `clip-model-v1` release tag (context scorer, bundle)
 - `ModelArchive.emotion` → `emotion-model-v5` release tag (EmoNet per-face classifier, **research-only license** — do not ship in signed builds)
 - `ModelArchive.openGraphAU` → `pain-model-v1` release tag (OpenGraphAU AU detector for PSPI pain proxy, **research-only license** — do not ship in signed builds)
-- `ModelArchive.ageGender` → `age-model-v1` release tag (yu4u/age-gender-estimation EfficientNetB3 — per-face age + gender, **research-only training data** — do not ship in signed builds)
+- `ModelArchive.age` → `age-model-v3` release tag (SSR-Net — per-face age only, **research-only training data** — do not ship in signed builds; gender falls back to NudeNet's FACE_* branch)
 
 Maintainer workflow (one-time, requires a Mac):
 
@@ -402,15 +399,18 @@ ditto -c -k --sequesterRsrc --keepParent \
 zip -d OpenGraphAU.mlmodelc.zip '__MACOSX/*' 2>/dev/null || true
 gh release upload pain-model-v1 OpenGraphAU.mlmodelc.zip
 
-# yu4u/age-gender-estimation EfficientNetB3 (per-face age + gender).
-curl -L -O \
-  https://github.com/yu4u/age-gender-estimation/releases/download/v0.6/EfficientNetB3_224_weights.11-3.44.hdf5
-python3 Tools/export_age_gender_model.py
-xcrun coremlcompiler compile AgeGender.mlpackage /tmp/
+# SSR-Net (per-face age). Uses the pre-compiled mlmodel from the
+# upstream conversion example; no Keras re-conversion needed.
+curl -L -O https://github.com/shamangary/Keras-to-coreml-multiple-inputs-example/raw/master/ssrnet.mlmodel
+# Flip the declared colorSpace from RGB (upstream default) to BGR
+# so Core ML hands SSR-Net's BGR-trained conv layers the right bytes:
+python3 -c 'import coremltools as ct; m=ct.models.MLModel("ssrnet.mlmodel"); s=m.get_spec(); [setattr(i.type.imageType,"colorSpace",30) for i in s.description.input if i.type.imageType.colorSpace==20]; open("ssrnet-bgr.mlmodel","wb").write(s.SerializeToString())'
+xcrun coremlcompiler compile ssrnet-bgr.mlmodel /tmp/
+mv /tmp/ssrnet-bgr.mlmodelc /tmp/SSRNet-v1.mlmodelc
 ditto -c -k --sequesterRsrc --keepParent \
-      /tmp/AgeGender.mlmodelc AgeGender.mlmodelc.zip
-zip -d AgeGender.mlmodelc.zip '__MACOSX/*' 2>/dev/null || true
-gh release upload age-model-v1 AgeGender.mlmodelc.zip
+      /tmp/SSRNet-v1.mlmodelc SSRNet.mlmodelc.zip
+zip -d SSRNet.mlmodelc.zip '__MACOSX/*' 2>/dev/null || true
+gh release upload age-model-v3 SSRNet.mlmodelc.zip
 ```
 
 `OverlayControls` renders a dedicated install/progress/retry row for

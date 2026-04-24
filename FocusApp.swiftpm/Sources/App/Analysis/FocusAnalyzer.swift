@@ -88,12 +88,12 @@ actor FocusAnalyzer {
         /// contract as `faceEmotions`. Read by the UI to render a
         /// per-subject pain badge under the head stack.
         var painScores: [PainScore?] = []
-        /// Per-face age + gender prediction from yu4u's EfficientNetB3
-        /// estimator, indexed alongside `faceRectangles`. `nil` entries
-        /// for faces the model couldn't crop cleanly; empty array when
-        /// the age-gender model isn't installed. When populated, its
-        /// gender signal supersedes `nudityGenders` at the UI layer.
-        var ageEstimations: [AgeGenderPrediction?] = []
+        /// Per-face age prediction from SSR-Net, indexed alongside
+        /// `faceRectangles`. `nil` entries for faces the model
+        /// couldn't crop; empty array when the age model isn't
+        /// installed. Age-only — gender comes from `nudityGenders`
+        /// (NudeNet's FACE_* branch) exclusively now.
+        var ageEstimations: [AgePrediction?] = []
     }
 
     private let device: MTLDevice
@@ -113,7 +113,7 @@ actor FocusAnalyzer {
     private let clipInstaller = ModelArchiveInstaller(.clip)
     private let emotionInstaller = ModelArchiveInstaller(.emotion)
     private let openGraphAUInstaller = ModelArchiveInstaller(.openGraphAU)
-    private let ageGenderInstaller = ModelArchiveInstaller(.ageGender)
+    private let ageInstaller = ModelArchiveInstaller(.age)
 
     private var source: CIImage?
 
@@ -279,14 +279,13 @@ actor FocusAnalyzer {
         try await openGraphAUInstaller.install(progress: progress)
     }
 
-    /// True when the yu4u age / gender estimator is installed on disk.
-    var isAgeGenderInstalled: Bool { ModelArchive.ageGender.isInstalled() }
+    /// True when the SSR-Net age estimator is installed on disk.
+    var isAgeInstalled: Bool { ModelArchive.age.isInstalled() }
 
-    /// Download + install the age / gender EfficientNetB3 model.
-    /// Lazy MLModel load happens on first classify; no explicit reload
-    /// needed here.
-    func installAgeGenderModel(progress: @Sendable @escaping (Double) -> Void) async throws {
-        try await ageGenderInstaller.install(progress: progress)
+    /// Download + install the SSR-Net age model. Lazy MLModel load
+    /// happens on first predict; no explicit reload needed.
+    func installAgeModel(progress: @Sendable @escaping (Double) -> Void) async throws {
+        try await ageInstaller.install(progress: progress)
     }
 
     /// Eagerly compile the installed Core ML models so the first analyze
@@ -357,7 +356,7 @@ actor FocusAnalyzer {
         var clipMatches: [CLIPMatch]
         var faceEmotions: [EmotionPrediction?]
         var painScores: [PainScore?]
-        var ageEstimations: [AgeGenderPrediction?]
+        var ageEstimations: [AgePrediction?]
     }
     private var cachedNonMode: NonModeResults?
 

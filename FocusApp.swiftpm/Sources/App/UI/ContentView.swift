@@ -373,16 +373,11 @@ struct ContentView: View {
                 let prediction = predictionForBody(body)
                 let emotion = prediction?.label
                 let age = ageForBody(body)
-                // Gender precedence: the face-specific age/gender model
-                // wins when its prediction cleared the confidence floor;
-                // otherwise fall back to NudeNet's body-context inference.
-                let nudenetGender = index < viewModel.nudityGenders.count
+                // Gender comes from NudeNet's FACE_* branch exclusively.
+                // The age tier (SSR-Net) is age-only now.
+                let gender = index < viewModel.nudityGenders.count
                     ? viewModel.nudityGenders[index]
                     : .unknown
-                let gender: SubjectGender = {
-                    if let age, age.genderConfidence >= 0.6 { return age.gender }
-                    return nudenetGender
-                }()
                 // Badge renders when any of the per-subject signals
                 // have something to say — covered+ nudity, an emotion
                 // prediction, a pain score, or an age estimate. Safe
@@ -507,9 +502,9 @@ struct ContentView: View {
         return nil
     }
 
-    /// Find the age / gender prediction for the face matched to `body`.
+    /// Find the age prediction for the face matched to `body`.
     /// Same index-alignment contract as `predictionForBody`.
-    private func ageForBody(_ body: CGRect) -> AgeGenderPrediction? {
+    private func ageForBody(_ body: CGRect) -> AgePrediction? {
         guard !viewModel.ageEstimations.isEmpty else { return nil }
         for (i, face) in viewModel.faceRectangles.enumerated()
             where i < viewModel.ageEstimations.count {
@@ -791,12 +786,11 @@ private struct SubjectHeadBadge: View {
     /// shield/gender cluster. nil when the classifier wasn't run on
     /// this subject's face or fell under its confidence floor.
     let emotion: EmotionLabel?
-    /// Optional age / gender prediction from yu4u's EfficientNetB3.
-    /// When present, the age reads as "mean ± stdev" to the right of
-    /// the glyph cluster and the gender glyph lights up regardless of
-    /// nudity level (clothed subjects still get their gender shown
-    /// when the face classifier committed to one).
-    let age: AgeGenderPrediction?
+    /// Optional age prediction from SSR-Net. When present, the age
+    /// is appended after the glyph cluster and the gender glyph
+    /// lights up regardless of nudity level (so clothed subjects
+    /// with an age estimate still show their NudeNet gender).
+    let age: AgePrediction?
 
     var body: some View {
         HStack(spacing: 2) {
@@ -836,13 +830,11 @@ private struct SubjectHeadBadge: View {
         .liquidBadgeBackground(tint: Color.black.opacity(0.45), in: Capsule())
     }
 
-    /// Format "mean ± stdev" with the stdev collapsed to nothing when
-    /// it rounds to zero — keeps the badge compact on high-confidence
-    /// predictions where the spread isn't interesting.
-    private static func ageText(for age: AgeGenderPrediction) -> String {
-        let mean = Int(age.age.rounded())
-        let band = Int(age.ageStdev.rounded())
-        return band > 0 ? "\(mean)±\(band)" : "\(mean)"
+    /// SSR-Net outputs a scalar (no distribution) so we render just
+    /// the integer age. Prior yu4u-based UI showed "mean ± stdev";
+    /// that band isn't available here.
+    private static func ageText(for age: AgePrediction) -> String {
+        "\(Int(age.age.rounded()))"
     }
 
     private var tint: Color {

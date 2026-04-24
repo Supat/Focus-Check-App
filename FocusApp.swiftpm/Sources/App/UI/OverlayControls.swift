@@ -83,7 +83,7 @@ struct OverlayControls: View {
             clipInstallRow
             emotionInstallRow
             painInstallRow
-            ageGenderInstallRow
+            ageInstallRow
         }
         #if os(iOS)
         .onPencilSqueeze { phase in
@@ -504,13 +504,13 @@ struct OverlayControls: View {
         }
     }
 
-    /// Age / gender estimator install row. Same download / progress /
-    /// retry pattern as the other optional model tiers. Output is a
-    /// per-face age ± stdev readout plus a gender glyph that takes
-    /// precedence over NudeNet's body-context inference.
+    /// Age estimator install row. Same download / progress / retry
+    /// pattern as the other optional model tiers. Output is a
+    /// per-face age readout; gender comes from NudeNet's FACE_*
+    /// branch (not from this model) — SSR-Net is age-only.
     @ViewBuilder
-    private var ageGenderInstallRow: some View {
-        switch viewModel.ageGenderInstall {
+    private var ageInstallRow: some View {
+        switch viewModel.ageInstall {
         case .installed:
             EmptyView()
 
@@ -518,11 +518,11 @@ struct OverlayControls: View {
             HStack(spacing: 8) {
                 Image(systemName: "arrow.down.circle")
                     .foregroundStyle(.secondary)
-                Text("Age / gender estimator not installed.")
+                Text("Age estimator not installed.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button("Download") { viewModel.downloadAgeGenderModel() }
+                Button("Download") { viewModel.downloadAgeModel() }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
             }
@@ -545,7 +545,7 @@ struct OverlayControls: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
                 Spacer()
-                Button("Retry") { viewModel.downloadAgeGenderModel() }
+                Button("Retry") { viewModel.downloadAgeModel() }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
             }
