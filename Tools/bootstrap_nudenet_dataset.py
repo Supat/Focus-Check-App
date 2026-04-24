@@ -283,9 +283,10 @@ def main() -> None:
     else:
         photos = library.photos()
 
-    # Drop deleted / trashed / missing photos — osxphotos can hand
-    # these back but we don't want to touch them.
-    photos = [p for p in photos if not p.trashed and not p.hidden
+    # Drop trashed / hidden / missing photos — osxphotos can hand
+    # these back but we don't want to touch them. (`intrash`, not
+    # `trashed`, is the current osxphotos attribute name.)
+    photos = [p for p in photos if not p.intrash and not p.hidden
               and p.path is not None]
 
     if args.limit:
