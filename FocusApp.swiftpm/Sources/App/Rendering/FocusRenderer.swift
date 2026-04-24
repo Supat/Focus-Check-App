@@ -322,6 +322,33 @@ final class FocusRenderer {
                 guard !gated.isEmpty else { return inputs.source }
                 let regions = gated.map(\.rect)
                 return regionMosaic(source: inputs.source, regions: regions)
+            case .jacket:
+                // Eye black bar + genital mosaic. Covers anonymity at
+                // the head and explicit anatomy at the crotch while
+                // leaving the rest of the composition visible — useful
+                // for evidence / documentary frames where the subject
+                // must remain unidentifiable AND unexposed. Both paths
+                // respect the per-subject gate: eyes filter through
+                // the existing body-level attribution and genital
+                // detections go through the same gateDetections helper
+                // the Privy / Nudity modes use.
+                var result = inputs.source
+                if !gatedEyes.isEmpty {
+                    result = blackBarOverlay(source: result, bars: gatedEyes)
+                }
+                let genitalDetections = Self.gateDetections(
+                    inputs.nudityDetections,
+                    bodies: inputs.bodies,
+                    levels: inputs.nudityLevels,
+                    gate: inputs.nudityGate
+                ).filter { $0.label.uppercased().contains("GENITALIA_EXPOSED") }
+                if !genitalDetections.isEmpty {
+                    result = regionMosaic(
+                        source: result,
+                        regions: genitalDetections.map(\.rect)
+                    )
+                }
+                return result
             }
         }()
 
