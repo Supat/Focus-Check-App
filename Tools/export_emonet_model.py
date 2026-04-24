@@ -89,8 +89,19 @@ class EmoNetWrapper(torch.nn.Module):
     def __init__(self) -> None:
         super().__init__()
         self.emonet = EmoNet(n_expression=N_EXPRESSION)
+
+        # Load weights defensively — EmoNet's checkpoint sometimes
+        # ships as a raw state_dict, sometimes nested under a
+        # 'state_dict' key, and occasionally with 'module.' prefixes
+        # left over from DataParallel training. Strict loading
+        # surfaces any remaining mismatches so the exported model
+        # isn't silently running on randomly-initialized weights
+        # (the hallmark of that failure mode is NaN outputs).
         state = torch.load(WEIGHTS_PATH, map_location="cpu")
-        self.emonet.load_state_dict(state, strict=False)
+        if isinstance(state, dict) and "state_dict" in state:
+            state = state["state_dict"]
+        state = {k.replace("module.", "", 1): v for k, v in state.items()}
+        self.emonet.load_state_dict(state, strict=True)
         self.emonet.eval()
 
     def forward(self, pixel_values: torch.Tensor):  # [B, 3, H, W] in [0, 1]
@@ -102,6 +113,24 @@ class EmoNetWrapper(torch.nn.Module):
 def main() -> None:
     wrapper = EmoNetWrapper().eval()
     dummy = torch.rand(1, 3, INPUT_SIZE, INPUT_SIZE)
+
+    # Sanity check the raw PyTorch model before tracing. If weights
+    # failed to load, the expression logits will be garbage (±inf,
+    # NaN, or wildly divergent). Bail out early with a readable
+    # error rather than exporting a silently-broken .mlpackage.
+    with torch.no_grad():
+        expr, val, ars = wrapper(dummy)
+    if not torch.isfinite(expr).all():
+        raise RuntimeError(
+            "EmoNet emitted non-finite expression logits on the dummy "
+            "input — weights probably didn't load. Inspect "
+            f"{WEIGHTS_PATH} keys vs. EmoNet class attributes."
+        )
+    print(
+        f"[sanity] expression range [{expr.min():.3f}, {expr.max():.3f}] "
+        f"valence={val.item():.3f} arousal={ars.item():.3f}"
+    )
+
     traced = torch.jit.trace(wrapper, dummy)
 
     mlmodel = ct.convert(
