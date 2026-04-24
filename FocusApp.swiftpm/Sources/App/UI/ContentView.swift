@@ -384,7 +384,7 @@ struct ContentView: View {
                     VStack(spacing: 4) {
                         SubjectHeadBadge(level: level, gender: gender, emotion: emotion)
                         if let pad = prediction?.pad {
-                            subjectValenceArousalBars(for: pad)
+                            subjectPADBars(for: pad)
                         }
                     }
                     // Anchor the stack's top near the body's top edge
@@ -398,27 +398,29 @@ struct ContentView: View {
         }
     }
 
-    /// EmoNet-style valence / arousal readout: two stacked horizontal
-    /// bars with a center-origin tick. Positive values extend right in
-    /// green, negative extend left in red, matching the paper's
-    /// figures. Dominance is intentionally dropped — EmoNet doesn't
-    /// regress it, so showing the Mehrabian-projected value alongside
-    /// the two real axes would misrepresent the model.
-    private func subjectValenceArousalBars(for pad: PADVector) -> some View {
+    /// EmoNet-style P / A / D readout: three stacked horizontal bars
+    /// with a center-origin tick. Positive values extend right in
+    /// green, negative extend left in red. V and A come straight from
+    /// EmoNet's regression heads; D is projected from the expression
+    /// softmax via Mehrabian's anchor table, so its confidence band is
+    /// weaker than V/A — we still surface it because it's the third
+    /// standard PAD axis and callers asked for the full triple.
+    private func subjectPADBars(for pad: PADVector) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            valenceArousalBar(label: "V", value: pad.pleasure)
-            valenceArousalBar(label: "A", value: pad.arousal)
+            padBar(label: "V", value: pad.pleasure)
+            padBar(label: "A", value: pad.arousal)
+            padBar(label: "D", value: pad.dominance)
         }
         .padding(.horizontal, 4)
         .padding(.vertical, 2)
         .liquidBadgeBackground(tint: Color.black.opacity(0.45), in: Capsule())
     }
 
-    /// One V or A row: tiny label, then a bipolar fill bar. Value is
-    /// clamped to [-1, 1] before mapping so the fill never exceeds the
-    /// track on numeric slop (and so stale pre-clamp diagnostics
+    /// One V / A / D row: tiny label, then a bipolar fill bar. Value
+    /// is clamped to [-1, 1] before mapping so the fill never exceeds
+    /// the track on numeric slop (and so stale pre-clamp diagnostics
     /// during the EmoNet bring-up don't push the bar out of bounds).
-    private func valenceArousalBar(label: String, value: Float) -> some View {
+    private func padBar(label: String, value: Float) -> some View {
         let clamped = CGFloat(max(-1, min(1, value)))
         let barWidth: CGFloat = 36
         let barHeight: CGFloat = 4
