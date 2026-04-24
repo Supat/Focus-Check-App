@@ -510,7 +510,7 @@ struct ContentView: View {
             }
         }()
         return HStack(spacing: 3) {
-            Image(systemName: "heart.text.square")
+            Image(systemName: "bandage.fill")
                 .font(.system(size: 7, weight: .bold))
                 .foregroundStyle(.white.opacity(0.9))
                 .frame(width: 6, alignment: .leading)
