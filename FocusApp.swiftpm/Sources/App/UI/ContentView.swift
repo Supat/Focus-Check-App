@@ -384,7 +384,7 @@ struct ContentView: View {
                     VStack(spacing: 4) {
                         SubjectHeadBadge(level: level, gender: gender, emotion: emotion)
                         if let pad = prediction?.pad {
-                            subjectPADCapsule(for: pad)
+                            subjectValenceArousalBars(for: pad)
                         }
                     }
                     // Anchor the stack's top near the body's top edge
@@ -398,20 +398,52 @@ struct ContentView: View {
         }
     }
 
-    /// Compact P / A / D readout rendered under the head badge for a
-    /// single subject. Small monospaced text inside its own capsule
-    /// so the primary badge stays legible.
-    private func subjectPADCapsule(for pad: PADVector) -> some View {
-        HStack(spacing: 2) {
-            Text("P\(Self.signedPAD(pad.pleasure))")
-            Text("A\(Self.signedPAD(pad.arousal))")
-            Text("D\(Self.signedPAD(pad.dominance))")
+    /// EmoNet-style valence / arousal readout: two stacked horizontal
+    /// bars with a center-origin tick. Positive values extend right in
+    /// green, negative extend left in red, matching the paper's
+    /// figures. Dominance is intentionally dropped — EmoNet doesn't
+    /// regress it, so showing the Mehrabian-projected value alongside
+    /// the two real axes would misrepresent the model.
+    private func subjectValenceArousalBars(for pad: PADVector) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            valenceArousalBar(label: "V", value: pad.pleasure)
+            valenceArousalBar(label: "A", value: pad.arousal)
         }
-        .font(.system(size: 8, weight: .regular).monospacedDigit())
-        .foregroundStyle(.white.opacity(0.9))
-        .padding(.horizontal, 3)
-        .padding(.vertical, 1)
+        .padding(.horizontal, 4)
+        .padding(.vertical, 2)
         .liquidBadgeBackground(tint: Color.black.opacity(0.45), in: Capsule())
+    }
+
+    /// One V or A row: tiny label, then a bipolar fill bar. Value is
+    /// clamped to [-1, 1] before mapping so the fill never exceeds the
+    /// track on numeric slop (and so stale pre-clamp diagnostics
+    /// during the EmoNet bring-up don't push the bar out of bounds).
+    private func valenceArousalBar(label: String, value: Float) -> some View {
+        let clamped = CGFloat(max(-1, min(1, value)))
+        let barWidth: CGFloat = 36
+        let barHeight: CGFloat = 4
+        let half = barWidth / 2
+        let fillWidth = abs(clamped) * half
+        return HStack(spacing: 3) {
+            Text(label)
+                .font(.system(size: 7, weight: .bold).monospacedDigit())
+                .foregroundStyle(.white.opacity(0.9))
+                .frame(width: 6, alignment: .leading)
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.white.opacity(0.18))
+                    .frame(width: barWidth, height: barHeight)
+                Capsule()
+                    .fill(clamped >= 0 ? Color.green : Color.red)
+                    .frame(width: fillWidth, height: barHeight)
+                    .offset(x: clamped >= 0 ? half : half - fillWidth)
+                Rectangle()
+                    .fill(Color.white.opacity(0.5))
+                    .frame(width: 1, height: barHeight)
+                    .offset(x: half - 0.5)
+            }
+            .frame(width: barWidth, height: barHeight)
+        }
     }
 
     /// Find the face rect whose center lies inside `body` and return
@@ -538,13 +570,6 @@ struct ContentView: View {
             .padding(.vertical, 6)
             .liquidBadgeBackground(in: Capsule())
         }
-    }
-
-    /// Format a PAD axis value as "+0.81" / "-0.63" / "0.00" —
-    /// consistent width regardless of sign, two decimals.
-    private static func signedPAD(_ v: Float) -> String {
-        let clamped = max(-1, min(1, v))
-        return String(format: "%+.2f", clamped)
     }
 
     /// Upper-case the first letter of `s` while leaving the rest
