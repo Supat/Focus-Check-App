@@ -68,6 +68,20 @@ private final class AgeGenderModel {
     private let ageOutputName: String
     private let genderOutputName: String
     private let inputSize = CGSize(width: 224, height: 224)
+    /// Dedicated CIContext for crop rendering. The shared analyzer
+    /// CIContext has `workingColorSpace = extendedLinearDisplayP3`,
+    /// which produces pixel buffer bytes that don't exactly match
+    /// sRGB-encoded values — on this model that manifests as a
+    /// ~30 % darkening of the input, pushing the prediction into
+    /// the model's "dark input" hallucination. A dedicated sRGB-
+    /// working-space context renders byte-accurate sRGB pixels.
+    private let renderContext: CIContext = {
+        let sRGB = CGColorSpace(name: CGColorSpace.sRGB)!
+        return CIContext(options: [
+            .workingColorSpace: sRGB,
+            .outputColorSpace: sRGB,
+        ])
+    }()
 
     private static let numAgeBins = 101  // 0…100 inclusive.
 
@@ -280,8 +294,11 @@ private final class AgeGenderModel {
                 .translatedBy(x: -inputSize.width, y: 0))
             .cropped(to: CGRect(origin: .zero, size: inputSize))
 
-        guard let agePrimary = rawProbabilities(for: resized, ciContext: ciContext),
-              let ageFlipped = rawProbabilities(for: flipped, ciContext: ciContext)
+        // Use the dedicated sRGB-working-space render context rather
+        // than the caller's shared extendedLinearDisplayP3 one —
+        // see `renderContext` property comment for why.
+        guard let agePrimary = rawProbabilities(for: resized, ciContext: renderContext),
+              let ageFlipped = rawProbabilities(for: flipped, ciContext: renderContext)
         else { return nil }
 
         // Diagnostic: top-3 age bins of the primary (un-flipped) pass,
