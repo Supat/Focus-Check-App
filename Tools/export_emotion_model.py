@@ -48,10 +48,11 @@ import onnxsim
 import onnx2torch
 import torch
 import coremltools as ct
-from onnx import helper
+from onnx import helper, version_converter
 
 ONNX_PATH  = "emotion-ferplus-8.onnx"
 INPUT_SIZE = 64
+TARGET_OPSET = 13   # onnx2torch's supported op versions sit in opset 11+.
 
 
 def build_shape_map(model: onnx.ModelProto) -> dict[str, list[int]]:
@@ -142,6 +143,11 @@ def main() -> None:
     # Rewrite remaining auto_pad attributes using the propagated shapes.
     shapes = build_shape_map(simplified)
     resolve_auto_pad(simplified, shapes)
+
+    # Upgrade to a modern opset so onnx2torch's converter registry
+    # matches — FER+ ships at opset 7, which has older Dropout /
+    # BatchNorm / etc. signatures that aren't registered.
+    simplified = version_converter.convert_version(simplified, TARGET_OPSET)
 
     pt_model = onnx2torch.convert(simplified).eval()
 
