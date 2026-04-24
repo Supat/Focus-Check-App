@@ -341,22 +341,32 @@ def main() -> None:
 
     convert = args.convert_jpeg and not args.keep_originals
 
+    # Set up the export pipeline. osxphotos' newer API moves
+    # convert_to_jpeg off of PhotoInfo.export() onto ExportOptions,
+    # which PhotoExporter consumes. Building it once outside the
+    # loop avoids repeated validation.
+    export_options = osxphotos.ExportOptions(
+        convert_to_jpeg=convert,
+        overwrite=False,  # don't clobber earlier-run output
+        update=False,
+    )
+
     exported_count = 0
     labeled_count = 0
     skipped_export = 0
     skipped_label = 0
 
     for photo in tqdm(photos, desc="Processing"):
-        # osxphotos.export() COPIES the original out. It does not
-        # modify the library. The boolean kwargs below only affect
-        # the copied output.
+        # PhotoExporter.export() COPIES the original (converting to
+        # JPEG if requested). It does not modify the library. The
+        # boolean options above only affect the copied output.
         try:
-            paths = photo.export(
-                str(images_dir),
-                edited=False,
-                convert_to_jpeg=convert,
-                overwrite=False,     # don't clobber an earlier run
-            )
+            exporter = osxphotos.PhotoExporter(photo)
+            results = exporter.export(str(images_dir), options=export_options)
+            # `exported` holds final output paths regardless of whether
+            # a JPEG conversion happened; `skipped` shows up when an
+            # earlier run produced the same file (overwrite=False).
+            paths = results.exported or results.skipped
         except Exception as exc:
             print(f"  export failed for {photo.uuid}: {exc}", file=sys.stderr)
             skipped_export += 1
@@ -405,13 +415,27 @@ def main() -> None:
                 box = det.get("box", [])
                 if len(box) != 4:
                     continue
-                x1, y1, x2, y2 = map(float, box)
-                # NudeNet returns pixel coords on the source image.
-                # YOLO wants normalized [cx, cy, w, h].
-                cx = ((x1 + x2) / 2) / img_w
-                cy = ((y1 + y2) / 2) / img_h
-                bw = (x2 - x1) / img_w
-                bh = (y2 - y1) / img_h
+                # NudeNet returns pixel-coord xywh — [x_topleft,
+                # y_topleft, width, height] — NOT xyxy. Convert to
+                # YOLO's normalized [cx, cy, w, h] per image size,
+                # clamping the box to [0, 1] in image space.
+                # NudeNet occasionally emits boxes that extend past
+                # the image edge (the YOLO decoder can produce
+                # negative coords or coords > image size); those
+                # should be clipped rather than dropped.
+                x_tl, y_tl, bw_px, bh_px = map(float, box)
+                x1 = max(0.0, x_tl) / img_w
+                y1 = max(0.0, y_tl) / img_h
+                x2 = min(float(img_w), x_tl + bw_px) / img_w
+                y2 = min(float(img_h), y_tl + bh_px) / img_h
+                bw = x2 - x1
+                bh = y2 - y1
+                # Skip degenerate boxes (zero area after clipping, or
+                # completely outside the image).
+                if bw <= 0 or bh <= 0:
+                    continue
+                cx = (x1 + x2) / 2
+                cy = (y1 + y2) / 2
                 out.write(f"{class_id} {cx:.6f} {cy:.6f} "
                           f"{bw:.6f} {bh:.6f}\n")
                 wrote_any = True
