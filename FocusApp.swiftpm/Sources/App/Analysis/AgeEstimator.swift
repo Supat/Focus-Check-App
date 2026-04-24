@@ -237,6 +237,19 @@ private final class AgeGenderModel {
         let cropRect = face.insetBy(dx: -margin * face.width,
                                     dy: -margin * face.height)
 
+        // Diagnostic: source extent vs crop rect. If the crop extends
+        // outside the extent, clampedToExtent should replicate edge
+        // pixels but we're seeing dark borders in the rendered crop
+        // that suggest otherwise.
+        print(String(format: "[AgeGender] source extent=(%.0f,%.0f,%.0f,%.0f) "
+                     + "face=(%.0f,%.0f,%.0f,%.0f) crop=(%.0f,%.0f,%.0f,%.0f)",
+                     Double(source.extent.origin.x), Double(source.extent.origin.y),
+                     Double(source.extent.width), Double(source.extent.height),
+                     Double(face.origin.x), Double(face.origin.y),
+                     Double(face.width), Double(face.height),
+                     Double(cropRect.origin.x), Double(cropRect.origin.y),
+                     Double(cropRect.width), Double(cropRect.height)))
+
         let scaleX = inputSize.width / cropRect.width
         let scaleY = inputSize.height / cropRect.height
         let transform = CGAffineTransform.identity
@@ -379,6 +392,27 @@ private final class AgeGenderModel {
             for r in rows { print("[AgeGender]   \(r)") }
         }
         CVPixelBufferUnlockBaseAddress(pb, .readOnly)
+
+        // Dump the rendered crop to the app's documents directory so
+        // the user can retrieve via Files.app and we can actually see
+        // what's reaching the model. One file per inference, timestamped.
+        if let docs = try? FileManager.default.url(
+            for: .documentDirectory, in: .userDomainMask,
+            appropriateFor: nil, create: false
+        ) {
+            let ts = Int(Date().timeIntervalSince1970 * 1000) % 1_000_000
+            let png = docs.appendingPathComponent("agegender-crop-\(ts).png")
+            let ci = CIImage(cvPixelBuffer: pb)
+            if let cg = ciContext.createCGImage(ci, from: ci.extent),
+               let dest = CGImageDestinationCreateWithURL(
+                   png as CFURL, "public.png" as CFString, 1, nil
+               ) {
+                CGImageDestinationAddImage(dest, cg, nil)
+                if CGImageDestinationFinalize(dest) {
+                    print("[AgeGender] crop dumped to \(png.lastPathComponent)")
+                }
+            }
+        }
 
         do {
             let features = try MLDictionaryFeatureProvider(dictionary: [
