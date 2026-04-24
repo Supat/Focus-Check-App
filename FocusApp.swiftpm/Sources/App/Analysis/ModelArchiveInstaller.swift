@@ -54,12 +54,20 @@ struct ModelArchive: Sendable {
     /// exposed/covered body parts, enabling per-subject nudity scoring
     /// instead of the whole-image SFW/NSFW binary the `.nsfw` archive
     /// provides. Expected output: Create ML object-detector format
-    /// (`coordinates` Nx4 + `confidence` NxC). Maintainer converts the
-    /// upstream ONNX via coremltools + compiles with `xcrun coremlcompiler`.
+    /// (`coordinates` Nx4 + `confidence` NxC) *or* raw YOLO tensor
+    /// (`[1, N, 5+C]` / `[1, 4+C, N]`) — `parseDetections` routes both.
+    ///
+    /// **Version**: `NudeNet-v2` — bumped from the `320n` nano variant
+    /// to the `640m` medium variant for recall. 640² input resolution
+    /// means 4× more pixels for the detector to work with, which
+    /// resolves most "obvious subject missed" cases; the medium model
+    /// capacity (~20 M params vs 2 M) also sharpens per-label
+    /// discrimination. Old `NudeNet.mlmodelc/` stays on disk until the
+    /// user offloads the app.
     static let nudenet = ModelArchive(
-        directoryName: "NudeNet.mlmodelc",
+        directoryName: "NudeNet-v2.mlmodelc",
         sourceURL: URL(string:
-            "https://github.com/Supat/Focus-Check-App/releases/download/nudenet-model-v1/NudeNet.mlmodelc.zip"
+            "https://github.com/Supat/Focus-Check-App/releases/download/nudenet-model-v2/NudeNet.mlmodelc.zip"
         )!
     )
 
