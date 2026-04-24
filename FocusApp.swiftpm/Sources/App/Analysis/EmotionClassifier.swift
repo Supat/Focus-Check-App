@@ -122,17 +122,20 @@ private final class EmoNetModel {
     private let model: MLModel
     private let inputName: String
     private let inputSize: CGSize
-
-    // Output names baked in by the Tools/export_emonet_model.py
-    // converter; these match the `ct.TensorType(name:)` calls there.
-    private static let expressionOutput = "expression"
-    private static let valenceOutput    = "valence"
-    private static let arousalOutput    = "arousal"
+    /// Resolved output names for each head, probed at load time so
+    /// the model works regardless of whether coremltools preserved
+    /// the `ct.TensorType(name:)` labels we asked for.
+    private let expressionOutput: String
+    private let valenceOutput: String
+    private let arousalOutput: String
 
     /// Minimum top-class softmax score required to surface a
     /// prediction. Below this the face is returned as nil so the UI
-    /// hides its glyph instead of asserting a guess.
-    private let confidenceFloor: Float = 0.35
+    /// hides its glyph instead of asserting a guess. Lower for
+    /// EmoNet than FER+ because EmoNet's expression head is
+    /// softer-distributed on natural faces — a 0.35 floor dropped
+    /// most real images.
+    private let confidenceFloor: Float = 0.20
 
     init() throws {
         let url = try ModelArchive.emotion.installedURL()
@@ -153,6 +156,61 @@ private final class EmoNetModel {
             throw AnalysisError.modelLoadFailed("Emotion model has no usable image input.")
         }
         self.inputName = input.key
+
+        // Resolve output names. We'd like the converter to have
+        // preserved `expression` / `valence` / `arousal` literally,
+        // but coremltools occasionally renames outputs to `var_N`
+        // when converting traced modules. Fall back to shape-based
+        // identification: an 8-dim multiarray is expression, a
+        // 1-dim multiarray is either valence or arousal.
+        let outputs = model.modelDescription.outputDescriptionsByName
+        let names = Array(outputs.keys)
+        let orderedShapes: [(name: String, count: Int)] = names.compactMap { name in
+            let desc = outputs[name]
+            guard let multi = desc?.multiArrayConstraint else { return nil }
+            let totalCount = multi.shape.map(\.intValue).reduce(1, *)
+            return (name, totalCount)
+        }
+        func firstMatching(_ hint: String, countPredicate: (Int) -> Bool) -> String? {
+            if outputs[hint] != nil,
+               let match = orderedShapes.first(where: { $0.name == hint && countPredicate($0.count) }) {
+                return match.name
+            }
+            return orderedShapes.first(where: { countPredicate($0.count) })?.name
+        }
+        let expressionCandidates = orderedShapes
+            .filter { $0.count == EmoNetModel.classOrder.count }
+            .map(\.name)
+        let scalarCandidates = orderedShapes
+            .filter { $0.count == 1 }
+            .map(\.name)
+
+        guard let exprName = outputs["expression"] != nil
+                ? "expression"
+                : expressionCandidates.first
+        else {
+            throw AnalysisError.modelLoadFailed(
+                "EmoNet model has no 8-dim expression output (available: \(names))."
+            )
+        }
+        // Prefer exact-name matches for V/A; fall back to the two
+        // remaining scalar outputs in declared order. EmoNet's
+        // traced output order is expression → valence → arousal,
+        // so the same order works when names were scrubbed.
+        let valName: String = outputs["valence"] != nil ? "valence"
+            : (scalarCandidates.first ?? "")
+        let arsName: String = outputs["arousal"] != nil ? "arousal"
+            : (scalarCandidates.count >= 2 ? scalarCandidates[1] : "")
+        guard !valName.isEmpty, !arsName.isEmpty else {
+            throw AnalysisError.modelLoadFailed(
+                "EmoNet model missing valence/arousal scalar outputs (available: \(names))."
+            )
+        }
+        self.expressionOutput = exprName
+        self.valenceOutput = valName
+        self.arousalOutput = arsName
+
+        print("[EmoNet] loaded input=\(inputName) expression=\(exprName) valence=\(valName) arousal=\(arsName)")
 
         var resolvedSize = CGSize(width: 256, height: 256)
         if let constraint = input.value.imageConstraint {
@@ -203,9 +261,12 @@ private final class EmoNetModel {
                 inputName: MLFeatureValue(pixelBuffer: pb)
             ])
             let result = try model.prediction(from: features)
-            guard let expr = result.featureValue(for: Self.expressionOutput)?.multiArrayValue,
+            guard let expr = result.featureValue(for: expressionOutput)?.multiArrayValue,
                   expr.count >= Self.classOrder.count
-            else { return nil }
+            else {
+                print("[EmoNet] predict: missing/short expression output (\(expressionOutput))")
+                return nil
+            }
 
             // Stable softmax over the expression logits.
             var logits = [Float](repeating: 0, count: Self.classOrder.count)
@@ -230,6 +291,7 @@ private final class EmoNetModel {
                 topIdx = i
             }
             guard topScore >= confidenceFloor, topIdx < Self.classOrder.count else {
+                print(String(format: "[EmoNet] predict: top softmax %.3f < floor %.2f — skipping", topScore, confidenceFloor))
                 return nil
             }
             let topLabel = Self.classOrder[topIdx]
@@ -238,9 +300,9 @@ private final class EmoNetModel {
             // heads — this is the whole point of using it instead of
             // FER+. Scalars sit in [-1, 1] by design; clamp defensively
             // in case the export introduced numerical slop.
-            let valence = (result.featureValue(for: Self.valenceOutput)?
+            let valence = (result.featureValue(for: valenceOutput)?
                 .multiArrayValue?[0].floatValue) ?? 0
-            let arousal = (result.featureValue(for: Self.arousalOutput)?
+            let arousal = (result.featureValue(for: arousalOutput)?
                 .multiArrayValue?[0].floatValue) ?? 0
 
             // EmoNet doesn't regress dominance, so project D from the
