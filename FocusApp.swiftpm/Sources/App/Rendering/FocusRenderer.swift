@@ -288,7 +288,15 @@ final class FocusRenderer {
                 // secondary regions the user explicitly spared —
                 // armpits, breasts, belly, feet. Genitalia / anus /
                 // buttocks / face-label detections still get mosaiced.
-                let keep = inputs.nudityDetections.filter { det in
+                // Per-subject gate applies the same way as the other
+                // body-based modes: a detection survives only when its
+                // owning body's level meets or exceeds `nudityGate`.
+                let keep = Self.gateDetections(
+                    inputs.nudityDetections,
+                    bodies: inputs.bodies,
+                    levels: inputs.nudityLevels,
+                    gate: inputs.nudityGate
+                ).filter { det in
                     let upper = det.label.uppercased()
                     return !(upper.contains("ARMPITS")
                           || upper.contains("BREAST")
@@ -299,15 +307,20 @@ final class FocusRenderer {
                 return regionMosaic(source: inputs.source,
                                     regions: keep.map(\.rect))
             case .nudity:
-                // Pixelate each NudeNet detection box directly. No Vision
-                // body assignment in this path; the detector's own boxes
-                // are the redaction targets. Detections are not subject to
-                // the per-subject gate — the user picked this mode to
-                // cover every flagged region. 1.5x block size vs. the
+                // Pixelate each NudeNet detection box directly. Per-
+                // subject gate is applied first so detections belonging
+                // to below-gate subjects are skipped alongside the
+                // body / chest / groin modes; 1.5x block size vs. the
                 // other region modes so tight detections read as solidly
                 // redacted instead of still-readable pixel noise.
-                guard !inputs.nudityDetections.isEmpty else { return inputs.source }
-                let regions = inputs.nudityDetections.map(\.rect)
+                let gated = Self.gateDetections(
+                    inputs.nudityDetections,
+                    bodies: inputs.bodies,
+                    levels: inputs.nudityLevels,
+                    gate: inputs.nudityGate
+                )
+                guard !gated.isEmpty else { return inputs.source }
+                let regions = gated.map(\.rect)
                 return regionMosaic(source: inputs.source, regions: regions)
             }
         }()
@@ -644,6 +657,35 @@ final class FocusRenderer {
         guard !levels.isEmpty else { return bodies }
         return zip(bodies, levels)
             .compactMap { $1 >= gate ? $0 : nil }
+    }
+
+    /// Per-subject gate for NudeNet detections. Each detection gets
+    /// attributed to whichever body it overlaps most (same rule
+    /// NudityDetector uses internally), and survives only if that
+    /// body's level meets the gate. Detections that don't attribute
+    /// to any body pass through — same conservative default as
+    /// `filterByBodyLevel`, since dropping an unattributed detection
+    /// could skip a subject the body detector happened to miss.
+    private static func gateDetections(_ detections: [NudityDetection],
+                                       bodies: [CGRect],
+                                       levels: [NudityLevel],
+                                       gate: NudityLevel) -> [NudityDetection] {
+        guard !levels.isEmpty, !bodies.isEmpty else { return detections }
+        return detections.filter { det in
+            var bestIdx: Int? = nil
+            var bestArea: CGFloat = 0
+            for (i, body) in bodies.enumerated() {
+                let inter = body.intersection(det.rect)
+                guard !inter.isNull else { continue }
+                let area = inter.width * inter.height
+                if area > bestArea {
+                    bestArea = area
+                    bestIdx = i
+                }
+            }
+            guard let idx = bestIdx, idx < levels.count else { return true }
+            return levels[idx] >= gate
+        }
     }
 
     /// Assign each region (face / chest / groin) to whichever body
