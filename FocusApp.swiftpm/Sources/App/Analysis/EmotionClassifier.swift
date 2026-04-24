@@ -315,7 +315,7 @@ private final class EmoNetModel {
         }
         CVPixelBufferUnlockBaseAddress(pb, .readOnly)
         print(String(
-            format: "[EmoNet v4] face=(%.0f,%.0f,%.0f,%.0f) roll=%.3f scale=%.4f centerBGRA=(%d,%d,%d,%d)",
+            format: "[EmoNet v5] face=(%.0f,%.0f,%.0f,%.0f) roll=%.3f scale=%.4f centerBGRA=(%d,%d,%d,%d)",
             face.origin.x, face.origin.y, face.width, face.height,
             Double(roll), Double(scale),
             Int(centerBGRA.0), Int(centerBGRA.1), Int(centerBGRA.2), Int(centerBGRA.3)
@@ -346,6 +346,16 @@ private final class EmoNetModel {
             for i in 0..<logits.count {
                 logits[i] = expr[i].floatValue
             }
+            // Dump the raw 8-logit distribution so we can tell whether
+            // the model is genuinely confident on disgust (one class
+            // moderately above the rest) vs. degenerately collapsed
+            // (one class far above with the others at -50). The latter
+            // would point to weights / channel-order / norm bugs in
+            // the exported .mlmodelc, not just OOD input.
+            let logitStr = logits.enumerated().map { i, v in
+                String(format: "%@=%.2f", String(describing: Self.classOrder[i]), v)
+            }.joined(separator: " ")
+            print("[EmoNet v5] logits: \(logitStr)")
             let maxL = logits.max() ?? 0
             var expSum: Float = 0
             var probs = [Float](repeating: 0, count: logits.count)
@@ -384,7 +394,7 @@ private final class EmoNetModel {
             // face crop is wrong or the preprocessing is mismatched
             // with the training distribution.
             print(String(
-                format: "[EmoNet v4] label=%@ top=%.2f rawV=%.3f rawA=%.3f",
+                format: "[EmoNet v5] label=%@ top=%.2f rawV=%.3f rawA=%.3f",
                 String(describing: topLabel), topScore, valence, arousal
             ))
 
