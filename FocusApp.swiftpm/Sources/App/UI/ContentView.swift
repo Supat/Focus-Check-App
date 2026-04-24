@@ -509,11 +509,11 @@ struct ContentView: View {
             case .severe:   return .red
             }
         }()
-        return HStack(spacing: 3) {
+        return HStack(spacing: 6) {
             Image(systemName: "bandage.fill")
                 .font(.system(size: 7, weight: .bold))
                 .foregroundStyle(.white.opacity(0.9))
-                .frame(width: 6, alignment: .leading)
+                .frame(width: 8, alignment: .leading)
             ZStack(alignment: .leading) {
                 Capsule()
                     .fill(Color.white.opacity(0.18))
