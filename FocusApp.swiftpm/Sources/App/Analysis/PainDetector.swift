@@ -112,12 +112,14 @@ private final class OpenGraphAUModel {
         }
         let config = MLModelConfiguration()
         // OpenGraphAU's graph head (per-AU linear projections +
-        // einsum + topk neighbor aggregation) trips the ANE's MLIR
-        // pass manager on some builds — same crash shape we hit
-        // inside coremltools' host-side predict during export. Pin
-        // to CPU+GPU so the model avoids the ANE path entirely.
-        // Costs ~30–50 ms per face vs. ANE but stays stable.
-        config.computeUnits = .cpuAndGPU
+        // einsum + topk neighbor aggregation) trips the GPU's MPSGraph
+        // MLIR pass manager — same crash shape we hit during
+        // coremltools' host-side sanity predict at export time. ANE
+        // crashes on `.all`, GPU crashes on `.cpuAndGPU`, so pin the
+        // model to CPU only. ResNet-50 on-CPU per face is ~100–200 ms
+        // on an M1 iPad; acceptable given Focus Check runs analysis
+        // once per photo load, not per frame.
+        config.computeUnits = .cpuOnly
         do {
             self.model = try MLModel(contentsOf: url, configuration: config)
         } catch {
