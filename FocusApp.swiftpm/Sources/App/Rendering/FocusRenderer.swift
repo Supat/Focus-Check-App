@@ -297,8 +297,7 @@ final class FocusRenderer {
                 }
                 guard !keep.isEmpty else { return inputs.source }
                 return regionMosaic(source: inputs.source,
-                                    regions: keep.map(\.rect),
-                                    scaleMultiplier: 1.5)
+                                    regions: keep.map(\.rect))
             case .nudity:
                 // Pixelate each NudeNet detection box directly. No Vision
                 // body assignment in this path; the detector's own boxes
@@ -309,8 +308,7 @@ final class FocusRenderer {
                 // redacted instead of still-readable pixel noise.
                 guard !inputs.nudityDetections.isEmpty else { return inputs.source }
                 let regions = inputs.nudityDetections.map(\.rect)
-                return regionMosaic(source: inputs.source, regions: regions,
-                                    scaleMultiplier: 1.5)
+                return regionMosaic(source: inputs.source, regions: regions)
             }
         }()
 
