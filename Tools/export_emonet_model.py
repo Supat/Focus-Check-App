@@ -41,7 +41,7 @@ then compile + publish per CLAUDE.md:
     ditto -c -k --sequesterRsrc --keepParent \\
           /tmp/EmoNet.mlmodelc EmoNet.mlmodelc.zip
     zip -d EmoNet.mlmodelc.zip '__MACOSX/*' 2>/dev/null || true
-    gh release create emotion-model-v2 EmoNet.mlmodelc.zip \\
+    gh release create emotion-model-v5 EmoNet.mlmodelc.zip \\
         --repo Supat/Focus-Check-App
 """
 
@@ -75,16 +75,19 @@ except ImportError as e:
         "Run `pip install -e .` inside the emonet repo first."
     )
 
-# ImageNet normalization stats EmoNet expects — baked into the traced
-# wrapper so the Core ML input takes raw [0, 1] pixel values.
-IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
-IMAGENET_STD  = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
+# EmoNet's upstream demo feeds the network `image / 255.0` directly
+# — no ImageNet mean/std normalization. An earlier version of this
+# script baked an ImageNet norm into the traced wrapper, which
+# shifted every face input by ~3σ off the training distribution
+# and pushed the ResNet-50 backbone's activations into their
+# saturation tails (classifier logits in the -500 range, valence
+# regressor pinned at ~-8). Matching upstream's preprocessing
+# exactly is what produces sane outputs on-device.
 
 
 class EmoNetWrapper(torch.nn.Module):
-    """Normalizes [0, 1] RGB → ImageNet stats, runs EmoNet, and
-    returns a tuple instead of a dict so `torch.jit.trace` doesn't
-    collapse the structure."""
+    """Pass-through to EmoNet; only the tuple unwrap is ours. Returned
+    as a tuple so `torch.jit.trace` doesn't collapse the output dict."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -105,8 +108,7 @@ class EmoNetWrapper(torch.nn.Module):
         self.emonet.eval()
 
     def forward(self, pixel_values: torch.Tensor):  # [B, 3, H, W] in [0, 1]
-        normalized = (pixel_values - IMAGENET_MEAN) / IMAGENET_STD
-        out = self.emonet(normalized)
+        out = self.emonet(pixel_values)
         return out["expression"], out["valence"], out["arousal"]
 
 

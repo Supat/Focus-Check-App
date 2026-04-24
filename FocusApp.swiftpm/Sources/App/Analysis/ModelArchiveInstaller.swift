@@ -107,14 +107,14 @@ struct ModelArchive: Sendable {
     /// for Playgrounds / local dev; do not ship in signed App Store
     /// builds.
     ///
-    /// **Version**: `EmoNet-v4` directory, `emotion-model-v4` tag.
+    /// **Version**: `EmoNet-v5` directory, `emotion-model-v5` tag.
     /// Bump the pair together when the exported model changes so
     /// any earlier EmoNet install gets orphaned and the Download
     /// button re-appears for a clean pull.
     static let emotion = ModelArchive(
-        directoryName: "EmoNet-v4.mlmodelc",
+        directoryName: "EmoNet-v5.mlmodelc",
         sourceURL: URL(string:
-            "https://github.com/Supat/Focus-Check-App/releases/download/emotion-model-v4/EmoNet.mlmodelc.zip"
+            "https://github.com/Supat/Focus-Check-App/releases/download/emotion-model-v5/EmoNet.mlmodelc.zip"
         )!
     )
 
