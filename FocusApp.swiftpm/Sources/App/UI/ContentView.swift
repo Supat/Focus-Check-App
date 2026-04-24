@@ -663,24 +663,25 @@ private struct SubjectHeadBadge: View {
 
     var body: some View {
         HStack(spacing: 2) {
-            if let emotion {
-                // Emoji outside the coloured foreground so it keeps
-                // its native emoji colour rather than getting tinted.
-                Text(emotion.emoji)
-                    .font(.caption)
-            }
             if level >= .covered {
                 Image(systemName: "exclamationmark.shield.fill")
                     .font(.caption)
                     .foregroundStyle(tint)
-                if let glyph = gender.glyph {
-                    // Unicode Mars/Venus glyphs — rendered via Text
-                    // instead of Image(systemName:) because they
-                    // aren't SF Symbols.
-                    Text(glyph)
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(tint)
-                }
+            }
+            if let emotion {
+                // Emoji sits between shield and gender so the colored
+                // nudity/gender glyphs stay adjacent to each other.
+                // Outside the coloured foreground so it keeps its
+                // native emoji colour rather than getting tinted.
+                Text(emotion.emoji)
+                    .font(.caption)
+            }
+            if level >= .covered, let glyph = gender.glyph {
+                // Unicode Mars/Venus glyphs — rendered via Text instead
+                // of Image(systemName:) because they aren't SF Symbols.
+                Text(glyph)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(tint)
             }
         }
         .padding(.horizontal, 4)
