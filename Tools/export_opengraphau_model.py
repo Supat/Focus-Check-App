@@ -54,6 +54,19 @@ import torch
 import coremltools as ct
 import numpy as np
 
+# Torch 2.6 made torch.load default to weights_only=True, which
+# rejects legacy-tar checkpoints like the stock torchvision ResNet-50
+# file and OpenGraphAU's own .pth. OpenGraphAU's internal resnet.py
+# doesn't pass the kwarg, so shim the default back to False for the
+# whole script. The weights come from sources we already inspected by
+# hand, so the pickle-exec risk that flag protects against is
+# acceptable here.
+_original_torch_load = torch.load
+def _torch_load_legacy(*args, **kwargs):
+    kwargs.setdefault("weights_only", False)
+    return _original_torch_load(*args, **kwargs)
+torch.load = _torch_load_legacy
+
 OPENGRAPHAU_REPO = os.environ.get(
     "OPENGRAPHAU_REPO", os.path.expanduser("~/opengraphau")
 )
