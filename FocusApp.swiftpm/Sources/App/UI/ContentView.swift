@@ -393,15 +393,15 @@ struct ContentView: View {
     /// single subject. Small monospaced text inside its own capsule
     /// so the primary badge stays legible.
     private func subjectPADCapsule(for pad: PADVector) -> some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 2) {
             Text("P\(Self.signedPAD(pad.pleasure))")
             Text("A\(Self.signedPAD(pad.arousal))")
             Text("D\(Self.signedPAD(pad.dominance))")
         }
-        .font(.caption2.monospacedDigit())
+        .font(.system(size: 8, weight: .regular).monospacedDigit())
         .foregroundStyle(.white.opacity(0.9))
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
+        .padding(.horizontal, 3)
+        .padding(.vertical, 1)
         .liquidBadgeBackground(tint: Color.black.opacity(0.45), in: Capsule())
     }
 
@@ -662,29 +662,29 @@ private struct SubjectHeadBadge: View {
     let emotion: EmotionLabel?
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 2) {
             if let emotion {
                 // Emoji outside the coloured foreground so it keeps
                 // its native emoji colour rather than getting tinted.
                 Text(emotion.emoji)
-                    .font(.title3)
+                    .font(.caption)
             }
             if level >= .covered {
                 Image(systemName: "exclamationmark.shield.fill")
-                    .font(.title3)
+                    .font(.caption)
                     .foregroundStyle(tint)
                 if let glyph = gender.glyph {
                     // Unicode Mars/Venus glyphs — rendered via Text
                     // instead of Image(systemName:) because they
                     // aren't SF Symbols.
                     Text(glyph)
-                        .font(.title3.weight(.bold))
+                        .font(.caption.weight(.bold))
                         .foregroundStyle(tint)
                 }
             }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
+        .padding(.horizontal, 4)
+        .padding(.vertical, 2)
         .liquidBadgeBackground(tint: Color.black.opacity(0.45), in: Capsule())
     }
 
