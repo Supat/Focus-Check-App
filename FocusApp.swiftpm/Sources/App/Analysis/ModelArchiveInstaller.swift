@@ -94,6 +94,56 @@ struct ModelArchive: Sendable {
         kind: .bundle
     )
 
+    /// EmoNet (Toisoul et al. 2021) — ResNet-50-based face emotion
+    /// model that jointly regresses continuous Valence + Arousal and
+    /// an 8-class discrete emotion. 256² RGB input, 3 named outputs
+    /// (expression / valence / arousal). Replaces the earlier FER+
+    /// integration because FER+'s discrete-label-only output was
+    /// projecting onto PAD via a lookup table; EmoNet regresses V/A
+    /// directly, so the pleasure / arousal axes reflect the image
+    /// instead of the nearest-anchor snap.
+    ///
+    /// **License**: Imperial College CPD, research use only. Fine
+    /// for Playgrounds / local dev; do not ship in signed App Store
+    /// builds.
+    ///
+    /// **Version**: `EmoNet-v5` directory, `emotion-model-v5` tag.
+    /// Bump the pair together when the exported model changes so
+    /// any earlier EmoNet install gets orphaned and the Download
+    /// button re-appears for a clean pull.
+    static let emotion = ModelArchive(
+        directoryName: "EmoNet-v5.mlmodelc",
+        sourceURL: URL(string:
+            "https://github.com/Supat/Focus-Check-App/releases/download/emotion-model-v5/EmoNet.mlmodelc.zip"
+        )!
+    )
+
+    /// OpenGraphAU (Luo et al. 2022, `lingjivoo/OpenGraphAU`) Stage-2
+    /// ResNet-50 — multi-label facial Action Unit classifier. 224² RGB
+    /// input, 41-dim sigmoid output over AU1–39 plus 14 lateralized
+    /// variants in the upstream ordering.
+    ///
+    /// Used by `PainDetector` to compute a Prkachin-Solomon Pain
+    /// Intensity (PSPI) proxy per face. AU43 (eye closure) isn't one
+    /// of OpenGraphAU's outputs, so the Swift side derives it from
+    /// Vision's face landmarks' eye-aspect ratio and folds it into the
+    /// PSPI sum.
+    ///
+    /// **License**: code is Apache-2.0, but the weights were trained
+    /// on BP4D + DISFA + similar AU datasets whose terms are
+    /// research-only. Treat the compiled model the same way we treat
+    /// EmoNet — fine for Playgrounds / local dev; do not bundle in a
+    /// signed App Store build.
+    ///
+    /// **Version**: `OpenGraphAU-v1` directory, `pain-model-v1` tag.
+    /// Bump the pair together when the export pipeline changes.
+    static let openGraphAU = ModelArchive(
+        directoryName: "OpenGraphAU-v1.mlmodelc",
+        sourceURL: URL(string:
+            "https://github.com/Supat/Focus-Check-App/releases/download/pain-model-v1/OpenGraphAU.mlmodelc.zip"
+        )!
+    )
+
     /// Persistent install path: `Application Support/<directoryName>`.
     /// Application Support is user-data, not purged on low-disk like Caches.
     func installedURL() throws -> URL {

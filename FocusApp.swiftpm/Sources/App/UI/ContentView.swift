@@ -355,23 +355,181 @@ struct ContentView: View {
     /// see at a glance which subjects are flagged and how severely.
     @ViewBuilder
     private func nudeSubjectHeadBadges(in size: CGSize) -> some View {
+        // Suppress the per-subject head stack whenever the NudeNet
+        // label overlay is actually painting rects — the two annotate
+        // the same subjects and stacking them gets noisy. The guard
+        // mirrors `nudityLabelOverlay`'s visibility condition so a
+        // Labels toggle with no detections still lets the head badges
+        // through.
+        let labelsActive = viewModel.showNudityLabels
+            && !viewModel.nudityDetections.isEmpty
         if !viewModel.overlayHidden,
+           !labelsActive,
            let extent = viewModel.sourceImage?.extent,
            extent.width > 0, extent.height > 0,
            viewModel.nudityLevels.count == viewModel.bodyRectangles.count {
             ForEach(Array(viewModel.bodyRectangles.enumerated()), id: \.offset) { index, body in
                 let level = viewModel.nudityLevels[index]
-                if level >= .covered {
+                let gender = index < viewModel.nudityGenders.count
+                    ? viewModel.nudityGenders[index]
+                    : .unknown
+                let prediction = predictionForBody(body)
+                let emotion = prediction?.label
+                // Badge renders when any of the per-subject signals
+                // have something to say — covered+ nudity, an emotion
+                // prediction, or a pain score. Safe clothed photos
+                // without any of these stay unadorned.
+                if level >= .covered || prediction != nil || painForBody(body) != nil {
                     let rect = viewRect(for: body, source: extent, in: size)
-                    let gender = index < viewModel.nudityGenders.count
-                        ? viewModel.nudityGenders[index]
-                        : .unknown
-                    SubjectHeadBadge(level: level, gender: gender)
-                        .position(x: rect.midX, y: max(rect.minY - 18, 20))
-                        .allowsHitTesting(false)
+                    let pain = painForBody(body)
+                    VStack(spacing: 4) {
+                        SubjectHeadBadge(level: level, gender: gender, emotion: emotion)
+                        // PAD + Pain live in the same meter row and
+                        // share the single showPADMeter toggle.
+                        if viewModel.showPADMeter
+                            && (prediction?.pad != nil || pain != nil) {
+                            HStack(spacing: 4) {
+                                if let pad = prediction?.pad {
+                                    subjectPADBars(for: pad)
+                                }
+                                if let pain {
+                                    subjectPainBar(for: pain)
+                                }
+                            }
+                        }
+                    }
+                    // Anchor the stack's top near the body's top edge
+                    // so the head badge lands where it used to and the
+                    // optional PAD capsule hangs below it. Guard against
+                    // going above the viewport on very-near-top bodies.
+                    .position(x: rect.midX, y: max(rect.minY - 4, 36))
+                    .allowsHitTesting(false)
                 }
             }
         }
+    }
+
+    /// EmoNet-style P / A / D readout: three stacked horizontal bars
+    /// with a center-origin tick. Positive values extend right in
+    /// green, negative extend left in red. V and A come straight from
+    /// EmoNet's regression heads; D is projected from the expression
+    /// softmax via Mehrabian's anchor table, so its confidence band is
+    /// weaker than V/A — we still surface it because it's the third
+    /// standard PAD axis and callers asked for the full triple.
+    private func subjectPADBars(for pad: PADVector) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            padBar(label: "V", value: pad.pleasure)
+            padBar(label: "A", value: pad.arousal)
+            padBar(label: "D", value: pad.dominance)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .liquidBadgeBackground(
+            tint: Color.black.opacity(0.45),
+            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+        )
+    }
+
+    /// One V / A / D row: tiny label, then a bipolar fill bar. Value
+    /// is clamped to [-1, 1] before mapping so the fill never exceeds
+    /// the track on numeric slop (and so stale pre-clamp diagnostics
+    /// during the EmoNet bring-up don't push the bar out of bounds).
+    private func padBar(label: String, value: Float) -> some View {
+        let clamped = CGFloat(max(-1, min(1, value)))
+        let barWidth: CGFloat = 45
+        let barHeight: CGFloat = 4
+        let half = barWidth / 2
+        let fillWidth = abs(clamped) * half
+        return HStack(spacing: 3) {
+            Text(label)
+                .font(.system(size: 7, weight: .bold).monospacedDigit())
+                .foregroundStyle(.white.opacity(0.9))
+                .frame(width: 6, alignment: .leading)
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.white.opacity(0.18))
+                    .frame(width: barWidth, height: barHeight)
+                Capsule()
+                    .fill(clamped >= 0 ? Color.green : Color.red)
+                    .frame(width: fillWidth, height: barHeight)
+                    .offset(x: clamped >= 0 ? half : half - fillWidth)
+                Rectangle()
+                    .fill(Color.white.opacity(0.5))
+                    .frame(width: 1, height: barHeight)
+                    .offset(x: half - 0.5)
+            }
+            .frame(width: barWidth, height: barHeight)
+        }
+    }
+
+    /// Find the face rect whose center lies inside `body` and return
+    /// its FER+ prediction (carries label + PAD) when the classifier
+    /// met its confidence floor. Returns nil when the emotion model
+    /// isn't installed, no face matches the body, or the top
+    /// prediction was filtered out.
+    private func predictionForBody(_ body: CGRect) -> EmotionPrediction? {
+        guard !viewModel.faceEmotions.isEmpty else { return nil }
+        for (i, face) in viewModel.faceRectangles.enumerated()
+            where i < viewModel.faceEmotions.count {
+            let center = CGPoint(x: face.midX, y: face.midY)
+            if body.contains(center) {
+                return viewModel.faceEmotions[i]
+            }
+        }
+        return nil
+    }
+
+    /// Find the PSPI pain score for the face matched to `body`. Same
+    /// index-alignment contract as `predictionForBody`.
+    private func painForBody(_ body: CGRect) -> PainScore? {
+        guard !viewModel.painScores.isEmpty else { return nil }
+        for (i, face) in viewModel.faceRectangles.enumerated()
+            where i < viewModel.painScores.count {
+            let center = CGPoint(x: face.midX, y: face.midY)
+            if body.contains(center) {
+                return viewModel.painScores[i]
+            }
+        }
+        return nil
+    }
+
+    /// Compact pain readout rendered under the PAD stack for a
+    /// subject. Unipolar bar (0..4) with heat-coded fill — green,
+    /// yellow, orange, red by PSPI level — and a two-letter level
+    /// label on the right.
+    private func subjectPainBar(for pain: PainScore) -> some View {
+        let barWidth: CGFloat = 45
+        let barHeight: CGFloat = 4
+        let normalized = CGFloat(max(0, min(4, pain.pspi)) / 4)
+        let tint: Color = {
+            switch pain.level {
+            case .none:     return .green
+            case .mild:     return .yellow
+            case .moderate: return .orange
+            case .severe:   return .red
+            }
+        }()
+        return HStack(spacing: 6) {
+            Image(systemName: "bandage.fill")
+                .font(.system(size: 7, weight: .bold))
+                .foregroundStyle(.white.opacity(0.9))
+                .frame(width: 8, alignment: .leading)
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.white.opacity(0.18))
+                    .frame(width: barWidth, height: barHeight)
+                Capsule()
+                    .fill(tint)
+                    .frame(width: normalized * barWidth, height: barHeight)
+            }
+            .frame(width: barWidth, height: barHeight)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .liquidBadgeBackground(
+            tint: Color.black.opacity(0.45),
+            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+        )
     }
 
     /// Map a source-extent CIImage rect (Y-up) into a SwiftUI view rect
@@ -601,21 +759,36 @@ private struct ShareSheet: UIViewControllerRepresentable {
 private struct SubjectHeadBadge: View {
     let level: NudityLevel
     let gender: SubjectGender
+    /// Optional FER+ emotion label rendered as an emoji before the
+    /// shield/gender cluster. nil when the classifier wasn't run on
+    /// this subject's face or fell under its confidence floor.
+    let emotion: EmotionLabel?
 
     var body: some View {
-        HStack(spacing: 4) {
-            Image(systemName: "exclamationmark.shield.fill")
-                .font(.title3)
-            if let glyph = gender.glyph {
+        HStack(spacing: 2) {
+            if level >= .covered {
+                Image(systemName: "exclamationmark.shield.fill")
+                    .font(.caption)
+                    .foregroundStyle(tint)
+            }
+            if let emotion {
+                // Emoji sits between shield and gender so the colored
+                // nudity/gender glyphs stay adjacent to each other.
+                // Outside the coloured foreground so it keeps its
+                // native emoji colour rather than getting tinted.
+                Text(emotion.emoji)
+                    .font(.caption)
+            }
+            if level >= .covered, let glyph = gender.glyph {
                 // Unicode Mars/Venus glyphs — rendered via Text instead
                 // of Image(systemName:) because they aren't SF Symbols.
                 Text(glyph)
-                    .font(.title3.weight(.bold))
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(tint)
             }
         }
-        .foregroundStyle(tint)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
+        .padding(.horizontal, 4)
+        .padding(.vertical, 2)
         .liquidBadgeBackground(tint: Color.black.opacity(0.45), in: Capsule())
     }
 

@@ -81,6 +81,8 @@ struct OverlayControls: View {
             nsfwInstallRow
             nudenetInstallRow
             clipInstallRow
+            emotionInstallRow
+            painInstallRow
         }
         #if os(iOS)
         .onPencilSqueeze { phase in
@@ -143,12 +145,23 @@ struct OverlayControls: View {
     /// without detections to gate.
     @ViewBuilder
     private var perSubjectCluster: some View {
+        // One toggle controls both the PAD bars and the Pain bar
+        // sitting beside them. They're a single visual row and a
+        // single conceptual "per-subject meter".
+        Label("PAD meter", systemImage: "chart.bar.xaxis")
+            .labelStyle(.iconOnly)
+            .font(.caption)
+        Toggle("", isOn: $viewModel.showPADMeter)
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.small)
         Label("Per subject", systemImage: "person.crop.square.filled.and.at.rectangle")
+            .labelStyle(.iconOnly)
             .font(.caption)
         Picker("Per-subject gate", selection: $viewModel.nudityGate) {
             Text("All").tag(NudityLevel.none)
-            Text("Covered+").tag(NudityLevel.covered)
-            Text("Partial+").tag(NudityLevel.partial)
+            Text("Covered").tag(NudityLevel.covered)
+            Text("Partial").tag(NudityLevel.partial)
             Text("Nude").tag(NudityLevel.nude)
         }
         .pickerStyle(.segmented)
@@ -156,6 +169,7 @@ struct OverlayControls: View {
         .controlSize(.small)
         .frame(width: 280)
         Label("Labels", systemImage: "tag")
+            .labelStyle(.iconOnly)
             .font(.caption)
         Toggle("", isOn: $viewModel.showNudityLabels)
             .labelsHidden()
@@ -176,6 +190,7 @@ struct OverlayControls: View {
         let pickerActive = classifierPath || viewModel.forceCensor
 
         Label("Mosaic", systemImage: "eye.slash")
+            .labelStyle(.iconOnly)
             .font(.caption)
         Picker("Mosaic mode", selection: $viewModel.mosaicMode) {
             ForEach(MosaicMode.allCases) { mode in
@@ -185,7 +200,7 @@ struct OverlayControls: View {
         .pickerStyle(.segmented)
         .labelsHidden()
         .controlSize(.small)
-        .frame(width: 480)
+        .frame(width: 528)
         .disabled(!pickerActive)
         Toggle("", isOn: $viewModel.mosaicEnabled)
             .labelsHidden()
@@ -193,6 +208,7 @@ struct OverlayControls: View {
             .controlSize(.small)
             .disabled(!viewModel.sensitiveContentAvailability.isReady)
         Label("Force", systemImage: "eye.slash.circle.fill")
+            .labelStyle(.iconOnly)
             .font(.caption)
         Toggle("", isOn: $viewModel.forceCensor)
             .labelsHidden()
@@ -385,6 +401,102 @@ struct OverlayControls: View {
                     .lineLimit(2)
                 Spacer()
                 Button("Retry") { viewModel.downloadCLIPModel() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+        }
+    }
+
+    /// FER+ emotion classifier install row. Drawn with the same
+    /// download / progress / retry variants as the other optional
+    /// models. Unconditional — emotion scoring is additive and
+    /// independent of the other tiers.
+    @ViewBuilder
+    private var emotionInstallRow: some View {
+        switch viewModel.emotionInstall {
+        case .installed:
+            EmptyView()
+
+        case .notInstalled:
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.down.circle")
+                    .foregroundStyle(.secondary)
+                Text("Emotion classifier (FER+) not installed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Download") { viewModel.downloadEmotionModel() }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+            }
+
+        case .downloading(let progress):
+            HStack(spacing: 8) {
+                ProgressView(value: progress)
+                Text("\(Int(progress * 100))%")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44, alignment: .trailing)
+            }
+
+        case .failed(let message):
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+                Text(message)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                Spacer()
+                Button("Retry") { viewModel.downloadEmotionModel() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+        }
+    }
+
+    /// OpenGraphAU / pain detector install row. Same download /
+    /// progress / retry pattern as the other optional model tiers.
+    /// The resulting per-face PSPI score is additive to whatever the
+    /// emotion classifier contributes.
+    @ViewBuilder
+    private var painInstallRow: some View {
+        switch viewModel.openGraphAUInstall {
+        case .installed:
+            EmptyView()
+
+        case .notInstalled:
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.down.circle")
+                    .foregroundStyle(.secondary)
+                Text("Pain detector (OpenGraphAU) not installed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Download") { viewModel.downloadOpenGraphAUModel() }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+            }
+
+        case .downloading(let progress):
+            HStack(spacing: 8) {
+                ProgressView(value: progress)
+                Text("\(Int(progress * 100))%")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44, alignment: .trailing)
+            }
+
+        case .failed(let message):
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+                Text(message)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                Spacer()
+                Button("Retry") { viewModel.downloadOpenGraphAUModel() }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
             }
