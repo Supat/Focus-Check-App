@@ -95,12 +95,14 @@ struct EmotionClassifier {
     /// crop out-of-bounds, etc.) become nil entries so the indexing
     /// stays aligned.
     func classify(faces: [CGRect],
+                  rolls: [CGFloat],
                   in image: CIImage,
                   ciContext: CIContext) -> [EmotionPrediction?] {
         guard let model else { return [] }
         guard !faces.isEmpty else { return [] }
-        return faces.map { face -> EmotionPrediction? in
-            model.predict(face: face, source: image, ciContext: ciContext)
+        return faces.enumerated().map { idx, face -> EmotionPrediction? in
+            let roll = idx < rolls.count ? rolls[idx] : 0
+            return model.predict(face: face, roll: roll, source: image, ciContext: ciContext)
         }
     }
 }
@@ -229,21 +231,46 @@ private final class EmoNetModel {
     /// P and A axes of PAD; D is Mehrabian-projected from the
     /// softmax because EmoNet doesn't regress dominance.
     func predict(face: CGRect,
+                 roll: CGFloat,
                  source: CIImage,
                  ciContext: CIContext) -> EmotionPrediction? {
-        let extent = source.extent
-        // Pad the face rect outward so the crop includes forehead /
-        // chin — EmoNet was trained on AffectNet / AFEW-VA crops that
-        // typically enclose the whole face, not just the landmarks
-        // bounding box.
-        let pad = face.width * 0.15
-        let padded = face.insetBy(dx: -pad, dy: -pad)
-        let clamped = padded.intersection(extent)
-        guard !clamped.isNull, clamped.width >= 8, clamped.height >= 8 else {
-            return nil
-        }
+        // Accept very small faces only if the padded crop exceeds a few
+        // pixels in source space — below that the ML input is all
+        // resample artefact.
+        guard face.width >= 8, face.height >= 8 else { return nil }
 
-        let resized = source.cropped(to: clamped).stretched(to: inputSize)
+        // Build a single affine that maps a square region around the
+        // face center (with ~25% margin) onto the 256² input canvas,
+        // while un-doing the face's roll so eyes sit on a horizontal
+        // line. EmoNet was trained on FAN-aligned crops; feeding it
+        // raw Vision bboxes (no rotation, non-uniform resample) lands
+        // the network in its OOD tail and the regression heads
+        // saturate at ±>10.
+        //
+        // Apple's `roll` convention: positive = clockwise viewed from
+        // the front. Rotating the image by -roll (CG's positive =
+        // counter-clockwise in CI coordinates) deskews it.
+        let marginFactor: CGFloat = 1.5    // 25% padding on each side
+        let halfSide = max(face.width, face.height) * marginFactor / 2
+        let faceCenter = CGPoint(x: face.midX, y: face.midY)
+        let outputHalf = inputSize.width / 2
+        let scale = outputHalf / halfSide
+
+        let transform = CGAffineTransform.identity
+            .concatenating(CGAffineTransform(translationX: -faceCenter.x,
+                                             y: -faceCenter.y))
+            .concatenating(CGAffineTransform(rotationAngle: -roll))
+            .concatenating(CGAffineTransform(scaleX: scale, y: scale))
+            .concatenating(CGAffineTransform(translationX: outputHalf,
+                                             y: outputHalf))
+
+        // `clampedToExtent()` gives us edge-replicated pixels if the
+        // aligned square spills past the source — kinder to the model
+        // than transparent borders.
+        let resized = source
+            .clampedToExtent()
+            .transformed(by: transform)
+            .cropped(to: CGRect(origin: .zero, size: inputSize))
 
         let w = Int(inputSize.width)
         let h = Int(inputSize.height)

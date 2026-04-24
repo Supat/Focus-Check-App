@@ -355,7 +355,10 @@ actor FocusAnalyzer {
             // Per-face emotion classification via FER+. Same caching +
             // empty-when-missing contract as the other optional tiers.
             let faceEmotions = emotionClassifier.classify(
-                faces: vision.faces, in: source, ciContext: ciContext
+                faces: vision.faces,
+                rolls: vision.faceRolls,
+                in: source,
+                ciContext: ciContext
             )
             let sensitive = await sensitiveFuture
 
@@ -438,6 +441,12 @@ actor FocusAnalyzer {
     /// Bundle of all Vision-derived rectangles and bars produced in one pass.
     private struct VisionResults {
         var faces: [CGRect] = []
+        /// Per-face roll angle (radians, Apple's convention: positive =
+        /// clockwise head tilt viewed from the front). Parallel array
+        /// to `faces`. Used by `EmotionClassifier` to rotate crops back
+        /// to eye-level before running EmoNet, which was trained on
+        /// FAN-aligned inputs.
+        var faceRolls: [CGFloat] = []
         var eyes: [EyeBar] = []
         var bodies: [CGRect] = []
         var groins: [CGRect] = []
@@ -503,6 +512,7 @@ actor FocusAnalyzer {
         // warned about.
         for obs in faceLandmarks.results ?? [] {
             results.faces.append(Self.denormalize(obs.boundingBox, in: extent))
+            results.faceRolls.append(CGFloat(obs.roll?.doubleValue ?? 0))
             if let bar = Self.eyeBar(from: obs, in: extent) {
                 results.eyes.append(bar)
             }
