@@ -111,7 +111,13 @@ private final class OpenGraphAUModel {
             throw AnalysisError.modelMissing
         }
         let config = MLModelConfiguration()
-        config.computeUnits = .all
+        // OpenGraphAU's graph head (per-AU linear projections +
+        // einsum + topk neighbor aggregation) trips the ANE's MLIR
+        // pass manager on some builds — same crash shape we hit
+        // inside coremltools' host-side predict during export. Pin
+        // to CPU+GPU so the model avoids the ANE path entirely.
+        // Costs ~30–50 ms per face vs. ANE but stays stable.
+        config.computeUnits = .cpuAndGPU
         do {
             self.model = try MLModel(contentsOf: url, configuration: config)
         } catch {
@@ -200,7 +206,9 @@ private final class OpenGraphAUModel {
             let features = try MLDictionaryFeatureProvider(dictionary: [
                 inputName: MLFeatureValue(pixelBuffer: pb)
             ])
+            print("[OpenGraphAU] predict begin face=(\(Int(face.origin.x)),\(Int(face.origin.y)),\(Int(face.width)),\(Int(face.height)))")
             let result = try model.prediction(from: features)
+            print("[OpenGraphAU] predict returned")
             guard let probs = result.featureValue(for: outputName)?.multiArrayValue,
                   probs.count >= Self.auIDs.count
             else {
