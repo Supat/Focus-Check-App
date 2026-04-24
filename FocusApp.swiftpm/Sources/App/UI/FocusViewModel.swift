@@ -57,6 +57,7 @@ enum DepthInstallState: Equatable {
 /// .eyes uses a solid black bar rather than pixelate; the others pixelate.
 enum MosaicMode: String, CaseIterable, Identifiable {
     case tabloid = "Tabloid"
+    case jacket  = "Jacket"
     case eyes    = "Eyes"
     case face    = "Face"
     case chest   = "Chest"
@@ -64,7 +65,6 @@ enum MosaicMode: String, CaseIterable, Identifiable {
     case body    = "Body"
     case privy   = "Privy"
     case nudity  = "Nudity"
-    case jacket  = "Jacket"
     var id: String { rawValue }
 }
 
