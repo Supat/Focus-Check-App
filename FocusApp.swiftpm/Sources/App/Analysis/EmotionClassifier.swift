@@ -281,7 +281,20 @@ private final class EmoNetModel {
                             attrs as CFDictionary,
                             &pixelBuffer)
         guard let pb = pixelBuffer else { return nil }
-        ciContext.render(resized, to: pb)
+        // Explicit sRGB render so the gamma-encoding matches what
+        // EmoNet was trained on. The shared CIContext has a linear
+        // Display P3 working space; the short-form render writes
+        // linear-encoded 8-bit values into the BGRA buffer, which
+        // lands every mid-tone ~3× too dark and pushes the model
+        // into its OOD tail. Asking for sRGB output forces the
+        // linear→sRGB gamma curve on the way to the buffer.
+        let sRGB = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+        ciContext.render(
+            resized,
+            to: pb,
+            bounds: CGRect(origin: .zero, size: inputSize),
+            colorSpace: sRGB
+        )
 
         do {
             let features = try MLDictionaryFeatureProvider(dictionary: [
