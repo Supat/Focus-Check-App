@@ -269,7 +269,8 @@ struct ContentView: View {
     @ViewBuilder
     private var exposureBadge: some View {
         if let info = viewModel.exposureInfo,
-           viewModel.sourceImage != nil {
+           viewModel.sourceImage != nil,
+           !viewModel.overlayHidden {
             let parts = [
                 info.formattedFocalLength,
                 info.formattedShutter,
@@ -739,6 +740,7 @@ struct ContentView: View {
         // number so the angle and confidence are visible even on mild cases.
         if let mb = viewModel.motionBlur,
            viewModel.sourceImage != nil,
+           !viewModel.overlayHidden,
            mb.isSignificant || viewModel.style == .motion {
             HStack(spacing: 6) {
                 Image(systemName: "arrow.left.and.right")
