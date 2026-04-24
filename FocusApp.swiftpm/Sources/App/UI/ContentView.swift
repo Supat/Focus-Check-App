@@ -171,12 +171,14 @@ struct ContentView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .overlay(alignment: .bottomLeading) {
-                HStack(spacing: 8) {
-                    exposureBadge
-                    motionBlurBadge
+                VStack(alignment: .leading, spacing: 8) {
                     qualityBadge
-                    nudeSubjectsBadge
-                    contextBadge
+                    HStack(spacing: 8) {
+                        exposureBadge
+                        motionBlurBadge
+                        nudeSubjectsBadge
+                        contextBadge
+                    }
                 }
                 .padding([.leading, .bottom], 12)
             }
