@@ -198,6 +198,11 @@ final class FocusViewModel: ObservableObject {
     /// highest-similarity first. Empty when the CLIP bundle isn't
     /// installed.
     @Published var clipMatches: [CLIPMatch] = []
+    /// Per-face emotion predictions from FER+, indexed alongside
+    /// `faceRectangles`. `nil` entries mean the classifier didn't
+    /// meet its confidence floor for that face. Empty when the
+    /// emotion model isn't installed.
+    @Published var faceEmotions: [EmotionPrediction?] = []
     /// User toggle: draw NudeNet detection boxes + class labels on top
     /// of the image. Hidden by default so most users don't see the raw
     /// detector output.
@@ -224,6 +229,8 @@ final class FocusViewModel: ObservableObject {
     @Published var nudenetInstall: DepthInstallState = .notInstalled
     /// Install state for the CLIP image encoder + prompt-embeddings bundle.
     @Published var clipInstall: DepthInstallState = .notInstalled
+    /// Install state for the FER+ facial-emotion classifier.
+    @Published var emotionInstall: DepthInstallState = .notInstalled
     @Published var isAnalyzing: Bool = false
     @Published var errorMessage: String?
     @Published var depthAvailable: Bool = false
@@ -235,6 +242,7 @@ final class FocusViewModel: ObservableObject {
     private var nsfwInstallTask: Task<Void, Never>?
     private var nudenetInstallTask: Task<Void, Never>?
     private var clipInstallTask: Task<Void, Never>?
+    private var emotionInstallTask: Task<Void, Never>?
 
     init() {
         self.analyzer = FocusAnalyzer()
@@ -249,11 +257,13 @@ final class FocusViewModel: ObservableObject {
         let nsfwInstalled = ModelArchive.nsfw.isInstalled()
         let nudenetInstalled = ModelArchive.nudenet.isInstalled()
         let clipInstalled = ModelArchive.clip.isInstalled()
+        let emotionInstalled = ModelArchive.emotion.isInstalled()
         self.depthAvailable = depthInstalled
         self.depthInstall = depthInstalled ? .installed : .notInstalled
         self.nsfwInstall = nsfwInstalled ? .installed : .notInstalled
         self.nudenetInstall = nudenetInstalled ? .installed : .notInstalled
         self.clipInstall = clipInstalled ? .installed : .notInstalled
+        self.emotionInstall = emotionInstalled ? .installed : .notInstalled
 
         let analyzer = self.analyzer
         // Pre-compile installed Core ML models in the background after
@@ -313,6 +323,34 @@ final class FocusViewModel: ObservableObject {
                 }
             }
             await MainActor.run { [weak self] in self?.nsfwInstallTask = nil }
+        }
+    }
+
+    /// Download the FER+ emotion classifier. Same install-state pattern
+    /// as the other optional-model install rows.
+    func downloadEmotionModel() {
+        guard emotionInstallTask == nil else { return }
+        emotionInstall = .downloading(progress: 0)
+        let analyzer = self.analyzer
+        emotionInstallTask = Task { [weak self] in
+            do {
+                try await analyzer.installEmotionModel { [weak self] p in
+                    Task { @MainActor [weak self] in
+                        self?.emotionInstall = .downloading(progress: p)
+                    }
+                }
+                await MainActor.run { [weak self] in
+                    self?.emotionInstall = .installed
+                }
+            } catch {
+                let stillInstalled = ModelArchive.emotion.isInstalled()
+                await MainActor.run { [weak self] in
+                    self?.emotionInstall = stillInstalled
+                        ? .installed
+                        : .failed(error.localizedDescription)
+                }
+            }
+            await MainActor.run { [weak self] in self?.emotionInstallTask = nil }
         }
     }
 
@@ -462,6 +500,7 @@ final class FocusViewModel: ObservableObject {
                     self?.nudityGenders = overlays.nudityGenders
                     self?.nudityDetections = overlays.nudityDetections
                     self?.clipMatches = overlays.clipMatches
+                    self?.faceEmotions = overlays.faceEmotions
                     self?.isAnalyzing = false
                     print("[ViewModel] sourceImage set, isAnalyzing=false")
                 }
@@ -502,6 +541,7 @@ final class FocusViewModel: ObservableObject {
         nudityGenders = []
         nudityDetections = []
         clipMatches = []
+        faceEmotions = []
         exposureInfo = nil
         errorMessage = nil
         isAnalyzing = false
@@ -586,6 +626,7 @@ final class FocusViewModel: ObservableObject {
                     self?.nudityGenders = overlays.nudityGenders
                     self?.nudityDetections = overlays.nudityDetections
                     self?.clipMatches = overlays.clipMatches
+                    self?.faceEmotions = overlays.faceEmotions
                     self?.isAnalyzing = false
                 }
             } catch is CancellationError {

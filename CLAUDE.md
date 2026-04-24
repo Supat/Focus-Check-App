@@ -304,6 +304,7 @@ struct ModelArchive {
 - `ModelArchive.nsfw` → `nsfw-model-v1` release tag
 - `ModelArchive.nudenet` → `nudenet-model-v1` release tag (per-subject detector)
 - `ModelArchive.clip` → `clip-model-v1` release tag (context scorer, bundle)
+- `ModelArchive.emotion` → `emotion-model-v1` release tag (FER+ per-face classifier)
 
 Maintainer workflow (one-time, requires a Mac):
 

@@ -361,17 +361,38 @@ struct ContentView: View {
            viewModel.nudityLevels.count == viewModel.bodyRectangles.count {
             ForEach(Array(viewModel.bodyRectangles.enumerated()), id: \.offset) { index, body in
                 let level = viewModel.nudityLevels[index]
-                if level >= .covered {
+                let gender = index < viewModel.nudityGenders.count
+                    ? viewModel.nudityGenders[index]
+                    : .unknown
+                let emotion = emotionForBody(body)
+                // Badge renders when *either* the nudity level crosses
+                // covered OR the face classifier returned an emotion —
+                // so clothed group photos still get per-face emotion
+                // glyphs without us forcing a "safe" shield alongside.
+                if level >= .covered || emotion != nil {
                     let rect = viewRect(for: body, source: extent, in: size)
-                    let gender = index < viewModel.nudityGenders.count
-                        ? viewModel.nudityGenders[index]
-                        : .unknown
-                    SubjectHeadBadge(level: level, gender: gender)
+                    SubjectHeadBadge(level: level, gender: gender, emotion: emotion)
                         .position(x: rect.midX, y: max(rect.minY - 18, 20))
                         .allowsHitTesting(false)
                 }
             }
         }
+    }
+
+    /// Find the face rect whose center lies inside `body` and return
+    /// its FER+ emotion if the classifier met its confidence floor.
+    /// Returns nil when the emotion model isn't installed, no face
+    /// matches the body, or the top prediction was filtered out.
+    private func emotionForBody(_ body: CGRect) -> EmotionLabel? {
+        guard !viewModel.faceEmotions.isEmpty else { return nil }
+        for (i, face) in viewModel.faceRectangles.enumerated()
+            where i < viewModel.faceEmotions.count {
+            let center = CGPoint(x: face.midX, y: face.midY)
+            if body.contains(center) {
+                return viewModel.faceEmotions[i]?.label
+            }
+        }
+        return nil
     }
 
     /// Map a source-extent CIImage rect (Y-up) into a SwiftUI view rect
@@ -601,19 +622,33 @@ private struct ShareSheet: UIViewControllerRepresentable {
 private struct SubjectHeadBadge: View {
     let level: NudityLevel
     let gender: SubjectGender
+    /// Optional FER+ emotion label rendered as an emoji before the
+    /// shield/gender cluster. nil when the classifier wasn't run on
+    /// this subject's face or fell under its confidence floor.
+    let emotion: EmotionLabel?
 
     var body: some View {
         HStack(spacing: 4) {
-            Image(systemName: "exclamationmark.shield.fill")
-                .font(.title3)
-            if let glyph = gender.glyph {
-                // Unicode Mars/Venus glyphs — rendered via Text instead
-                // of Image(systemName:) because they aren't SF Symbols.
-                Text(glyph)
-                    .font(.title3.weight(.bold))
+            if let emotion {
+                // Emoji outside the coloured foreground so it keeps
+                // its native emoji colour rather than getting tinted.
+                Text(emotion.emoji)
+                    .font(.title3)
+            }
+            if level >= .covered {
+                Image(systemName: "exclamationmark.shield.fill")
+                    .font(.title3)
+                    .foregroundStyle(tint)
+                if let glyph = gender.glyph {
+                    // Unicode Mars/Venus glyphs — rendered via Text
+                    // instead of Image(systemName:) because they
+                    // aren't SF Symbols.
+                    Text(glyph)
+                        .font(.title3.weight(.bold))
+                        .foregroundStyle(tint)
+                }
             }
         }
-        .foregroundStyle(tint)
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .liquidBadgeBackground(tint: Color.black.opacity(0.45), in: Capsule())

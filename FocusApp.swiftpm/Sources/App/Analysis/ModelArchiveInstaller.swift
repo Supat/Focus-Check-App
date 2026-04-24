@@ -94,6 +94,17 @@ struct ModelArchive: Sendable {
         kind: .bundle
     )
 
+    /// FER+ emotion classifier — Microsoft's 8-class CNN (neutral,
+    /// happiness, surprise, sadness, anger, disgust, fear, contempt).
+    /// 64² grayscale input, ~34 MB compiled. Runs once per detected
+    /// face on analyze. ONNX Model Zoo, MIT-licensed.
+    static let emotion = ModelArchive(
+        directoryName: "EmotionFERPlus.mlmodelc",
+        sourceURL: URL(string:
+            "https://github.com/Supat/Focus-Check-App/releases/download/emotion-model-v1/EmotionFERPlus.mlmodelc.zip"
+        )!
+    )
+
     /// Persistent install path: `Application Support/<directoryName>`.
     /// Application Support is user-data, not purged on low-disk like Caches.
     func installedURL() throws -> URL {

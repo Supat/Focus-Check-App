@@ -78,6 +78,11 @@ actor FocusAnalyzer {
         /// CLIP zero-shot context matches, sorted highest-similarity
         /// first. Empty when the CLIP bundle isn't installed.
         var clipMatches: [CLIPMatch] = []
+        /// Per-face emotion predictions, indexed alongside
+        /// `faceRectangles`. `nil` entries mean the classifier
+        /// didn't meet its confidence floor for that face. Empty
+        /// when the FER+ model isn't installed.
+        var faceEmotions: [EmotionPrediction?] = []
     }
 
     private let device: MTLDevice
@@ -88,10 +93,12 @@ actor FocusAnalyzer {
     private let sensitiveContent = SensitiveContentChecker()
     private let nudityDetector = NudityDetector()
     private let clipScorer = CLIPScorer()
+    private let emotionClassifier = EmotionClassifier()
     private let depthInstaller = ModelArchiveInstaller(.depthAnything)
     private let nsfwInstaller = ModelArchiveInstaller(.nsfw)
     private let nudenetInstaller = ModelArchiveInstaller(.nudenet)
     private let clipInstaller = ModelArchiveInstaller(.clip)
+    private let emotionInstaller = ModelArchiveInstaller(.emotion)
 
     private var source: CIImage?
 
@@ -238,6 +245,15 @@ actor FocusAnalyzer {
         try await clipInstaller.install(progress: progress)
     }
 
+    /// True when the FER+ emotion classifier is installed on disk.
+    var isEmotionInstalled: Bool { ModelArchive.emotion.isInstalled() }
+
+    /// Download + install the FER+ emotion classifier. Same pattern as
+    /// the other models — lazy MLModel load happens on first classify.
+    func installEmotionModel(progress: @Sendable @escaping (Double) -> Void) async throws {
+        try await emotionInstaller.install(progress: progress)
+    }
+
     /// Eagerly compile the installed Core ML models so the first analyze
     /// after launch doesn't pay the ~1–3 s compile cost. Safe to call
     /// from a background task once the app is idle. No-op for models
@@ -246,6 +262,7 @@ actor FocusAnalyzer {
         _ = depthEstimator()
         _ = nudityDetector.warm()
         _ = clipScorer.warm()
+        _ = emotionClassifier.warm()
     }
 
     /// Walk `Application Support/` and print every file + byte size.
@@ -301,6 +318,7 @@ actor FocusAnalyzer {
         var vision: VisionResults
         var nudity: NudityAnalysis
         var clipMatches: [CLIPMatch]
+        var faceEmotions: [EmotionPrediction?]
     }
     private var cachedNonMode: NonModeResults?
 
@@ -334,6 +352,11 @@ actor FocusAnalyzer {
             // model archive isn't installed so downstream UI just hides
             // the Context badge.
             let clipMatches = clipScorer.score(image: source, ciContext: ciContext)
+            // Per-face emotion classification via FER+. Same caching +
+            // empty-when-missing contract as the other optional tiers.
+            let faceEmotions = emotionClassifier.classify(
+                faces: vision.faces, in: source, ciContext: ciContext
+            )
             let sensitive = await sensitiveFuture
 
             let computed = NonModeResults(
@@ -342,7 +365,8 @@ actor FocusAnalyzer {
                 sensitive: sensitive,
                 vision: vision,
                 nudity: nudity,
-                clipMatches: clipMatches
+                clipMatches: clipMatches,
+                faceEmotions: faceEmotions
             )
             cachedNonMode = computed
             nonMode = computed
@@ -386,6 +410,7 @@ actor FocusAnalyzer {
         let sensitiveLabel = nonMode.sensitive?.topLabel
         let sensitiveConfidence = nonMode.sensitive?.confidence
         let clipMatches = nonMode.clipMatches
+        let faceEmotions = nonMode.faceEmotions
 
         return Overlays(
             sharpness: sharpness,
@@ -405,7 +430,8 @@ actor FocusAnalyzer {
             nudityLevels: nudityLevels,
             nudityGenders: nudityGenders,
             nudityDetections: nudityDetections,
-            clipMatches: clipMatches
+            clipMatches: clipMatches,
+            faceEmotions: faceEmotions
         )
     }
 

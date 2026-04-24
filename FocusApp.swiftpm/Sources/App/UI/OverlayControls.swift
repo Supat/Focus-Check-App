@@ -81,6 +81,7 @@ struct OverlayControls: View {
             nsfwInstallRow
             nudenetInstallRow
             clipInstallRow
+            emotionInstallRow
         }
         #if os(iOS)
         .onPencilSqueeze { phase in
@@ -385,6 +386,54 @@ struct OverlayControls: View {
                     .lineLimit(2)
                 Spacer()
                 Button("Retry") { viewModel.downloadCLIPModel() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+        }
+    }
+
+    /// FER+ emotion classifier install row. Drawn with the same
+    /// download / progress / retry variants as the other optional
+    /// models. Unconditional — emotion scoring is additive and
+    /// independent of the other tiers.
+    @ViewBuilder
+    private var emotionInstallRow: some View {
+        switch viewModel.emotionInstall {
+        case .installed:
+            EmptyView()
+
+        case .notInstalled:
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.down.circle")
+                    .foregroundStyle(.secondary)
+                Text("Emotion classifier (FER+) not installed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Download") { viewModel.downloadEmotionModel() }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+            }
+
+        case .downloading(let progress):
+            HStack(spacing: 8) {
+                ProgressView(value: progress)
+                Text("\(Int(progress * 100))%")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44, alignment: .trailing)
+            }
+
+        case .failed(let message):
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+                Text(message)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                Spacer()
+                Button("Retry") { viewModel.downloadEmotionModel() }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
             }
