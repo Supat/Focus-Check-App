@@ -109,6 +109,53 @@ def resolve_safely(path_str: str) -> Path:
         sys.exit(f"ERROR: could not resolve path {path_str!r}: {exc}")
 
 
+def resolve_library_arg(raw: str) -> Path:
+    """
+    Normalize a user-supplied `--library` path and sanity-check it
+    before handing to osxphotos. Accepts:
+
+      * a `.photoslibrary` bundle directory (the common case — that's
+        what Finder shows and what the user Cmd-C's from the
+        sidebar).
+      * a direct path to `database/Photos.sqlite` inside a bundle
+        (rare, but osxphotos supports it so we do too).
+
+    Exits with a specific error message if the path doesn't exist
+    or clearly isn't a Photos Library, so the failure comes from us
+    (with context) rather than from deep inside osxphotos.
+    """
+    path = resolve_safely(raw)
+    if not path.exists():
+        sys.exit(f"ERROR: --library path does not exist: {path}")
+
+    # Bundle directory case.
+    if path.is_dir():
+        if path.suffix.lower() != ".photoslibrary":
+            sys.exit(
+                f"ERROR: --library directory {path} isn't a "
+                "`.photoslibrary` bundle. Pass the bundle itself "
+                "(the folder Finder shows as a single Photos Library "
+                "with a badge), or the internal Photos.sqlite path."
+            )
+        return path
+
+    # SQLite file case.
+    if path.is_file():
+        if path.name.lower() != "photos.sqlite":
+            sys.exit(
+                f"ERROR: --library file {path} isn't a Photos "
+                "SQLite database. Expected `Photos.sqlite` inside a "
+                "library's `database/` subfolder, or pass the "
+                "`.photoslibrary` bundle instead."
+            )
+        return path
+
+    sys.exit(
+        f"ERROR: --library {path} is neither a `.photoslibrary` "
+        "bundle nor a Photos.sqlite file."
+    )
+
+
 def assert_disjoint(library: Path, output: Path) -> None:
     """
     Hard safety check: the output directory must not live inside the
@@ -146,8 +193,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--output", required=True,
                    help="Output directory (must NOT be inside the library).")
     p.add_argument("--library", default=None,
-                   help="Path to a non-system Photos Library. Omit to use "
-                        "the system library.")
+                   help="Path to a non-system Photos Library. Accepts "
+                        "either a `.photoslibrary` bundle (e.g. "
+                        "`/Volumes/Backup/Archive.photoslibrary`) or a "
+                        "direct path to its internal `Photos.sqlite`. "
+                        "Omit to use the system library. `~` is "
+                        "expanded.")
 
     filter_group = p.add_argument_group("photo selection")
     mutex = filter_group.add_mutually_exclusive_group(required=True)
@@ -188,7 +239,16 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
 
-    # Import osxphotos late so --help works without it installed.
+    # Resolve + validate --library *before* importing osxphotos so
+    # path-argument mistakes (wrong drive, typo) report with a
+    # specific error even if osxphotos isn't installed yet. Accepts
+    # either a `.photoslibrary` bundle or the internal Photos.sqlite.
+    library_arg: Path | None = None
+    if args.library:
+        library_arg = resolve_library_arg(args.library)
+
+    # Import osxphotos late so --help + library-path validation work
+    # without the dependency.
     try:
         import osxphotos
     except ImportError:
@@ -196,8 +256,10 @@ def main() -> None:
 
     # Open the library (read-only on Photos.sqlite by osxphotos design).
     try:
-        library = (osxphotos.PhotosDB(dbfile=args.library)
-                   if args.library else osxphotos.PhotosDB())
+        if library_arg is not None:
+            library = osxphotos.PhotosDB(dbfile=str(library_arg))
+        else:
+            library = osxphotos.PhotosDB()
     except Exception as exc:
         sys.exit(f"ERROR: could not open Photos Library: {exc}")
 

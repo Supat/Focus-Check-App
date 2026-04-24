@@ -110,6 +110,26 @@ python3 Tools/bootstrap_nudenet_dataset.py \
     --limit 1000
 ```
 
+### Non-default / external libraries
+
+`--library` points at any `.photoslibrary` bundle, including ones on
+external drives, backups, or a separate library you switch to in
+Photos via `File ▸ Open Library…`.
+
+```bash
+python3 Tools/bootstrap_nudenet_dataset.py \
+    --library "/Volumes/PhotoBackup/Archive.photoslibrary" \
+    --output ~/Desktop/archive-dataset \
+    --album "Training" \
+    --dry-run
+```
+
+`~` is expanded, so `--library ~/Pictures/OldLibrary.photoslibrary`
+works. The script also accepts a direct path to the internal
+`database/Photos.sqlite` if you need to target that — same
+safety guarantees apply. Passing anything that isn't a bundle or a
+Photos SQLite file aborts with a specific error before any I/O.
+
 ## Output layout
 
 ```
