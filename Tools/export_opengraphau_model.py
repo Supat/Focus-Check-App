@@ -67,10 +67,6 @@ INPUT_SIZE = 224
 NUM_MAIN = 27
 NUM_SUB = 14
 BACKBONE = "resnet50"
-# KNN neighborhood count for the GNN stage. Has to match the value the
-# checkpoint was trained with — upstream defaults to 4.
-NEIGHBOR_NUM = 4
-METRIC = "dots"
 
 if not os.path.isdir(OPENGRAPHAU_REPO):
     sys.exit(
@@ -87,6 +83,11 @@ if not os.path.isfile(WEIGHTS_PATH):
 sys.path.insert(0, OPENGRAPHAU_REPO)
 
 try:
+    # Prefer the Stage-2 MEFL model — its MEFARG constructor takes only
+    # backbone + class counts. ANFL (Stage-1) has extra KNN hyperparams
+    # we'd have to match to the checkpoint; Stage-2 weights are what
+    # upstream publishes, so importing MEFL first lines the constructor
+    # up with the weights we're loading.
     from model.MEFL import MEFARG  # noqa: E402
 except ImportError:
     try:
@@ -118,8 +119,6 @@ class OpenGraphAUWrapper(torch.nn.Module):
             num_main_classes=NUM_MAIN,
             num_sub_classes=NUM_SUB,
             backbone=BACKBONE,
-            neighbor_num=NEIGHBOR_NUM,
-            metric=METRIC,
         )
         state = torch.load(WEIGHTS_PATH, map_location="cpu")
         if isinstance(state, dict) and "state_dict" in state:
