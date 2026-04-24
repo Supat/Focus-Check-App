@@ -108,7 +108,21 @@ struct NudityDetector {
         guard !bodies.isEmpty else {
             return NudityAnalysis(levels: [], genders: [], detections: [])
         }
-        let detections = classifier.detect(in: image, ciContext: ciContext)
+        // Run one detector pass per body rect instead of a single
+        // whole-image pass. When two subjects overlap, the whole-image
+        // letterbox leaves each one filling only a fraction of the
+        // model's 320² input, and the partially-occluded subject loses
+        // its already-reduced silhouette to low detector resolution.
+        // A per-body padded crop gives each subject the full detector
+        // canvas and recovers the occlusion misses at the cost of N
+        // inferences per image. Global NMS on the union drops
+        // duplicates that landed in the overlap region between two
+        // neighboring crops.
+        let detections = classifier.detect(
+            in: image,
+            bodyCrops: bodies,
+            ciContext: ciContext
+        )
         guard !detections.isEmpty else {
             return NudityAnalysis(
                 levels: Array(repeating: .none, count: bodies.count),
@@ -341,9 +355,57 @@ private final class NudityClassifier {
     /// records in source-extent coordinates.
     fileprivate func detect(in image: CIImage,
                             ciContext: CIContext) -> [NudityDetection] {
+        runDetector(
+            letterboxed: letterbox(image: image, into: inputSize),
+            ciContext: ciContext
+        )
+    }
+
+    /// Run one detector pass per body rect, mapping each pass's
+    /// detections back to source-extent coords and merging the union
+    /// with class-agnostic NMS. Each crop gets `bodyCropPadding`
+    /// margin on every side so context pixels (shoulders, hair) are
+    /// included and the detector's anchors aren't cropped at the body
+    /// silhouette.
+    fileprivate func detect(in image: CIImage,
+                            bodyCrops bodies: [CGRect],
+                            ciContext: CIContext) -> [NudityDetection] {
+        guard !bodies.isEmpty else { return [] }
+        let extent = image.extent
+        var all: [NudityDetection] = []
+        for body in bodies {
+            let padX = body.width * Self.bodyCropPadding
+            let padY = body.height * Self.bodyCropPadding
+            let padded = body.insetBy(dx: -padX, dy: -padY)
+                .intersection(extent)
+            guard !padded.isNull, padded.width >= 16, padded.height >= 16
+            else { continue }
+            let crop = image.cropped(to: padded)
+            let letterboxed = letterbox(image: crop, into: inputSize)
+            let dets = runDetector(letterboxed: letterboxed, ciContext: ciContext)
+            all.append(contentsOf: dets)
+        }
+        // Detections from neighboring body crops can cover the same
+        // pixel region — the Create ML path runs NMS per-pass but
+        // doesn't know about the union, and the YOLO path runs NMS
+        // only inside parseDetections. Global NMS strips cross-crop
+        // duplicates in both cases.
+        return classAgnosticNMS(all, iouThreshold: 0.45)
+    }
+
+    /// Outward padding applied to each Vision body rect before
+    /// cropping for per-body detection. Large enough to keep shoulders
+    /// and a little background context visible; tight enough that the
+    /// cropped region is still dominated by the target subject.
+    private static let bodyCropPadding: CGFloat = 0.15
+
+    /// Render + predict + parse for an already-letterboxed input. The
+    /// two public `detect` overloads share this path so both the whole-
+    /// image and per-body flows use identical pixel-buffer setup.
+    private func runDetector(letterboxed: (image: CIImage, box: Letterbox),
+                             ciContext: CIContext) -> [NudityDetection] {
         let w = Int(inputSize.width)
         let h = Int(inputSize.height)
-        let letterboxedInput = letterbox(image: image, into: inputSize)
 
         var pixelBuffer: CVPixelBuffer?
         let attrs: [CFString: Any] = [kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary]
@@ -352,14 +414,14 @@ private final class NudityClassifier {
                             attrs as CFDictionary,
                             &pixelBuffer)
         guard let pb = pixelBuffer else { return [] }
-        ciContext.render(letterboxedInput.image, to: pb)
+        ciContext.render(letterboxed.image, to: pb)
 
         do {
             let features = try MLDictionaryFeatureProvider(dictionary: [
                 inputName: MLFeatureValue(pixelBuffer: pb)
             ])
             let result = try model.prediction(from: features)
-            return parseDetections(from: result, letterbox: letterboxedInput.box)
+            return parseDetections(from: result, letterbox: letterboxed.box)
         } catch {
             return []
         }
