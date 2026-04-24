@@ -214,10 +214,10 @@ final class FocusViewModel: ObservableObject {
     @Published var showNudityLabels: Bool = false
     /// User toggle: render the per-subject meter row (PAD bars plus
     /// the OpenGraphAU pain bar, when installed) under each head
-    /// badge. On by default — turning it off keeps the head badge
-    /// but drops the meter capsule for a cleaner composition when
-    /// emotion / pain detail isn't needed.
-    @Published var showPADMeter: Bool = true
+    /// badge. Off by default — the head badge alone reads cleanly
+    /// enough for most photos; flip on when you want the continuous
+    /// emotion / pain detail.
+    @Published var showPADMeter: Bool = false
     /// Minimum level that triggers the per-subject mosaic gating. Bodies
     /// whose level is below this are skipped even when the global mosaic
     /// condition is on. `.covered` leaves clothed subjects alone.
