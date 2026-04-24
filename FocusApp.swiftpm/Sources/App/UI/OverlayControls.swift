@@ -82,6 +82,7 @@ struct OverlayControls: View {
             nudenetInstallRow
             clipInstallRow
             emotionInstallRow
+            painInstallRow
         }
         #if os(iOS)
         .onPencilSqueeze { phase in
@@ -151,6 +152,15 @@ struct OverlayControls: View {
             .labelsHidden()
             .toggleStyle(.switch)
             .controlSize(.small)
+        if case .installed = viewModel.openGraphAUInstall {
+            Label("Pain meter", systemImage: "heart.text.square")
+                .labelStyle(.iconOnly)
+                .font(.caption)
+            Toggle("", isOn: $viewModel.showPainMeter)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+        }
         Label("Per subject", systemImage: "person.crop.square.filled.and.at.rectangle")
             .labelStyle(.iconOnly)
             .font(.caption)
@@ -445,6 +455,54 @@ struct OverlayControls: View {
                     .lineLimit(2)
                 Spacer()
                 Button("Retry") { viewModel.downloadEmotionModel() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+        }
+    }
+
+    /// OpenGraphAU / pain detector install row. Same download /
+    /// progress / retry pattern as the other optional model tiers.
+    /// The resulting per-face PSPI score is additive to whatever the
+    /// emotion classifier contributes.
+    @ViewBuilder
+    private var painInstallRow: some View {
+        switch viewModel.openGraphAUInstall {
+        case .installed:
+            EmptyView()
+
+        case .notInstalled:
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.down.circle")
+                    .foregroundStyle(.secondary)
+                Text("Pain detector (OpenGraphAU) not installed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Download") { viewModel.downloadOpenGraphAUModel() }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+            }
+
+        case .downloading(let progress):
+            HStack(spacing: 8) {
+                ProgressView(value: progress)
+                Text("\(Int(progress * 100))%")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44, alignment: .trailing)
+            }
+
+        case .failed(let message):
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+                Text(message)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                Spacer()
+                Button("Retry") { viewModel.downloadOpenGraphAUModel() }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
             }

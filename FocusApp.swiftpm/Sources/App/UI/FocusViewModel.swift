@@ -203,6 +203,11 @@ final class FocusViewModel: ObservableObject {
     /// meet its confidence floor for that face. Empty when the
     /// emotion model isn't installed.
     @Published var faceEmotions: [EmotionPrediction?] = []
+    /// Per-face pain score from OpenGraphAU + Vision-derived AU43,
+    /// indexed parallel to `faceRectangles`. Empty when the pain
+    /// model isn't installed; `nil` entries for faces the detector
+    /// couldn't score.
+    @Published var painScores: [PainScore?] = []
     /// User toggle: draw NudeNet detection boxes + class labels on top
     /// of the image. Hidden by default so most users don't see the raw
     /// detector output.
@@ -212,6 +217,10 @@ final class FocusViewModel: ObservableObject {
     /// the head badge but drops the meter capsule for a cleaner
     /// composition when emotion detail isn't needed.
     @Published var showPADMeter: Bool = true
+    /// User toggle: render the per-subject PSPI pain meter under the
+    /// head badge. On by default once the model is installed; hidden
+    /// entirely when OpenGraphAU isn't downloaded.
+    @Published var showPainMeter: Bool = true
     /// Minimum level that triggers the per-subject mosaic gating. Bodies
     /// whose level is below this are skipped even when the global mosaic
     /// condition is on. `.covered` leaves clothed subjects alone.
@@ -236,6 +245,10 @@ final class FocusViewModel: ObservableObject {
     @Published var clipInstall: DepthInstallState = .notInstalled
     /// Install state for the FER+ facial-emotion classifier.
     @Published var emotionInstall: DepthInstallState = .notInstalled
+    /// Install state for the OpenGraphAU facial Action Unit detector
+    /// (pain / PSPI proxy). Same state shape as the other optional
+    /// model tiers.
+    @Published var openGraphAUInstall: DepthInstallState = .notInstalled
     @Published var isAnalyzing: Bool = false
     @Published var errorMessage: String?
     @Published var depthAvailable: Bool = false
@@ -248,6 +261,7 @@ final class FocusViewModel: ObservableObject {
     private var nudenetInstallTask: Task<Void, Never>?
     private var clipInstallTask: Task<Void, Never>?
     private var emotionInstallTask: Task<Void, Never>?
+    private var openGraphAUInstallTask: Task<Void, Never>?
 
     init() {
         self.analyzer = FocusAnalyzer()
@@ -263,12 +277,14 @@ final class FocusViewModel: ObservableObject {
         let nudenetInstalled = ModelArchive.nudenet.isInstalled()
         let clipInstalled = ModelArchive.clip.isInstalled()
         let emotionInstalled = ModelArchive.emotion.isInstalled()
+        let openGraphAUInstalled = ModelArchive.openGraphAU.isInstalled()
         self.depthAvailable = depthInstalled
         self.depthInstall = depthInstalled ? .installed : .notInstalled
         self.nsfwInstall = nsfwInstalled ? .installed : .notInstalled
         self.nudenetInstall = nudenetInstalled ? .installed : .notInstalled
         self.clipInstall = clipInstalled ? .installed : .notInstalled
         self.emotionInstall = emotionInstalled ? .installed : .notInstalled
+        self.openGraphAUInstall = openGraphAUInstalled ? .installed : .notInstalled
 
         let analyzer = self.analyzer
         // Pre-compile installed Core ML models in the background after
@@ -356,6 +372,34 @@ final class FocusViewModel: ObservableObject {
                 }
             }
             await MainActor.run { [weak self] in self?.emotionInstallTask = nil }
+        }
+    }
+
+    /// Download the OpenGraphAU pain detector. Same install-state
+    /// pattern as the other optional-model install rows.
+    func downloadOpenGraphAUModel() {
+        guard openGraphAUInstallTask == nil else { return }
+        openGraphAUInstall = .downloading(progress: 0)
+        let analyzer = self.analyzer
+        openGraphAUInstallTask = Task { [weak self] in
+            do {
+                try await analyzer.installOpenGraphAUModel { [weak self] p in
+                    Task { @MainActor [weak self] in
+                        self?.openGraphAUInstall = .downloading(progress: p)
+                    }
+                }
+                await MainActor.run { [weak self] in
+                    self?.openGraphAUInstall = .installed
+                }
+            } catch {
+                let stillInstalled = ModelArchive.openGraphAU.isInstalled()
+                await MainActor.run { [weak self] in
+                    self?.openGraphAUInstall = stillInstalled
+                        ? .installed
+                        : .failed(error.localizedDescription)
+                }
+            }
+            await MainActor.run { [weak self] in self?.openGraphAUInstallTask = nil }
         }
     }
 
@@ -506,6 +550,7 @@ final class FocusViewModel: ObservableObject {
                     self?.nudityDetections = overlays.nudityDetections
                     self?.clipMatches = overlays.clipMatches
                     self?.faceEmotions = overlays.faceEmotions
+                    self?.painScores = overlays.painScores
                     self?.isAnalyzing = false
                     print("[ViewModel] sourceImage set, isAnalyzing=false")
                 }
@@ -547,6 +592,7 @@ final class FocusViewModel: ObservableObject {
         nudityDetections = []
         clipMatches = []
         faceEmotions = []
+        painScores = []
         exposureInfo = nil
         errorMessage = nil
         isAnalyzing = false
@@ -632,6 +678,7 @@ final class FocusViewModel: ObservableObject {
                     self?.nudityDetections = overlays.nudityDetections
                     self?.clipMatches = overlays.clipMatches
                     self?.faceEmotions = overlays.faceEmotions
+                    self?.painScores = overlays.painScores
                     self?.isAnalyzing = false
                 }
             } catch is CancellationError {

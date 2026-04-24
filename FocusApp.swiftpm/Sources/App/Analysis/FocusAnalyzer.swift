@@ -83,6 +83,11 @@ actor FocusAnalyzer {
         /// didn't meet its confidence floor for that face. Empty
         /// when the FER+ model isn't installed.
         var faceEmotions: [EmotionPrediction?] = []
+        /// Per-face PSPI-proxy pain score from the OpenGraphAU
+        /// detector + Vision-derived AU43. Same indexing + empty
+        /// contract as `faceEmotions`. Read by the UI to render a
+        /// per-subject pain badge under the head stack.
+        var painScores: [PainScore?] = []
     }
 
     private let device: MTLDevice
@@ -94,11 +99,13 @@ actor FocusAnalyzer {
     private let nudityDetector = NudityDetector()
     private let clipScorer = CLIPScorer()
     private let emotionClassifier = EmotionClassifier()
+    private let painDetector = PainDetector()
     private let depthInstaller = ModelArchiveInstaller(.depthAnything)
     private let nsfwInstaller = ModelArchiveInstaller(.nsfw)
     private let nudenetInstaller = ModelArchiveInstaller(.nudenet)
     private let clipInstaller = ModelArchiveInstaller(.clip)
     private let emotionInstaller = ModelArchiveInstaller(.emotion)
+    private let openGraphAUInstaller = ModelArchiveInstaller(.openGraphAU)
 
     private var source: CIImage?
 
@@ -254,6 +261,16 @@ actor FocusAnalyzer {
         try await emotionInstaller.install(progress: progress)
     }
 
+    /// True when the OpenGraphAU pain detector is installed on disk.
+    var isOpenGraphAUInstalled: Bool { ModelArchive.openGraphAU.isInstalled() }
+
+    /// Download + install the OpenGraphAU multi-label AU classifier.
+    /// Paired with a Vision-derived AU43 proxy on the Swift side to
+    /// produce a PSPI pain estimate per face.
+    func installOpenGraphAUModel(progress: @Sendable @escaping (Double) -> Void) async throws {
+        try await openGraphAUInstaller.install(progress: progress)
+    }
+
     /// Eagerly compile the installed Core ML models so the first analyze
     /// after launch doesn't pay the ~1–3 s compile cost. Safe to call
     /// from a background task once the app is idle. No-op for models
@@ -263,6 +280,7 @@ actor FocusAnalyzer {
         _ = nudityDetector.warm()
         _ = clipScorer.warm()
         _ = emotionClassifier.warm()
+        _ = painDetector.warm()
     }
 
     /// Walk `Application Support/` and print every file + byte size.
@@ -319,6 +337,7 @@ actor FocusAnalyzer {
         var nudity: NudityAnalysis
         var clipMatches: [CLIPMatch]
         var faceEmotions: [EmotionPrediction?]
+        var painScores: [PainScore?]
     }
     private var cachedNonMode: NonModeResults?
 
@@ -360,6 +379,15 @@ actor FocusAnalyzer {
                 in: source,
                 ciContext: ciContext
             )
+            // Per-face PSPI via OpenGraphAU + Vision-derived AU43.
+            // Same empty-when-missing contract as the emotion tier.
+            let painScores = painDetector.classify(
+                faces: vision.faces,
+                rolls: vision.faceRolls,
+                eyeOpenness: vision.faceEyeOpenness,
+                in: source,
+                ciContext: ciContext
+            )
             let sensitive = await sensitiveFuture
 
             let computed = NonModeResults(
@@ -369,7 +397,8 @@ actor FocusAnalyzer {
                 vision: vision,
                 nudity: nudity,
                 clipMatches: clipMatches,
-                faceEmotions: faceEmotions
+                faceEmotions: faceEmotions,
+                painScores: painScores
             )
             cachedNonMode = computed
             nonMode = computed
@@ -414,6 +443,7 @@ actor FocusAnalyzer {
         let sensitiveConfidence = nonMode.sensitive?.confidence
         let clipMatches = nonMode.clipMatches
         let faceEmotions = nonMode.faceEmotions
+        let painScores = nonMode.painScores
 
         return Overlays(
             sharpness: sharpness,
@@ -434,7 +464,8 @@ actor FocusAnalyzer {
             nudityGenders: nudityGenders,
             nudityDetections: nudityDetections,
             clipMatches: clipMatches,
-            faceEmotions: faceEmotions
+            faceEmotions: faceEmotions,
+            painScores: painScores
         )
     }
 
@@ -447,6 +478,13 @@ actor FocusAnalyzer {
         /// to eye-level before running EmoNet, which was trained on
         /// FAN-aligned inputs.
         var faceRolls: [CGFloat] = []
+        /// Per-face eye-aspect ratio averaged across both eyes — the
+        /// bbox height/width of the 6-point eye-landmark clusters. In
+        /// practice lands near 0.3 for a wide-open eye and trends
+        /// toward 0 as the lids close. Consumed by `PainDetector` as
+        /// an AU43 (eye closure) proxy. Defaults to 0.3 (fully open)
+        /// when Vision couldn't give us landmarks for that face.
+        var faceEyeOpenness: [Float] = []
         var eyes: [EyeBar] = []
         var bodies: [CGRect] = []
         var groins: [CGRect] = []
@@ -513,6 +551,7 @@ actor FocusAnalyzer {
         for obs in faceLandmarks.results ?? [] {
             results.faces.append(Self.denormalize(obs.boundingBox, in: extent))
             results.faceRolls.append(CGFloat(obs.roll?.doubleValue ?? 0))
+            results.faceEyeOpenness.append(Self.eyeOpenness(from: obs))
             if let bar = Self.eyeBar(from: obs, in: extent) {
                 results.eyes.append(bar)
             }
@@ -612,6 +651,39 @@ actor FocusAnalyzer {
             size: CGSize(width: eyeDistance * 2.1, height: eyeDistance * 0.396),
             angleRadians: atan2(dy, dx)
         )
+    }
+
+    /// Eye openness proxy (~EAR): average of each eye's bbox
+    /// height/width over the 6 eye landmarks. Returns 0.3 when
+    /// landmarks are missing so downstream callers don't interpret a
+    /// detector miss as "eyes closed". Landmark coords are
+    /// face-bbox-normalized — since we're taking a ratio, no
+    /// denormalization is needed.
+    private static func eyeOpenness(from obs: VNFaceObservation) -> Float {
+        guard let landmarks = obs.landmarks,
+              let left = landmarks.leftEye,
+              let right = landmarks.rightEye
+        else { return 0.3 }
+
+        func ratio(_ region: VNFaceLandmarkRegion2D) -> Float? {
+            let pts = region.normalizedPoints
+            guard pts.count >= 4 else { return nil }
+            var minX: CGFloat = .greatestFiniteMagnitude
+            var maxX: CGFloat = -.greatestFiniteMagnitude
+            var minY: CGFloat = .greatestFiniteMagnitude
+            var maxY: CGFloat = -.greatestFiniteMagnitude
+            for p in pts {
+                minX = min(minX, p.x); maxX = max(maxX, p.x)
+                minY = min(minY, p.y); maxY = max(maxY, p.y)
+            }
+            let w = maxX - minX
+            guard w > 1e-5 else { return nil }
+            return Float((maxY - minY) / w)
+        }
+
+        let l = ratio(left) ?? 0.3
+        let r = ratio(right) ?? 0.3
+        return (l + r) / 2
     }
 
     /// Derive a pelvis rect from a body-pose observation's hip joints.

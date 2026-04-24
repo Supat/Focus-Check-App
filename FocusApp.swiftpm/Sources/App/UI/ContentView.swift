@@ -375,16 +375,20 @@ struct ContentView: View {
                     : .unknown
                 let prediction = predictionForBody(body)
                 let emotion = prediction?.label
-                // Badge renders when *either* the nudity level crosses
-                // covered OR the face classifier returned an emotion —
-                // so clothed group photos still get per-face emotion
-                // glyphs without us forcing a "safe" shield alongside.
-                if level >= .covered || prediction != nil {
+                // Badge renders when any of the per-subject signals
+                // have something to say — covered+ nudity, an emotion
+                // prediction, or a pain score. Safe clothed photos
+                // without any of these stay unadorned.
+                if level >= .covered || prediction != nil || painForBody(body) != nil {
                     let rect = viewRect(for: body, source: extent, in: size)
+                    let pain = painForBody(body)
                     VStack(spacing: 4) {
                         SubjectHeadBadge(level: level, gender: gender, emotion: emotion)
                         if viewModel.showPADMeter, let pad = prediction?.pad {
                             subjectPADBars(for: pad)
+                        }
+                        if viewModel.showPainMeter, let pain {
+                            subjectPainBar(for: pain)
                         }
                     }
                     // Anchor the stack's top near the body's top edge
@@ -466,6 +470,59 @@ struct ContentView: View {
             }
         }
         return nil
+    }
+
+    /// Find the PSPI pain score for the face matched to `body`. Same
+    /// index-alignment contract as `predictionForBody`.
+    private func painForBody(_ body: CGRect) -> PainScore? {
+        guard !viewModel.painScores.isEmpty else { return nil }
+        for (i, face) in viewModel.faceRectangles.enumerated()
+            where i < viewModel.painScores.count {
+            let center = CGPoint(x: face.midX, y: face.midY)
+            if body.contains(center) {
+                return viewModel.painScores[i]
+            }
+        }
+        return nil
+    }
+
+    /// Compact pain readout rendered under the PAD stack for a
+    /// subject. Unipolar bar (0..4) with heat-coded fill — green,
+    /// yellow, orange, red by PSPI level — and a two-letter level
+    /// label on the right.
+    private func subjectPainBar(for pain: PainScore) -> some View {
+        let barWidth: CGFloat = 45
+        let barHeight: CGFloat = 4
+        let normalized = CGFloat(max(0, min(4, pain.pspi)) / 4)
+        let tint: Color = {
+            switch pain.level {
+            case .none:     return .green
+            case .mild:     return .yellow
+            case .moderate: return .orange
+            case .severe:   return .red
+            }
+        }()
+        return HStack(spacing: 3) {
+            Image(systemName: "heart.text.square")
+                .font(.system(size: 7, weight: .bold))
+                .foregroundStyle(.white.opacity(0.9))
+                .frame(width: 6, alignment: .leading)
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.white.opacity(0.18))
+                    .frame(width: barWidth, height: barHeight)
+                Capsule()
+                    .fill(tint)
+                    .frame(width: normalized * barWidth, height: barHeight)
+            }
+            .frame(width: barWidth, height: barHeight)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .liquidBadgeBackground(
+            tint: Color.black.opacity(0.45),
+            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+        )
     }
 
     /// Map a source-extent CIImage rect (Y-up) into a SwiftUI view rect

@@ -145,6 +145,30 @@ inside the non-mode-dependent cache so mode switches don't re-run it.
   set mixes nudity / scene / safe-art / medical / minor-presence
   anchors so the top match functions as a coarse context label.
 
+### Per-face pain detection (OpenGraphAU + PSPI, optional)
+Fifth tier, complementary to the emotion classifier: `PainDetector`
+runs a downloaded OpenGraphAU model per face to get multi-label
+Action Unit probabilities, then computes a Prkachin-Solomon Pain
+Intensity (PSPI) proxy Swift-side:
+
+    PSPI ≈ AU4 + max(AU6, AU7) + max(AU9, AU10) + AU43
+
+AUs 4 / 6 / 7 / 9 / 10 come straight from OpenGraphAU's 41-dim
+sigmoid output. AU43 (eye closure) isn't one of OpenGraphAU's
+classes, so we derive it from Vision's face-landmarks eye-aspect
+ratio (bbox h/w of the 6-point eye cluster) and fold it into the
+sum. The final value lives in [0, 4] (all four terms are [0, 1]
+probabilities rather than FACS 0-5 intensities), binned into
+none / mild / moderate / severe for a per-subject bar.
+
+- Model: OpenGraphAU Stage-2 ResNet-50 (~100 MB F32), 224² RGB input
+- License: Apache-2.0 code + BP4D/DISFA-trained weights (research-only
+  in practice — treat as non-shippable in signed App Store builds)
+- This is a **proxy** for PSPI, not the clinical metric. The
+  detector wasn't trained on the UNBC-McMaster Pain dataset and the
+  output ranges are probabilities, so presented levels are ordinal
+  not medical-grade.
+
 ### Vision-derived regions
 Run in one consolidated `VNImageRequestHandler.perform([...])` pass so the
 CGImage decode and internal pyramid are shared:
@@ -305,6 +329,7 @@ struct ModelArchive {
 - `ModelArchive.nudenet` → `nudenet-model-v1` release tag (per-subject detector)
 - `ModelArchive.clip` → `clip-model-v1` release tag (context scorer, bundle)
 - `ModelArchive.emotion` → `emotion-model-v5` release tag (EmoNet per-face classifier, **research-only license** — do not ship in signed builds)
+- `ModelArchive.openGraphAU` → `pain-model-v1` release tag (OpenGraphAU AU detector for PSPI pain proxy, **research-only license** — do not ship in signed builds)
 
 Maintainer workflow (one-time, requires a Mac):
 
@@ -336,6 +361,16 @@ mv /tmp/CLIPImageEncoder.mlmodelc /tmp/CLIP/
 cp clip-prompts.json                    /tmp/CLIP/
 ditto -c -k --sequesterRsrc --keepParent /tmp/CLIP CLIP.zip
 gh release upload clip-model-v1 CLIP.zip
+
+# OpenGraphAU Stage-2 ResNet-50 (pain / PSPI proxy). See
+# Tools/export_opengraphau_model.py for the one-time clone +
+# weight-download prereqs.
+python3 Tools/export_opengraphau_model.py
+xcrun coremlcompiler compile OpenGraphAU.mlpackage /tmp/
+ditto -c -k --sequesterRsrc --keepParent \
+      /tmp/OpenGraphAU.mlmodelc OpenGraphAU.mlmodelc.zip
+zip -d OpenGraphAU.mlmodelc.zip '__MACOSX/*' 2>/dev/null || true
+gh release upload pain-model-v1 OpenGraphAU.mlmodelc.zip
 ```
 
 `OverlayControls` renders a dedicated install/progress/retry row for
