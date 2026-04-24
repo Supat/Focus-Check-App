@@ -411,8 +411,8 @@ struct ContentView: View {
             padBar(label: "A", value: pad.arousal)
             padBar(label: "D", value: pad.dominance)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
         .liquidBadgeBackground(tint: Color.black.opacity(0.45), in: Capsule())
     }
 
@@ -422,7 +422,7 @@ struct ContentView: View {
     /// during the EmoNet bring-up don't push the bar out of bounds).
     private func padBar(label: String, value: Float) -> some View {
         let clamped = CGFloat(max(-1, min(1, value)))
-        let barWidth: CGFloat = 36
+        let barWidth: CGFloat = 45
         let barHeight: CGFloat = 4
         let half = barWidth / 2
         let fillWidth = abs(clamped) * half
