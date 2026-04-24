@@ -141,8 +141,7 @@ private final class OpenGraphAUModel {
             }
             guard let match else {
                 throw AnalysisError.modelLoadFailed(
-                    "OpenGraphAU model has no \(Self.auIDs.count)-dim output "
-                    "(available: \(Array(outputs.keys)))."
+                    "OpenGraphAU model has no \(Self.auIDs.count)-dim output (available: \(Array(outputs.keys)))."
                 )
             }
             self.outputName = match.key
