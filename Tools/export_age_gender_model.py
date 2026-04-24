@@ -37,7 +37,7 @@ then compile + publish per CLAUDE.md:
     ditto -c -k --sequesterRsrc --keepParent \\
           /tmp/AgeGender.mlmodelc AgeGender.mlmodelc.zip
     zip -d AgeGender.mlmodelc.zip '__MACOSX/*' 2>/dev/null || true
-    gh release create age-model-v1 AgeGender.mlmodelc.zip \\
+    gh release create age-model-v2 AgeGender.mlmodelc.zip \\
         --repo Supat/Focus-Check-App
 """
 
@@ -122,6 +122,17 @@ def main() -> None:
     # rename to `image` after conversion; same trick for the two
     # outputs (converter picks `Identity` / `Identity_1`, we rename
     # by head-size to `pred_age` / `pred_gender`).
+    #
+    # COLOR ORDER: yu4u's training + demo pipeline reads JPEGs via
+    # `cv2.imread`, which hands back BGR tensors, and never swaps the
+    # channels before feeding EfficientNet. The model's baked-in
+    # ImageNet Normalization subtracts [0.485, 0.456, 0.406] from what
+    # it thinks is [R, G, B], but during training channel 0 was
+    # actually Blue. So the learned weights expect BGR input. Passing
+    # RGB (Core ML's default for a 3-channel ImageType) produces a
+    # systematic bias across every prediction — both age and gender
+    # accuracy visibly degrade. Setting `color_layout=BGR` tells Core
+    # ML to hand the model BGR planes so inference matches training.
     placeholder_name = model.input.name.split(":")[0]
     mlmodel = ct.convert(
         model,
@@ -129,6 +140,7 @@ def main() -> None:
         inputs=[ct.ImageType(
             name=placeholder_name,
             shape=(1, INPUT_SIZE, INPUT_SIZE, 3),
+            color_layout=ct.colorlayout.BGR,
             # EfficientNetB3's Rescaling(1/255) + Normalization layers
             # are baked into the graph. Feed raw 0..255 pixel bytes.
             scale=1.0,

@@ -160,12 +160,18 @@ struct ModelArchive: Sendable {
     /// way we treat EmoNet / OpenGraphAU — fine for Playgrounds /
     /// local dev; do not bundle in a signed App Store build.
     ///
-    /// **Version**: `AgeGender-v1` directory, `age-model-v1` tag.
+    /// **Version**: `AgeGender-v2` directory, `age-model-v2` tag.
     /// Bump the pair together when the export pipeline changes.
+    /// v2 fixes a systematic bias caused by a BGR/RGB channel-order
+    /// mismatch between yu4u's training (OpenCV BGR, no swap) and our
+    /// v1 Core ML ImageType (default RGB). The re-exported v2 model
+    /// declares `color_layout=BGR` so inference matches training.
+    /// v2 also widens the Swift-side face crop margin from 1.4 to
+    /// 1.8 to match the upstream `--margin 0.4` (40 % on each side).
     static let ageGender = ModelArchive(
-        directoryName: "AgeGender-v1.mlmodelc",
+        directoryName: "AgeGender-v2.mlmodelc",
         sourceURL: URL(string:
-            "https://github.com/Supat/Focus-Check-App/releases/download/age-model-v1/AgeGender.mlmodelc.zip"
+            "https://github.com/Supat/Focus-Check-App/releases/download/age-model-v2/AgeGender.mlmodelc.zip"
         )!
     )
 

@@ -123,9 +123,12 @@ private final class AgeGenderModel {
     }
 
     /// Rotate + square-crop + resize the face into the model's 224²
-    /// input, run inference, and compose the age/gender result. Same
-    /// crop pipeline as `PainDetector` so the crops presented to both
-    /// models stay consistent.
+    /// input, run inference twice (original + horizontal flip) so we
+    /// can average the two probability distributions, and compose the
+    /// age/gender result. Horizontal-flip TTA costs one extra
+    /// inference per face — EfficientNetB3 is ~15 ms on the ANE so
+    /// per-face latency lands around 30–40 ms, well under the
+    /// budget a user perceives for a one-shot analyze.
     func predict(face: CGRect,
                  roll: CGFloat,
                  source: CIImage,
@@ -133,10 +136,12 @@ private final class AgeGenderModel {
         guard face.width >= 8, face.height >= 8 else { return nil }
 
         // yu4u's training recipe crops faces with `--margin 0.4` around
-        // the detector box — 40 % extra on each side relative to the
-        // box's longer edge. Match that so the pretrained weights see
-        // the context they were trained on.
-        let marginFactor: CGFloat = 1.4
+        // the detector box — 40 % extra on *each* side, i.e. a square
+        // crop whose side is `1 + 2·margin = 1.8` times the face box.
+        // v1 used 1.4 which is the wrong interpretation (40 % total,
+        // 20 % each side); 1.8 matches what the pretrained weights
+        // were trained on — hair + jawline + neck context included.
+        let marginFactor: CGFloat = 1.8
         let halfSide = max(face.width, face.height) * marginFactor / 2
         let faceCenter = CGPoint(x: face.midX, y: face.midY)
         let outputHalf = inputSize.width / 2
@@ -154,6 +159,64 @@ private final class AgeGenderModel {
             .transformed(by: transform)
             .cropped(to: CGRect(origin: .zero, size: inputSize))
 
+        // Horizontally flipped twin — reflect around the x center of
+        // the output square. Face classification + regression tasks
+        // are near-symmetric under this transform, so averaging the
+        // two prediction distributions smooths over whatever side-of-
+        // face bias the single crop picked up.
+        let flipped = resized
+            .transformed(by: CGAffineTransform(scaleX: -1, y: 1)
+                .translatedBy(x: -inputSize.width, y: 0))
+            .cropped(to: CGRect(origin: .zero, size: inputSize))
+
+        guard let agePrimary = rawProbabilities(for: resized, ciContext: ciContext),
+              let ageFlipped = rawProbabilities(for: flipped, ciContext: ciContext)
+        else { return nil }
+
+        // Average the two heads element-wise. The softmax property is
+        // preserved: averaging two probability vectors stays on the
+        // simplex (each value in [0, 1], sum = 1).
+        let ageProbs = zip(agePrimary.age, ageFlipped.age).map { 0.5 * ($0 + $1) }
+        let genderProbs = zip(agePrimary.gender, ageFlipped.gender).map { 0.5 * ($0 + $1) }
+
+        // Age distribution reductions — expectation for the point
+        // estimate, standard deviation for the uncertainty band.
+        var mean: Float = 0
+        for i in 0..<Self.numAgeBins {
+            let p = ageProbs[i]
+            if p.isFinite { mean += Float(i) * p }
+        }
+        var variance: Float = 0
+        for i in 0..<Self.numAgeBins {
+            let p = ageProbs[i]
+            if p.isFinite {
+                let d = Float(i) - mean
+                variance += d * d * p
+            }
+        }
+        let stdev = variance.squareRoot()
+
+        // yu4u's training label ordering is [female=0, male=1].
+        let pFemale = max(0, min(1, genderProbs[0]))
+        let pMale   = max(0, min(1, genderProbs[1]))
+        let (gender, confidence): (SubjectGender, Float) =
+            pMale >= pFemale ? (.male, pMale) : (.female, pFemale)
+
+        return AgeGenderPrediction(
+            age: max(0, min(100, mean)),
+            ageStdev: stdev.isFinite ? stdev : 0,
+            gender: gender,
+            genderConfidence: confidence
+        )
+    }
+
+    /// Render `crop` into a 224² BGRA pixel buffer, run one inference,
+    /// and return the two softmax heads as plain `[Float]`. Returning
+    /// raw arrays (not MLMultiArray) lets the caller average two
+    /// runs element-wise without juggling NSNumber conversions.
+    private func rawProbabilities(for crop: CIImage,
+                                  ciContext: CIContext)
+                                  -> (age: [Float], gender: [Float])? {
         let w = Int(inputSize.width)
         let h = Int(inputSize.height)
         var pixelBuffer: CVPixelBuffer?
@@ -165,7 +228,7 @@ private final class AgeGenderModel {
         guard let pb = pixelBuffer else { return nil }
         let sRGB = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
         ciContext.render(
-            resized,
+            crop,
             to: pb,
             bounds: CGRect(origin: .zero, size: inputSize),
             colorSpace: sRGB
@@ -176,44 +239,16 @@ private final class AgeGenderModel {
                 inputName: MLFeatureValue(pixelBuffer: pb)
             ])
             let result = try model.prediction(from: features)
+            guard let ageMA = result.featureValue(for: ageOutputName)?.multiArrayValue,
+                  ageMA.count >= Self.numAgeBins,
+                  let genderMA = result.featureValue(for: genderOutputName)?.multiArrayValue,
+                  genderMA.count >= 2
+            else { return nil }
 
-            guard let ageProbs = result.featureValue(for: ageOutputName)?.multiArrayValue,
-                  ageProbs.count >= Self.numAgeBins,
-                  let genderProbs = result.featureValue(for: genderOutputName)?.multiArrayValue,
-                  genderProbs.count >= 2
-            else {
-                return nil
-            }
-
-            // Age distribution reductions — expectation for the point
-            // estimate, standard deviation for the uncertainty band.
-            var mean: Float = 0
-            for i in 0..<Self.numAgeBins {
-                let p = ageProbs[i].floatValue
-                if p.isFinite { mean += Float(i) * p }
-            }
-            var variance: Float = 0
-            for i in 0..<Self.numAgeBins {
-                let p = ageProbs[i].floatValue
-                if p.isFinite {
-                    let d = Float(i) - mean
-                    variance += d * d * p
-                }
-            }
-            let stdev = variance.squareRoot()
-
-            // yu4u's training label ordering is [female=0, male=1].
-            let pFemale = max(0, min(1, genderProbs[0].floatValue))
-            let pMale   = max(0, min(1, genderProbs[1].floatValue))
-            let (gender, confidence): (SubjectGender, Float) =
-                pMale >= pFemale ? (.male, pMale) : (.female, pFemale)
-
-            return AgeGenderPrediction(
-                age: max(0, min(100, mean)),
-                ageStdev: stdev.isFinite ? stdev : 0,
-                gender: gender,
-                genderConfidence: confidence
-            )
+            var age = [Float](repeating: 0, count: Self.numAgeBins)
+            for i in 0..<Self.numAgeBins { age[i] = ageMA[i].floatValue }
+            let gender = [genderMA[0].floatValue, genderMA[1].floatValue]
+            return (age: age, gender: gender)
         } catch {
             print("[AgeGender] predict failed: \(error)")
             return nil
