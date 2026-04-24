@@ -166,7 +166,6 @@ struct ContentView: View {
                     motionBlurBadge
                     nudeSubjectsBadge
                     contextBadge
-                    moodBadge
                 }
                 .padding([.leading, .bottom], 12)
             }
@@ -365,32 +364,59 @@ struct ContentView: View {
                 let gender = index < viewModel.nudityGenders.count
                     ? viewModel.nudityGenders[index]
                     : .unknown
-                let emotion = emotionForBody(body)
+                let prediction = predictionForBody(body)
+                let emotion = prediction?.label
                 // Badge renders when *either* the nudity level crosses
                 // covered OR the face classifier returned an emotion —
                 // so clothed group photos still get per-face emotion
                 // glyphs without us forcing a "safe" shield alongside.
-                if level >= .covered || emotion != nil {
+                if level >= .covered || prediction != nil {
                     let rect = viewRect(for: body, source: extent, in: size)
-                    SubjectHeadBadge(level: level, gender: gender, emotion: emotion)
-                        .position(x: rect.midX, y: max(rect.minY - 18, 20))
-                        .allowsHitTesting(false)
+                    VStack(spacing: 4) {
+                        SubjectHeadBadge(level: level, gender: gender, emotion: emotion)
+                        if let pad = prediction?.pad {
+                            subjectPADCapsule(for: pad)
+                        }
+                    }
+                    // Anchor the stack's top near the body's top edge
+                    // so the head badge lands where it used to and the
+                    // optional PAD capsule hangs below it. Guard against
+                    // going above the viewport on very-near-top bodies.
+                    .position(x: rect.midX, y: max(rect.minY - 4, 36))
+                    .allowsHitTesting(false)
                 }
             }
         }
     }
 
+    /// Compact P / A / D readout rendered under the head badge for a
+    /// single subject. Small monospaced text inside its own capsule
+    /// so the primary badge stays legible.
+    private func subjectPADCapsule(for pad: PADVector) -> some View {
+        HStack(spacing: 4) {
+            Text("P\(Self.signedPAD(pad.pleasure))")
+            Text("A\(Self.signedPAD(pad.arousal))")
+            Text("D\(Self.signedPAD(pad.dominance))")
+        }
+        .font(.caption2.monospacedDigit())
+        .foregroundStyle(.white.opacity(0.9))
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .liquidBadgeBackground(tint: Color.black.opacity(0.45), in: Capsule())
+    }
+
     /// Find the face rect whose center lies inside `body` and return
-    /// its FER+ emotion if the classifier met its confidence floor.
-    /// Returns nil when the emotion model isn't installed, no face
-    /// matches the body, or the top prediction was filtered out.
-    private func emotionForBody(_ body: CGRect) -> EmotionLabel? {
+    /// its FER+ prediction (carries label + PAD) when the classifier
+    /// met its confidence floor. Returns nil when the emotion model
+    /// isn't installed, no face matches the body, or the top
+    /// prediction was filtered out.
+    private func predictionForBody(_ body: CGRect) -> EmotionPrediction? {
         guard !viewModel.faceEmotions.isEmpty else { return nil }
         for (i, face) in viewModel.faceRectangles.enumerated()
             where i < viewModel.faceEmotions.count {
             let center = CGPoint(x: face.midX, y: face.midY)
             if body.contains(center) {
-                return viewModel.faceEmotions[i]?.label
+                return viewModel.faceEmotions[i]
             }
         }
         return nil
@@ -498,30 +524,6 @@ struct ContentView: View {
                 Text("\(Int((top.similarity * 100).rounded()))%")
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .liquidBadgeBackground(in: Capsule())
-        }
-    }
-
-    /// Pleasure / Arousal / Dominance readout for the highest-
-    /// confidence face's emotion. Derived from FER+'s softmax via
-    /// Mehrabian's published anchor points — no separate regressor
-    /// runs. Hides when no face met the confidence floor or press-
-    /// and-hold compare is active.
-    @ViewBuilder
-    private var moodBadge: some View {
-        let top = viewModel.faceEmotions
-            .compactMap { $0 }
-            .max(by: { $0.confidence < $1.confidence })
-        if let top,
-           viewModel.sourceImage != nil,
-           !viewModel.overlayHidden {
-            HStack(spacing: 6) {
-                Image(systemName: "heart.text.square")
-                Text("P\(Self.signedPAD(top.pad.pleasure)) A\(Self.signedPAD(top.pad.arousal)) D\(Self.signedPAD(top.pad.dominance))")
-                    .font(.caption2.monospacedDigit())
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
