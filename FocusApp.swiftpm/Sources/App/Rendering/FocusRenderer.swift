@@ -245,7 +245,7 @@ final class FocusRenderer {
                     result = blackBarOverlay(source: result, bars: gatedEyes)
                 }
                 if !gatedGroins.isEmpty {
-                    result = regionMosaic(source: result, regions: gatedGroins, capDivisor: 32)
+                    result = regionMosaic(source: result, regions: gatedGroins)
                 }
                 return result
             case .eyes:
@@ -253,13 +253,13 @@ final class FocusRenderer {
                 return blackBarOverlay(source: inputs.source, bars: gatedEyes)
             case .face:
                 guard !gatedFaces.isEmpty else { return inputs.source }
-                return regionMosaic(source: inputs.source, regions: gatedFaces, capDivisor: 32)
+                return regionMosaic(source: inputs.source, regions: gatedFaces)
             case .chest:
                 guard !gatedChests.isEmpty else { return inputs.source }
-                return regionMosaic(source: inputs.source, regions: gatedChests, capDivisor: 48)
+                return regionMosaic(source: inputs.source, regions: gatedChests)
             case .groin:
                 guard !gatedGroins.isEmpty else { return inputs.source }
-                return regionMosaic(source: inputs.source, regions: gatedGroins, capDivisor: 32)
+                return regionMosaic(source: inputs.source, regions: gatedGroins)
             case .body:
                 // Skip the mosaic outright when NudeNet excluded every body —
                 // nothing in the image crossed the gate.
@@ -274,13 +274,13 @@ final class FocusRenderer {
                     return silhouetteMosaic(source: inputs.source, mask: mask)
                 }
                 if !gatedBodies.isEmpty {
-                    return regionMosaic(source: inputs.source, regions: gatedBodies, capDivisor: 64)
+                    return regionMosaic(source: inputs.source, regions: gatedBodies)
                 }
                 if let mask = inputs.personMask {
                     return silhouetteMosaic(source: inputs.source, mask: mask)
                 }
                 if !inputs.faces.isEmpty {
-                    return regionMosaic(source: inputs.source, regions: inputs.faces, capDivisor: 32)
+                    return regionMosaic(source: inputs.source, regions: inputs.faces)
                 }
                 return inputs.source
             case .privy:
@@ -298,7 +298,6 @@ final class FocusRenderer {
                 guard !keep.isEmpty else { return inputs.source }
                 return regionMosaic(source: inputs.source,
                                     regions: keep.map(\.rect),
-                                    capDivisor: 32,
                                     scaleMultiplier: 1.5)
             case .nudity:
                 // Pixelate each NudeNet detection box directly. No Vision
@@ -311,7 +310,7 @@ final class FocusRenderer {
                 guard !inputs.nudityDetections.isEmpty else { return inputs.source }
                 let regions = inputs.nudityDetections.map(\.rect)
                 return regionMosaic(source: inputs.source, regions: regions,
-                                    capDivisor: 32, scaleMultiplier: 1.5)
+                                    scaleMultiplier: 1.5)
             }
         }()
 
@@ -714,8 +713,7 @@ final class FocusRenderer {
     /// otherwise the mask clips blocks mid-pixel and the silhouette edge
     /// reads as smooth instead of block-jagged.
     private static func silhouetteMosaic(source: CIImage, mask: CIImage) -> CIImage {
-        let longerSide = max(source.extent.width, source.extent.height)
-        let blockSize = Float(longerSide / 64)
+        let blockSize = mosaicTileSize(source: source)
         let center = CGPoint(x: source.extent.midX, y: source.extent.midY)
 
         let pixelateImage = CIFilter.pixellate()
@@ -751,20 +749,25 @@ final class FocusRenderer {
         return (blend.outputImage ?? source).cropped(to: source.extent)
     }
 
+    /// Unified tile-size base for every mosaic path. Returns the
+    /// pixelation-block edge length in pixels, computed strictly from
+    /// the source image's long side so the same photo produces the
+    /// same tile size regardless of how many subjects are present or
+    /// how big each is. Modes that want chunkier blocks (Nudity, Privy)
+    /// pass a `multiplier` above 1.
+    private static func mosaicTileSize(source: CIImage, multiplier: CGFloat = 1.0) -> Float {
+        let longerSide = max(source.extent.width, source.extent.height)
+        return max(Float(longerSide / 48 * multiplier), 4)
+    }
+
     private static func regionMosaic(source: CIImage,
                                      regions: [CGRect],
-                                     capDivisor: CGFloat,
                                      scaleMultiplier: CGFloat = 1.0) -> CIImage {
-        guard let smallest = regions.min(by: {
-            $0.width * $0.height < $1.width * $1.height
-        }) else { return source }
+        guard !regions.isEmpty else { return source }
 
         let pixelate = CIFilter.pixellate()
         pixelate.inputImage = source.clampedToExtent()
-        let regionBased = min(smallest.width, smallest.height) * 0.08
-        let cap = max(source.extent.width, source.extent.height) / capDivisor
-        let base = max(min(regionBased, cap), 4)
-        pixelate.scale = Float(base * scaleMultiplier)
+        pixelate.scale = mosaicTileSize(source: source, multiplier: scaleMultiplier)
         pixelate.center = CGPoint(x: source.extent.midX, y: source.extent.midY)
         let pixelated = (pixelate.outputImage ?? source).cropped(to: source.extent)
 
