@@ -207,6 +207,11 @@ final class FocusViewModel: ObservableObject {
     /// of the image. Hidden by default so most users don't see the raw
     /// detector output.
     @Published var showNudityLabels: Bool = false
+    /// User toggle: render the per-subject PAD bar stack (V/A/D)
+    /// under each head badge. On by default — turning it off keeps
+    /// the head badge but drops the meter capsule for a cleaner
+    /// composition when emotion detail isn't needed.
+    @Published var showPADMeter: Bool = true
     /// Minimum level that triggers the per-subject mosaic gating. Bodies
     /// whose level is below this are skipped even when the global mosaic
     /// condition is on. `.covered` leaves clothed subjects alone.

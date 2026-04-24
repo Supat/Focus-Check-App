@@ -144,6 +144,13 @@ struct OverlayControls: View {
     /// without detections to gate.
     @ViewBuilder
     private var perSubjectCluster: some View {
+        Label("PAD meter", systemImage: "chart.bar.xaxis")
+            .labelStyle(.iconOnly)
+            .font(.caption)
+        Toggle("", isOn: $viewModel.showPADMeter)
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.small)
         Label("Per subject", systemImage: "person.crop.square.filled.and.at.rectangle")
             .labelStyle(.iconOnly)
             .font(.caption)

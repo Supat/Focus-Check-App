@@ -383,7 +383,7 @@ struct ContentView: View {
                     let rect = viewRect(for: body, source: extent, in: size)
                     VStack(spacing: 4) {
                         SubjectHeadBadge(level: level, gender: gender, emotion: emotion)
-                        if let pad = prediction?.pad {
+                        if viewModel.showPADMeter, let pad = prediction?.pad {
                             subjectPADBars(for: pad)
                         }
                     }
