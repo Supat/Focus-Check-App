@@ -255,6 +255,35 @@ private final class AgeGenderModel {
             colorSpace: sRGB
         )
 
+        // Diagnostic: sample the rendered buffer's mean BGR channel
+        // values over a 16×16 grid. Near-zero means the CIContext
+        // render produced black (input-space mismatch, empty crop
+        // extent, or a silent render failure). Near-normal (50–200)
+        // means the face reached the buffer and the issue is model-
+        // internal. Remove once the accuracy gap is root-caused.
+        CVPixelBufferLockBaseAddress(pb, .readOnly)
+        if let base = CVPixelBufferGetBaseAddress(pb) {
+            let bytesPerRow = CVPixelBufferGetBytesPerRow(pb)
+            var bSum: Int = 0, gSum: Int = 0, rSum: Int = 0
+            var count = 0
+            let step = 14  // 16 samples per row/column
+            for y in stride(from: 0, to: h, by: step) {
+                for x in stride(from: 0, to: w, by: step) {
+                    let p = base.advanced(by: y * bytesPerRow + x * 4)
+                        .assumingMemoryBound(to: UInt8.self)
+                    bSum += Int(p[0]); gSum += Int(p[1]); rSum += Int(p[2])
+                    count += 1
+                }
+            }
+            if count > 0 {
+                print(String(format: "[AgeGender] crop mean B=%.0f G=%.0f R=%.0f (n=%d)",
+                             Double(bSum) / Double(count),
+                             Double(gSum) / Double(count),
+                             Double(rSum) / Double(count), count))
+            }
+        }
+        CVPixelBufferUnlockBaseAddress(pb, .readOnly)
+
         do {
             let features = try MLDictionaryFeatureProvider(dictionary: [
                 inputName: MLFeatureValue(pixelBuffer: pb)
