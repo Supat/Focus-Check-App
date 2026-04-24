@@ -406,13 +406,13 @@ struct ContentView: View {
     /// weaker than V/A — we still surface it because it's the third
     /// standard PAD axis and callers asked for the full triple.
     private func subjectPADBars(for pad: PADVector) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 3) {
             padBar(label: "V", value: pad.pleasure)
             padBar(label: "A", value: pad.arousal)
             padBar(label: "D", value: pad.dominance)
         }
-        .padding(.horizontal, 4)
-        .padding(.vertical, 2)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
         .liquidBadgeBackground(tint: Color.black.opacity(0.45), in: Capsule())
     }
 
