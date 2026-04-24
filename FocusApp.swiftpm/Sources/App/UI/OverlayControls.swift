@@ -85,6 +85,7 @@ struct OverlayControls: View {
             painInstallRow
             ageInstallRow
             qualityInstallRow
+            aestheticInstallRow
         }
         #if os(iOS)
         .onPencilSqueeze { phase in
@@ -594,6 +595,53 @@ struct OverlayControls: View {
                     .lineLimit(2)
                 Spacer()
                 Button("Retry") { viewModel.downloadQualityModel() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+        }
+    }
+
+    /// NIMA aesthetic-quality install row. Same architecture as the
+    /// technical variant; different training set (AVA). Scored
+    /// independently and shown as a sibling badge.
+    @ViewBuilder
+    private var aestheticInstallRow: some View {
+        switch viewModel.aestheticInstall {
+        case .installed:
+            EmptyView()
+
+        case .notInstalled:
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.down.circle")
+                    .foregroundStyle(.secondary)
+                Text("Aesthetic judge (NIMA) not installed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Download") { viewModel.downloadAestheticModel() }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+            }
+
+        case .downloading(let progress):
+            HStack(spacing: 8) {
+                ProgressView(value: progress)
+                Text("\(Int(progress * 100))%")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44, alignment: .trailing)
+            }
+
+        case .failed(let message):
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+                Text(message)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                Spacer()
+                Button("Retry") { viewModel.downloadAestheticModel() }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
             }

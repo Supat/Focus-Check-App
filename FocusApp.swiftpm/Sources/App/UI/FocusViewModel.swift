@@ -226,6 +226,9 @@ final class FocusViewModel: ObservableObject {
     /// Whole-image technical quality score from NIMA. `nil` when
     /// the model isn't installed.
     @Published var qualityScore: QualityScore?
+    /// Whole-image aesthetic quality score from NIMA. `nil` when
+    /// the aesthetic variant isn't installed.
+    @Published var aestheticScore: QualityScore?
     /// User toggle: draw NudeNet detection boxes + class labels on top
     /// of the image. Hidden by default so most users don't see the raw
     /// detector output.
@@ -269,6 +272,8 @@ final class FocusViewModel: ObservableObject {
     @Published var ageInstall: DepthInstallState = .notInstalled
     /// Install state for the NIMA technical-quality model.
     @Published var qualityInstall: DepthInstallState = .notInstalled
+    /// Install state for the NIMA aesthetic-quality model.
+    @Published var aestheticInstall: DepthInstallState = .notInstalled
     @Published var isAnalyzing: Bool = false
     /// Fractional progress + current-stage label from the analysis
     /// pipeline. nil while idle. The bar is fixed-weight per stage
@@ -289,6 +294,7 @@ final class FocusViewModel: ObservableObject {
     private var openGraphAUInstallTask: Task<Void, Never>?
     private var ageInstallTask: Task<Void, Never>?
     private var qualityInstallTask: Task<Void, Never>?
+    private var aestheticInstallTask: Task<Void, Never>?
 
     init() {
         self.analyzer = FocusAnalyzer()
@@ -307,6 +313,7 @@ final class FocusViewModel: ObservableObject {
         let openGraphAUInstalled = ModelArchive.openGraphAU.isInstalled()
         let ageInstalled = ModelArchive.age.isInstalled()
         let qualityInstalled = ModelArchive.quality.isInstalled()
+        let aestheticInstalled = ModelArchive.aesthetic.isInstalled()
         self.depthAvailable = depthInstalled
         self.depthInstall = depthInstalled ? .installed : .notInstalled
         self.nsfwInstall = nsfwInstalled ? .installed : .notInstalled
@@ -316,6 +323,7 @@ final class FocusViewModel: ObservableObject {
         self.openGraphAUInstall = openGraphAUInstalled ? .installed : .notInstalled
         self.ageInstall = ageInstalled ? .installed : .notInstalled
         self.qualityInstall = qualityInstalled ? .installed : .notInstalled
+        self.aestheticInstall = aestheticInstalled ? .installed : .notInstalled
 
         let analyzer = self.analyzer
         // Pre-compile installed Core ML models in the background after
@@ -403,6 +411,34 @@ final class FocusViewModel: ObservableObject {
                 }
             }
             await MainActor.run { [weak self] in self?.emotionInstallTask = nil }
+        }
+    }
+
+    /// Download the NIMA aesthetic-quality model. Same install-
+    /// state pattern as the other optional-model install rows.
+    func downloadAestheticModel() {
+        guard aestheticInstallTask == nil else { return }
+        aestheticInstall = .downloading(progress: 0)
+        let analyzer = self.analyzer
+        aestheticInstallTask = Task { [weak self] in
+            do {
+                try await analyzer.installAestheticModel { [weak self] p in
+                    Task { @MainActor [weak self] in
+                        self?.aestheticInstall = .downloading(progress: p)
+                    }
+                }
+                await MainActor.run { [weak self] in
+                    self?.aestheticInstall = .installed
+                }
+            } catch {
+                let stillInstalled = ModelArchive.aesthetic.isInstalled()
+                await MainActor.run { [weak self] in
+                    self?.aestheticInstall = stillInstalled
+                        ? .installed
+                        : .failed(error.localizedDescription)
+                }
+            }
+            await MainActor.run { [weak self] in self?.aestheticInstallTask = nil }
         }
     }
 
@@ -648,6 +684,7 @@ final class FocusViewModel: ObservableObject {
                     self?.painScores = overlays.painScores
                     self?.ageEstimations = overlays.ageEstimations
                     self?.qualityScore = overlays.quality
+                    self?.aestheticScore = overlays.aesthetic
                     self?.isAnalyzing = false
                     self?.analysisProgress = nil
                     print("[ViewModel] sourceImage set, isAnalyzing=false")
@@ -697,6 +734,7 @@ final class FocusViewModel: ObservableObject {
         painScores = []
         ageEstimations = []
         qualityScore = nil
+        aestheticScore = nil
         exposureInfo = nil
         errorMessage = nil
         isAnalyzing = false
@@ -794,6 +832,7 @@ final class FocusViewModel: ObservableObject {
                     self?.painScores = overlays.painScores
                     self?.ageEstimations = overlays.ageEstimations
                     self?.qualityScore = overlays.quality
+                    self?.aestheticScore = overlays.aesthetic
                     self?.isAnalyzing = false
                     self?.analysisProgress = nil
                 }

@@ -191,6 +191,24 @@ struct ModelArchive: Sendable {
         )!
     )
 
+    /// NIMA aesthetic-quality variant — same architecture as
+    /// `.quality` but trained on AVA instead of TID2013, so it
+    /// scores composition / subject interest / lighting mood
+    /// rather than sharpness / exposure / compression. Pair the
+    /// two badges side by side: quality = "did this capture
+    /// correctly?", aesthetic = "is this a good-looking photo?"
+    ///
+    /// **License**: Apache-2.0 code; AVA training data is
+    /// research-license only, so treat shippability the same way
+    /// as the other research-license tiers (do not ship in
+    /// signed App Store builds without review).
+    static let aesthetic = ModelArchive(
+        directoryName: "NIMA-Aesthetic-v1.mlmodelc",
+        sourceURL: URL(string:
+            "https://github.com/Supat/Focus-Check-App/releases/download/aesthetic-model-v1/NIMA-Aesthetic.mlmodelc.zip"
+        )!
+    )
+
     /// Persistent install path: `Application Support/<directoryName>`.
     /// Application Support is user-data, not purged on low-disk like Caches.
     func installedURL() throws -> URL {

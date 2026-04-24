@@ -172,7 +172,10 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .overlay(alignment: .bottomLeading) {
                 VStack(alignment: .leading, spacing: 8) {
-                    qualityBadge
+                    HStack(spacing: 8) {
+                        qualityBadge
+                        aestheticBadge
+                    }
                     HStack(spacing: 8) {
                         exposureBadge
                         motionBlurBadge
@@ -749,30 +752,52 @@ struct ContentView: View {
         }
     }
 
-    /// Whole-image technical-quality readout from NIMA. Colour-
-    /// codes the score: red below 4, orange 4–6, green above 6 —
-    /// quick glance for "did this photo come out OK". Hidden when
-    /// the model isn't installed.
+    /// Whole-image technical-quality readout from NIMA/TID2013.
+    /// Colour-codes the score: red below 4, orange 4–6, green
+    /// above 6 — quick glance for "did this photo come out OK".
+    /// Hidden when the model isn't installed.
     @ViewBuilder
     private var qualityBadge: some View {
         if let q = viewModel.qualityScore,
            viewModel.sourceImage != nil,
            !viewModel.overlayHidden {
-            let tint: Color = q.score < 4 ? .red
-                : q.score < 6 ? .orange : .green
-            HStack(spacing: 6) {
-                Image(systemName: "checkmark.seal.fill")
-                    .foregroundStyle(tint)
-                Text(String(format: "Quality %.1f", Double(q.score)))
-                    .font(.caption.monospacedDigit())
-                Text(String(format: "±%.1f", Double(q.stdev)))
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .liquidBadgeBackground(in: Capsule())
+            nimaBadge(q, label: "Quality",
+                      icon: "checkmark.seal.fill")
         }
+    }
+
+    /// Whole-image aesthetic-quality readout from NIMA/AVA. Same
+    /// colour scale as the technical badge but different icon so
+    /// they're distinguishable at a glance when sitting adjacent.
+    @ViewBuilder
+    private var aestheticBadge: some View {
+        if let a = viewModel.aestheticScore,
+           viewModel.sourceImage != nil,
+           !viewModel.overlayHidden {
+            nimaBadge(a, label: "Aesthetic",
+                      icon: "sparkles")
+        }
+    }
+
+    /// Shared badge body for both NIMA variants — same layout and
+    /// colour scale, different label + icon. Keeps the two capsules
+    /// visually consistent while still distinguishable.
+    private func nimaBadge(_ q: QualityScore, label: String,
+                           icon: String) -> some View {
+        let tint: Color = q.score < 4 ? .red
+            : q.score < 6 ? .orange : .green
+        return HStack(spacing: 6) {
+            Image(systemName: icon)
+                .foregroundStyle(tint)
+            Text(String(format: "\(label) %.1f", Double(q.score)))
+                .font(.caption.monospacedDigit())
+            Text(String(format: "±%.1f", Double(q.stdev)))
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .liquidBadgeBackground(in: Capsule())
     }
 
     private var placeholder: some View {

@@ -145,44 +145,52 @@ inside the non-mode-dependent cache so mode switches don't re-run it.
   set mixes nudity / scene / safe-art / medical / minor-presence
   anchors so the top match functions as a coarse context label.
 
-### Whole-image technical quality (NIMA, optional)
-Seventh tier. Unlike the per-face tiers above, `QualityAnalyzer`
-runs once per image and produces a single scalar "technical
-quality" score in [1, 10] — high values = clean / sharp / well-
-exposed; low values = compressed / blurry / banded / clipped.
-Useful as a quick-glance judgement complement to the Motion-Blur
-badge and the Sharpness overlay.
+### Whole-image quality judges (NIMA, optional)
+Seventh tier. Unlike the per-face tiers above, the two NIMA
+analyzers run once per image and each produce a single scalar
+score in [1, 10]. Two independent axes:
 
-Architecturally: MobileNet-v1 backbone (ImageNet pre-train, then
-fine-tuned on TID2013) → GlobalAveragePool → Dense(10, softmax).
-Swift side reduces:
+- `QualityAnalyzer` (technical) — TID2013-trained. Captures
+  sharpness / exposure / compression / noise / banding — the
+  "did the camera capture this correctly?" axis.
+- `AestheticAnalyzer` (aesthetic) — AVA-trained. Captures
+  composition / subject interest / lighting mood — the "is this
+  a good-looking photograph?" axis.
+
+Both share `QualityScore` and the same architecture: MobileNet-v1
+backbone (ImageNet pre-train → fine-tuned on the task) →
+GlobalAveragePool → Dense(10, softmax). Swift-side reduction:
 
 - score = `Σ (i+1) · p_i` over i ∈ [0, 9], clamped to [1, 10]
 - stdev = `sqrt(Σ (i+1 − μ)² · p_i)` — distribution spread; low
   stdev = confident, high = mixed / uncertain
 
-Surfaced as a coloured seal-badge in the bottom-left cluster:
-red below 4, orange 4–6, green above 6. The full distribution is
-stored on `QualityScore` so future UIs can render a 10-bar chart
-if wanted.
+They're loaded by a single `NIMAModel` class parameterized by
+`ModelArchive`; two shared statics (`technicalShared`,
+`aestheticShared`) mean the inference code lives in one place.
 
-- Model: idealo/image-quality-assessment
-  `weights_mobilenet_technical_0.11.hdf5` (MobileNet-v1, 224²,
-  EMD 0.107 / SROCC 0.675 on TID2013)
+Surfaced as two sibling capsules on the top badge row:
+- `✓ Quality 6.4 ±0.8` (technical, checkmark-seal icon)
+- `✨ Aesthetic 5.7 ±1.1` (aesthetic, sparkles icon)
+
+Both use the same colour scale: red below 4, orange 4–6, green
+above 6.
+
+- Models: idealo/image-quality-assessment
+  - `weights_mobilenet_technical_0.11.hdf5` (EMD 0.107,
+    SROCC 0.675 on TID2013)
+  - `weights_mobilenet_aesthetic_0.07.hdf5` (AVA-trained)
 - Input: 224² RGB in [0, 255]. Core ML ImageType declares
   `scale = 2/255, bias = [-1, -1, -1]` so the network receives
   [-1, 1] MobileNet-normalized values — preprocessing is NOT
   baked into the graph, unlike EfficientNet-based tiers.
-- License: Apache-2.0 code. Training data is TID2013, published
-  for "scientific and educational research" — looser than the
-  research-only-terms tiers (EmoNet, OpenGraphAU, SSR-Net) but
-  still worth a lawyer check before bundling in a signed App
-  Store build.
-- Known caveat: SROCC 0.675 means the score is ordinal-reliable
-  (photo A > B most of the time) but not calibrated absolute.
-  Treat 7.2 vs 7.5 as "similar quality"; a 3.0 vs 7.0 gap is
-  trustworthy. The ± band next to the score nudges the user
-  toward that interpretation.
+- License: Apache-2.0 code. TID2013 is "scientific and
+  educational research"; AVA is research-license. Signed App
+  Store build distribution needs a lawyer check for both.
+- Known caveat: NIMA scores are ordinal-reliable (photo A > B
+  most of the time) but not calibrated absolute — treat a 7.2
+  vs 7.5 delta as "similar", a 3.0 vs 7.0 gap as real. The ±
+  band next to each score nudges the user toward that reading.
 
 ### Per-face age estimation (SSR-Net, optional)
 Sixth tier, complementary to the other per-face tiers: `AgeEstimator`
@@ -397,6 +405,7 @@ struct ModelArchive {
 - `ModelArchive.openGraphAU` → `pain-model-v1` release tag (OpenGraphAU AU detector for PSPI pain proxy, **research-only license** — do not ship in signed builds)
 - `ModelArchive.age` → `age-model-v3` release tag (SSR-Net — per-face age only, **research-only training data** — do not ship in signed builds; gender falls back to NudeNet's FACE_* branch)
 - `ModelArchive.quality` → `quality-model-v1` release tag (idealo/NIMA MobileNet — whole-image technical-quality scalar, Apache-2.0 + TID2013 research-license — shipping in signed builds plausible but not vetted)
+- `ModelArchive.aesthetic` → `aesthetic-model-v1` release tag (idealo/NIMA MobileNet aesthetic variant — whole-image composition / mood scalar, Apache-2.0 + AVA research-license)
 
 Maintainer workflow (one-time, requires a Mac):
 
@@ -461,6 +470,16 @@ ditto -c -k --sequesterRsrc --keepParent \
       /tmp/NIMA.mlmodelc NIMA.mlmodelc.zip
 zip -d NIMA.mlmodelc.zip '__MACOSX/*' 2>/dev/null || true
 gh release upload quality-model-v1 NIMA.mlmodelc.zip
+
+# NIMA aesthetic — same export script, different weights via env.
+curl -L -O https://github.com/idealo/image-quality-assessment/raw/master/models/MobileNet/weights_mobilenet_aesthetic_0.07.hdf5
+NIMA_WEIGHTS=weights_mobilenet_aesthetic_0.07.hdf5 python3 Tools/export_nima_model.py
+xcrun coremlcompiler compile NIMA.mlpackage /tmp/
+mv /tmp/NIMA.mlmodelc /tmp/NIMA-Aesthetic.mlmodelc
+ditto -c -k --sequesterRsrc --keepParent \
+      /tmp/NIMA-Aesthetic.mlmodelc NIMA-Aesthetic.mlmodelc.zip
+zip -d NIMA-Aesthetic.mlmodelc.zip '__MACOSX/*' 2>/dev/null || true
+gh release upload aesthetic-model-v1 NIMA-Aesthetic.mlmodelc.zip
 ```
 
 `OverlayControls` renders a dedicated install/progress/retry row for
