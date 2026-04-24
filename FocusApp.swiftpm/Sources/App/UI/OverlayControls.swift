@@ -145,6 +145,9 @@ struct OverlayControls: View {
     /// without detections to gate.
     @ViewBuilder
     private var perSubjectCluster: some View {
+        // One toggle controls both the PAD bars and the Pain bar
+        // sitting beside them. They're a single visual row and a
+        // single conceptual "per-subject meter".
         Label("PAD meter", systemImage: "chart.bar.xaxis")
             .labelStyle(.iconOnly)
             .font(.caption)
@@ -152,15 +155,6 @@ struct OverlayControls: View {
             .labelsHidden()
             .toggleStyle(.switch)
             .controlSize(.small)
-        if case .installed = viewModel.openGraphAUInstall {
-            Label("Pain meter", systemImage: "heart.text.square")
-                .labelStyle(.iconOnly)
-                .font(.caption)
-            Toggle("", isOn: $viewModel.showPainMeter)
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.small)
-        }
         Label("Per subject", systemImage: "person.crop.square.filled.and.at.rectangle")
             .labelStyle(.iconOnly)
             .font(.caption)

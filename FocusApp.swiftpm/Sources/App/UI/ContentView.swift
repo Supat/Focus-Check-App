@@ -384,11 +384,18 @@ struct ContentView: View {
                     let pain = painForBody(body)
                     VStack(spacing: 4) {
                         SubjectHeadBadge(level: level, gender: gender, emotion: emotion)
-                        if viewModel.showPADMeter, let pad = prediction?.pad {
-                            subjectPADBars(for: pad)
-                        }
-                        if viewModel.showPainMeter, let pain {
-                            subjectPainBar(for: pain)
+                        // PAD + Pain live in the same meter row and
+                        // share the single showPADMeter toggle.
+                        if viewModel.showPADMeter
+                            && (prediction?.pad != nil || pain != nil) {
+                            HStack(spacing: 4) {
+                                if let pad = prediction?.pad {
+                                    subjectPADBars(for: pad)
+                                }
+                                if let pain {
+                                    subjectPainBar(for: pain)
+                                }
+                            }
                         }
                     }
                     // Anchor the stack's top near the body's top edge
