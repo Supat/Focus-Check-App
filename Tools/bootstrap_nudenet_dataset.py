@@ -445,16 +445,14 @@ def main() -> None:
     skipped_export = 0
     skipped_label = 0
 
-    # Build a per-photo filename template. `{original_name}` gives
-    # the source's base filename minus extension; osxphotos' template
-    # engine substitutes it at export time. Prefixing here (rather
-    # than renaming after-the-fact) ensures the file lands with the
-    # right name on first write — safe under parallel runs pointed
-    # at the same output directory.
+    # Resolve a per-photo filename at iterate time. Earlier attempt
+    # used osxphotos' `{original_name}` template string via
+    # `filename=`, but `PhotoExporter.export()` treats that argument
+    # as a literal filename (not a template) and wrote every file as
+    # `laulea_{original_name}`, `(1)`, `(2)` — all colliding and
+    # incrementing instead of each carrying the original stem.
+    # Compute the target stem per photo explicitly.
     prefix = args.name_prefix or ""
-    export_template = (
-        f"{prefix}{{original_name}}" if prefix else None
-    )
 
     for photo in tqdm(photos, desc="Processing"):
         # PhotoExporter.export() COPIES the original (converting to
@@ -462,10 +460,26 @@ def main() -> None:
         # boolean options above only affect the copied output.
         try:
             exporter = osxphotos.PhotoExporter(photo)
-            if export_template is not None:
+            if prefix:
+                # osxphotos' `filename` parameter is a *literal* full
+                # filename, not a stem — we have to include the
+                # extension ourselves. With convert_to_jpeg=True the
+                # output is always JPEG; otherwise keep the source's
+                # extension. Without an extension here, files end up
+                # extensionless on disk (PIL still reads them, but
+                # CVAT / LabelImg filter by extension at import time
+                # and would skip them silently).
+                orig = photo.original_filename or photo.uuid
+                stem = Path(orig).stem
+                if convert:
+                    out_ext = ".jpeg"
+                else:
+                    src_ext = Path(orig).suffix.lower()
+                    out_ext = src_ext if src_ext else ".jpeg"
+                target = f"{prefix}{stem}{out_ext}"
                 results = exporter.export(
                     str(images_dir),
-                    filename=export_template,
+                    filename=target,
                     options=export_options,
                 )
             else:
