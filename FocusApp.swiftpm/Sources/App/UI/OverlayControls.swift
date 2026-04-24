@@ -84,6 +84,7 @@ struct OverlayControls: View {
             emotionInstallRow
             painInstallRow
             ageInstallRow
+            qualityInstallRow
         }
         #if os(iOS)
         .onPencilSqueeze { phase in
@@ -546,6 +547,53 @@ struct OverlayControls: View {
                     .lineLimit(2)
                 Spacer()
                 Button("Retry") { viewModel.downloadAgeModel() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+        }
+    }
+
+    /// NIMA technical-quality install row. Full-image score in
+    /// [1, 10]. Same download / progress / retry pattern as the
+    /// other optional tiers.
+    @ViewBuilder
+    private var qualityInstallRow: some View {
+        switch viewModel.qualityInstall {
+        case .installed:
+            EmptyView()
+
+        case .notInstalled:
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.down.circle")
+                    .foregroundStyle(.secondary)
+                Text("Quality judge (NIMA) not installed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Download") { viewModel.downloadQualityModel() }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+            }
+
+        case .downloading(let progress):
+            HStack(spacing: 8) {
+                ProgressView(value: progress)
+                Text("\(Int(progress * 100))%")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44, alignment: .trailing)
+            }
+
+        case .failed(let message):
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+                Text(message)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                Spacer()
+                Button("Retry") { viewModel.downloadQualityModel() }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
             }

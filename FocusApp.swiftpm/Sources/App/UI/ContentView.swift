@@ -174,6 +174,7 @@ struct ContentView: View {
                 HStack(spacing: 8) {
                     exposureBadge
                     motionBlurBadge
+                    qualityBadge
                     nudeSubjectsBadge
                     contextBadge
                 }
@@ -737,6 +738,32 @@ struct ContentView: View {
                 Text("Motion blur ≈ \(Int(mb.angle.rounded()))°")
                     .font(.caption.monospacedDigit())
                 Text("\(Int((mb.confidence * 100).rounded()))%")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .liquidBadgeBackground(in: Capsule())
+        }
+    }
+
+    /// Whole-image technical-quality readout from NIMA. Colour-
+    /// codes the score: red below 4, orange 4–6, green above 6 —
+    /// quick glance for "did this photo come out OK". Hidden when
+    /// the model isn't installed.
+    @ViewBuilder
+    private var qualityBadge: some View {
+        if let q = viewModel.qualityScore,
+           viewModel.sourceImage != nil,
+           !viewModel.overlayHidden {
+            let tint: Color = q.score < 4 ? .red
+                : q.score < 6 ? .orange : .green
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark.seal.fill")
+                    .foregroundStyle(tint)
+                Text(String(format: "Quality %.1f", Double(q.score)))
+                    .font(.caption.monospacedDigit())
+                Text(String(format: "±%.1f", Double(q.stdev)))
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.secondary)
             }

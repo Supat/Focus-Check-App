@@ -94,6 +94,10 @@ actor FocusAnalyzer {
         /// installed. Age-only — gender comes from `nudityGenders`
         /// (NudeNet's FACE_* branch) exclusively now.
         var ageEstimations: [AgePrediction?] = []
+        /// NIMA technical-quality score for the whole image. `nil`
+        /// when the model isn't installed. Scalar in [1, 10] with
+        /// an uncertainty band from the softmax stdev.
+        var quality: QualityScore?
     }
 
     private let device: MTLDevice
@@ -107,6 +111,7 @@ actor FocusAnalyzer {
     private let emotionClassifier = EmotionClassifier()
     private let painDetector = PainDetector()
     private let ageEstimator = AgeEstimator()
+    private let qualityAnalyzer = QualityAnalyzer()
     private let depthInstaller = ModelArchiveInstaller(.depthAnything)
     private let nsfwInstaller = ModelArchiveInstaller(.nsfw)
     private let nudenetInstaller = ModelArchiveInstaller(.nudenet)
@@ -114,6 +119,7 @@ actor FocusAnalyzer {
     private let emotionInstaller = ModelArchiveInstaller(.emotion)
     private let openGraphAUInstaller = ModelArchiveInstaller(.openGraphAU)
     private let ageInstaller = ModelArchiveInstaller(.age)
+    private let qualityInstaller = ModelArchiveInstaller(.quality)
 
     private var source: CIImage?
 
@@ -288,6 +294,15 @@ actor FocusAnalyzer {
         try await ageInstaller.install(progress: progress)
     }
 
+    /// True when the NIMA quality analyzer is installed on disk.
+    var isQualityInstalled: Bool { ModelArchive.quality.isInstalled() }
+
+    /// Download + install NIMA. Lazy MLModel load happens on first
+    /// analyze; no explicit reload needed.
+    func installQualityModel(progress: @Sendable @escaping (Double) -> Void) async throws {
+        try await qualityInstaller.install(progress: progress)
+    }
+
     /// Eagerly compile the installed Core ML models so the first analyze
     /// after launch doesn't pay the ~1–3 s compile cost. Safe to call
     /// from a background task once the app is idle. No-op for models
@@ -299,6 +314,7 @@ actor FocusAnalyzer {
         _ = emotionClassifier.warm()
         _ = painDetector.warm()
         _ = ageEstimator.warm()
+        _ = qualityAnalyzer.warm()
     }
 
     /// Walk `Application Support/` and print every file + byte size.
@@ -357,6 +373,7 @@ actor FocusAnalyzer {
         var faceEmotions: [EmotionPrediction?]
         var painScores: [PainScore?]
         var ageEstimations: [AgePrediction?]
+        var quality: QualityScore?
     }
     private var cachedNonMode: NonModeResults?
 
@@ -375,7 +392,7 @@ actor FocusAnalyzer {
         // Step accounting — skips the non-mode stages entirely when
         // the cache hits (mode-only reanalyze).
         let needsNonMode = (cachedNonMode == nil)
-        let nonModeSteps = needsNonMode ? 8 : 0
+        let nonModeSteps = needsNonMode ? 9 : 0
         let totalSteps = nonModeSteps + 1
         var stepsDone = 0
         func tick(_ label: String) {
@@ -439,6 +456,9 @@ actor FocusAnalyzer {
                 in: source,
                 ciContext: ciContext
             )
+            tick("Judging technical quality")
+            // Whole-image NIMA quality score. nil when not installed.
+            let quality = qualityAnalyzer.analyze(image: source, ciContext: ciContext)
             tick("Checking sensitive content")
             let sensitive = await sensitiveFuture
 
@@ -451,7 +471,8 @@ actor FocusAnalyzer {
                 clipMatches: clipMatches,
                 faceEmotions: faceEmotions,
                 painScores: painScores,
-                ageEstimations: ageEstimations
+                ageEstimations: ageEstimations,
+                quality: quality
             )
             cachedNonMode = computed
             nonMode = computed
@@ -507,6 +528,7 @@ actor FocusAnalyzer {
         let faceEmotions = nonMode.faceEmotions
         let painScores = nonMode.painScores
         let ageEstimations = nonMode.ageEstimations
+        let quality = nonMode.quality
 
         return Overlays(
             sharpness: sharpness,
@@ -529,7 +551,8 @@ actor FocusAnalyzer {
             clipMatches: clipMatches,
             faceEmotions: faceEmotions,
             painScores: painScores,
-            ageEstimations: ageEstimations
+            ageEstimations: ageEstimations,
+            quality: quality
         )
     }
 

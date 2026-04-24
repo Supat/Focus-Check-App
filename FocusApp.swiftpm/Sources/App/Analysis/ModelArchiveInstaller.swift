@@ -169,6 +169,28 @@ struct ModelArchive: Sendable {
         )!
     )
 
+    /// idealo/image-quality-assessment NIMA (Neural Image
+    /// Assessment) technical-quality variant — MobileNet-v1
+    /// backbone + dense-softmax head over rating bins 1..10. Output
+    /// distribution's expectation is the scalar quality score. Run
+    /// once per image (full-image, not per-face), returns a single
+    /// value in [1, 10] that tracks sharpness / exposure /
+    /// compression / banding defects.
+    ///
+    /// **License**: Apache-2.0 code, trained on TID2013 (published
+    /// for scientific / educational research). Closer to "probably
+    /// shippable" than the research-only models; still worth a
+    /// lawyer check before bundling in a signed App Store build.
+    ///
+    /// **Version**: `NIMA-v1` directory, `quality-model-v1` tag.
+    /// Bump the pair together when the export pipeline changes.
+    static let quality = ModelArchive(
+        directoryName: "NIMA-v1.mlmodelc",
+        sourceURL: URL(string:
+            "https://github.com/Supat/Focus-Check-App/releases/download/quality-model-v1/NIMA.mlmodelc.zip"
+        )!
+    )
+
     /// Persistent install path: `Application Support/<directoryName>`.
     /// Application Support is user-data, not purged on low-disk like Caches.
     func installedURL() throws -> URL {
