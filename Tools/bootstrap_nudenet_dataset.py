@@ -77,28 +77,109 @@ import argparse
 import sys
 from pathlib import Path
 
-# NudeNet v3.4 default label ordering. Must match the training export.
+# NudeNet v3.4 default label ordering for indices 0..17 — these are
+# the classes NudeNet's 640m detector emits, so keeping the indices
+# exact lets the pre-labeler decode raw detections without a map.
+#
+# Indices 18..20 extend the schema with a three-class split of the
+# old `MALE_GENITALIA_EXPOSED` (index 14). NudeNet itself can't
+# predict the sub-classes; the review step is where boxes with
+# class_id=14 get reclassified into 18 / 19 / 20 per RUBRIC.md.
+# Any class-14 boxes remaining at training time should be dropped.
 NUDENET_LABELS = [
-    "FEMALE_GENITALIA_COVERED",
-    "FACE_FEMALE",
-    "BUTTOCKS_EXPOSED",
-    "FEMALE_BREAST_EXPOSED",
-    "FEMALE_GENITALIA_EXPOSED",
-    "MALE_BREAST_EXPOSED",
-    "ANUS_EXPOSED",
-    "FEET_EXPOSED",
-    "BELLY_COVERED",
-    "FEET_COVERED",
-    "ARMPITS_COVERED",
-    "ARMPITS_EXPOSED",
-    "FACE_MALE",
-    "BELLY_EXPOSED",
-    "MALE_GENITALIA_EXPOSED",
-    "ANUS_COVERED",
-    "FEMALE_BREAST_COVERED",
-    "BUTTOCKS_COVERED",
+    "FEMALE_GENITALIA_COVERED",       # 0
+    "FACE_FEMALE",                    # 1
+    "BUTTOCKS_EXPOSED",               # 2
+    "FEMALE_BREAST_EXPOSED",          # 3
+    "FEMALE_GENITALIA_EXPOSED",       # 4
+    "MALE_BREAST_EXPOSED",            # 5
+    "ANUS_EXPOSED",                   # 6
+    "FEET_EXPOSED",                   # 7
+    "BELLY_COVERED",                  # 8
+    "FEET_COVERED",                   # 9
+    "ARMPITS_COVERED",                # 10
+    "ARMPITS_EXPOSED",                # 11
+    "FACE_MALE",                      # 12
+    "BELLY_EXPOSED",                  # 13
+    "MALE_GENITALIA_EXPOSED",         # 14  — review-pending only
+    "ANUS_COVERED",                   # 15
+    "FEMALE_BREAST_COVERED",          # 16
+    "BUTTOCKS_COVERED",               # 17
+    # Review-added sub-classes of the old 14:
+    "MALE_GENITALIA_FLACCID",         # 18
+    "MALE_GENITALIA_AROUSAL",         # 19
+    "MALE_GENITALIA_ORGASM",          # 20
 ]
 LABEL_TO_ID = {name: i for i, name in enumerate(NUDENET_LABELS)}
+
+# Classes that NudeNet itself can't predict; present in the schema
+# only because the review step assigns them. If a user trains
+# directly without review, these classes will have zero positives
+# and the detection head will never learn them — intentional.
+REVIEW_ONLY_CLASSES = {
+    "MALE_GENITALIA_FLACCID",
+    "MALE_GENITALIA_AROUSAL",
+    "MALE_GENITALIA_ORGASM",
+}
+
+# Pixel padding applied around each detection's box when writing the
+# crop thumbnail. Fractional margin on the shorter side; gives the
+# reviewer enough context (hair / skin tone / surroundings) to
+# disambiguate cases that a tight crop can't resolve.
+CROP_PADDING_FRAC = 0.20
+
+# Annotation rubric written to the output directory as RUBRIC.md.
+# One paragraph per sub-class of the old MALE_GENITALIA_EXPOSED,
+# with the hard edge cases called out so two reviewers would agree
+# on the same photo most of the time.
+RUBRIC_CONTENT = """# Annotation rubric for MALE_GENITALIA sub-classes
+
+Every pre-label with class_id 14 (`MALE_GENITALIA_EXPOSED`) must be
+reclassified into one of the three labels below during review.
+Labels that can't confidently be committed should be **deleted**
+— noisy training labels do more damage than fewer clean ones.
+
+## 18. MALE_GENITALIA_FLACCID
+
+Use for any exposed male genitalia with no visible erection.
+Diagnostic: the shaft is in its baseline pendulous state, hanging
+roughly parallel to gravity, with no rigidity and no circumferential
+engorgement. Use this class in non-erotic contexts (bathing,
+medical, locker-room, casualties, skinny-dipping) and also for the
+post-ejaculatory resolution phase once detumescence has completed
+— if there is no visible erection in *this* image, it is FLACCID
+regardless of what the photo sequence suggests preceded it. Edge
+case: a semi-erect / partially-engorged state where the shaft is
+rigid enough to sit at a modest angle (say, 20–40° from vertical-
+hanging) but is clearly not full-erect. Default to FLACCID unless
+the rigidity is unambiguous.
+
+## 19. MALE_GENITALIA_AROUSAL
+
+Use for any visibly erect male genitalia. Diagnostic signs (all
+three should be present for a confident call): the shaft is rigid
+and held at a high angle (≥45° from vertical-hanging, often
+pointing toward the navel), the glans is engorged and noticeably
+redder or darker than its flaccid baseline, and the overall
+circumference is larger than the flaccid comparator. Include every
+stage from full erection through pre-ejaculation. Pre-ejaculate
+fluid at the meatus — clear, small volume, no trajectory — remains
+AROUSAL, not ORGASM. Do not use this class for ambiguous semi-erect
+states; those belong to FLACCID.
+
+## 20. MALE_GENITALIA_ORGASM
+
+Use only when ejaculation is in progress or has just concluded with
+*visible* evidence. Diagnostic: opaque white/off-white fluid (semen)
+visibly present — either in mid-trajectory, or deposited on the
+body/surroundings — in a volume noticeably larger than pre-
+ejaculate. The genitals themselves will typically still be erect.
+Clear pre-ejaculate alone is AROUSAL. Once the visible fluid has
+been wiped, absorbed, or dried and the erection subsides, the
+correct class becomes FLACCID again (post-resolution). When in
+doubt between AROUSAL and ORGASM on a still frame, prefer AROUSAL
+— ORGASM should be the rarer, unambiguous label.
+"""
 
 
 def resolve_safely(path_str: str) -> Path:
@@ -309,8 +390,10 @@ def main() -> None:
     # Create output directories.
     images_dir = output_path / "images"
     labels_dir = output_path / "labels"
+    crops_dir = output_path / "crops"
     images_dir.mkdir(parents=True, exist_ok=True)
     labels_dir.mkdir(parents=True, exist_ok=True)
+    crops_dir.mkdir(parents=True, exist_ok=True)
 
     # Initialize NudeNet if we're labeling.
     detector = None
@@ -398,13 +481,24 @@ def main() -> None:
             skipped_label += 1
             continue
 
+        # Open the source image once for both label math and crop
+        # writing; closing is handled below after all detections are
+        # processed.
+        try:
+            source_image = Image.open(exported).convert("RGB")
+        except Exception as exc:
+            print(f"  PIL reopen failed on {exported.name}: {exc}",
+                  file=sys.stderr)
+            skipped_label += 1
+            continue
+
         label_path = labels_dir / (exported.stem + ".txt")
         wrote_any = False
         # Write atomically via a .tmp then rename so an interrupted
         # run doesn't leave partial labels.
         tmp_path = label_path.with_suffix(".txt.tmp")
         with open(tmp_path, "w") as out:
-            for det in detections or []:
+            for det_idx, det in enumerate(detections or []):
                 score = float(det.get("score", 0))
                 if score < args.confidence:
                     continue
@@ -424,21 +518,49 @@ def main() -> None:
                 # negative coords or coords > image size); those
                 # should be clipped rather than dropped.
                 x_tl, y_tl, bw_px, bh_px = map(float, box)
-                x1 = max(0.0, x_tl) / img_w
-                y1 = max(0.0, y_tl) / img_h
-                x2 = min(float(img_w), x_tl + bw_px) / img_w
-                y2 = min(float(img_h), y_tl + bh_px) / img_h
+                x1_px = max(0.0, x_tl)
+                y1_px = max(0.0, y_tl)
+                x2_px = min(float(img_w), x_tl + bw_px)
+                y2_px = min(float(img_h), y_tl + bh_px)
+                if x2_px <= x1_px or y2_px <= y1_px:
+                    continue
+                x1 = x1_px / img_w
+                y1 = y1_px / img_h
+                x2 = x2_px / img_w
+                y2 = y2_px / img_h
                 bw = x2 - x1
                 bh = y2 - y1
-                # Skip degenerate boxes (zero area after clipping, or
-                # completely outside the image).
-                if bw <= 0 or bh <= 0:
-                    continue
                 cx = (x1 + x2) / 2
                 cy = (y1 + y2) / 2
                 out.write(f"{class_id} {cx:.6f} {cy:.6f} "
                           f"{bw:.6f} {bh:.6f}\n")
                 wrote_any = True
+
+                # Per-detection crop thumbnail for fast review.
+                # Padded outward by CROP_PADDING_FRAC on each side
+                # (capped to image bounds) so the reviewer has a
+                # little context around the box.
+                pad = CROP_PADDING_FRAC * min(bw_px, bh_px)
+                cx1 = int(max(0, x1_px - pad))
+                cy1 = int(max(0, y1_px - pad))
+                cx2 = int(min(img_w, x2_px + pad))
+                cy2 = int(min(img_h, y2_px + pad))
+                if cx2 - cx1 < 8 or cy2 - cy1 < 8:
+                    continue  # skip degenerate micro-crops
+                class_dir = crops_dir / name
+                class_dir.mkdir(exist_ok=True)
+                crop_name = (f"{exported.stem}_{det_idx:02d}"
+                             f"_{int(round(score * 100)):02d}.jpg")
+                try:
+                    source_image.crop((cx1, cy1, cx2, cy2)).save(
+                        class_dir / crop_name, quality=85
+                    )
+                except Exception as exc:
+                    # Crop failure is non-fatal — the full image +
+                    # label already hit disk.
+                    print(f"  crop save failed for {crop_name}: {exc}",
+                          file=sys.stderr)
+        source_image.close()
         tmp_path.replace(label_path)
         if wrote_any:
             labeled_count += 1
@@ -476,12 +598,33 @@ def main() -> None:
         "      and `FACE_MALE` (NudeNet's known weak spots).\n"
         "- [ ] Wrong-class detections (FACE_MALE vs FACE_FEMALE flips).\n"
         "- [ ] Tight box fit — NudeNet's boxes can be loose.\n"
-        "- [ ] Duplicate boxes on the same subject.\n\n"
+        "- [ ] Duplicate boxes on the same subject.\n"
+        "- [ ] **Every `MALE_GENITALIA_EXPOSED` box (class 14) must be\n"
+        "      reclassified** to one of `MALE_GENITALIA_FLACCID` (18),\n"
+        "      `MALE_GENITALIA_AROUSAL` (19), or\n"
+        "      `MALE_GENITALIA_ORGASM` (20) per the rules in\n"
+        "      `RUBRIC.md`. Any class-14 boxes remaining when training\n"
+        "      starts will be dropped (the class is present in the\n"
+        "      schema only so NudeNet's pre-labels decode cleanly).\n\n"
+        "## Fast-review flow using `crops/`\n\n"
+        "Every pre-labeled detection is also saved as a thumbnail\n"
+        "under `crops/<CLASS_NAME>/<image>_<det>_<score>.jpg`. Scroll\n"
+        "`crops/MALE_GENITALIA_EXPOSED/` in Finder's icon view first\n"
+        "— a dozen obvious false positives and correctly-NudeNet-\n"
+        "caught cases are usually visible at a glance, which tells you\n"
+        "how much work the detector-review step will actually involve\n"
+        "before you open CVAT. Crops are NOT training inputs; they're\n"
+        "review convenience.\n\n"
         "After review, carve `images/` + `labels/` into `train/` and\n"
         "`val/` subdirectories (~80/20), update `data.yaml`'s `path:`,\n"
         "and fine-tune with Ultralytics YOLOv8m using the upstream\n"
         "640m.onnx's `.pt` checkpoint as starting weights.\n"
     )
+
+    # RUBRIC.md — the exact annotation rules for the three new
+    # genital-state sub-classes. Kept in the output directory so the
+    # reviewer has one source of truth beside the data.
+    (output_path / "RUBRIC.md").write_text(RUBRIC_CONTENT)
 
     print()
     print(f"Exported: {exported_count} image(s) "

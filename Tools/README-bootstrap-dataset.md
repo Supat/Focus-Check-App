@@ -136,10 +136,22 @@ Photos SQLite file aborts with a specific error before any I/O.
 <output>/
 ├── images/              — exported JPEGs (HEIC / RAW auto-converted)
 ├── labels/              — YOLO-format .txt sidecars, one per image
+├── crops/               — per-class thumbnails of every detection
+│   ├── MALE_GENITALIA_EXPOSED/
+│   │   ├── IMG_1234_00_42.jpg   — image-stem, det-index, confidence%
+│   │   └── ...
+│   └── <other classes>/
 ├── classes.txt          — NudeNet labels, one per line; index = class_id
 ├── data.yaml            — Ultralytics dataset config
-└── README-review.md     — the review checklist generated at runtime
+├── README-review.md     — review checklist (generated at runtime)
+└── RUBRIC.md            — annotation rules for the three new
+                          genital-state sub-classes (18/19/20)
 ```
+
+`crops/` is a review convenience, not a training input. Scroll
+`crops/<CLASS>/` in Finder's icon view to spot obvious NudeNet
+errors and reclassify the `MALE_GENITALIA_EXPOSED` (class 14) boxes
+per the rubric in `RUBRIC.md` before training.
 
 ## Review step (non-optional)
 
