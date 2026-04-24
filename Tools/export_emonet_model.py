@@ -165,16 +165,17 @@ def main() -> None:
     )
     out = mlmodel.predict({"image": test})
     exp = np.asarray(out["expression"])
-    if not np.isfinite(exp).all():
+    val = np.asarray(out["valence"]).flatten()
+    ars = np.asarray(out["arousal"]).flatten()
+    if not (np.isfinite(exp).all() and np.isfinite(val).all() and np.isfinite(ars).all()):
         raise RuntimeError(
-            "Core ML model emits non-finite expression logits on a random "
-            "test image. F16/F32 precision, input layout, or the converter "
-            "itself may be at fault. Inspect coremltools warnings above."
+            "Core ML model emits non-finite outputs on a random test image. "
+            "Precision, input layout, or the converter itself may be at fault. "
+            "Inspect coremltools warnings above."
         )
     print(
         f"[sanity-coreml] expression range [{exp.min():.3f}, {exp.max():.3f}] "
-        f"valence={float(np.asarray(out['valence'])):.3f} "
-        f"arousal={float(np.asarray(out['arousal'])):.3f}"
+        f"valence={val[0]:.3f} arousal={ars[0]:.3f}"
     )
 
     mlmodel.save("EmoNet.mlpackage")
