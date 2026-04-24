@@ -160,8 +160,8 @@ struct OverlayControls: View {
             .font(.caption)
         Picker("Per-subject gate", selection: $viewModel.nudityGate) {
             Text("All").tag(NudityLevel.none)
-            Text("Covered+").tag(NudityLevel.covered)
-            Text("Partial+").tag(NudityLevel.partial)
+            Text("Covered").tag(NudityLevel.covered)
+            Text("Partial").tag(NudityLevel.partial)
             Text("Nude").tag(NudityLevel.nude)
         }
         .pickerStyle(.segmented)
