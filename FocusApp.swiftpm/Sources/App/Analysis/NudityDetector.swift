@@ -235,11 +235,26 @@ private final class NudityClassifier {
     private let confidenceName: String
     private let inputSize: CGSize
 
-    /// Per-detection confidence floor — below this the detection is
-    /// dropped. Matches NudeNet's own Python default (0.2) rather than
-    /// YOLO's generic 0.25; higher values dropped mid-confidence
-    /// matches on obvious subjects.
-    private let scoreThreshold: Float = 0.2
+    /// Default per-detection confidence floor — below this the
+    /// detection is dropped. Matches NudeNet's own Python default
+    /// (0.2) rather than YOLO's generic 0.25; higher values dropped
+    /// mid-confidence matches on obvious subjects.
+    private let defaultScoreThreshold: Float = 0.2
+
+    /// Per-label confidence floor. Most classes stay at the default
+    /// 0.2, but `MALE_GENITALIA_EXPOSED` drops to 0.10 because
+    /// NudeNet's training data skews toward female anatomy — male-
+    /// genital logits come in systematically lower (roughly half a
+    /// confidence band) even on clearly visible subjects. Lowering
+    /// the floor catches the missed cases; the NMS + attribution
+    /// logic downstream keeps the extra detections from snowballing
+    /// into false positives on unrelated subjects.
+    private func scoreThreshold(for label: String) -> Float {
+        switch label {
+        case "MALE_GENITALIA_EXPOSED": return 0.10
+        default: return defaultScoreThreshold
+        }
+    }
 
     /// Class labels in confidence-column order. NudeNet v3's default
     /// label set; override if the maintainer trained a different set.
@@ -381,15 +396,50 @@ private final class NudityClassifier {
             guard !padded.isNull, padded.width >= 16, padded.height >= 16
             else { continue }
             let crop = image.cropped(to: padded)
+
+            // Original pass.
             let letterboxed = letterbox(image: crop, into: inputSize)
-            let dets = runDetector(letterboxed: letterboxed, ciContext: ciContext)
-            all.append(contentsOf: dets)
+            all.append(contentsOf:
+                runDetector(letterboxed: letterboxed, ciContext: ciContext))
+
+            // Horizontal-flip TTA. NudeNet's 640m was trained on a
+            // dataset that under-represents male anatomy — in addition
+            // to the per-label threshold fix above, running the model
+            // on the mirrored crop and pooling detections catches
+            // hard cases (occlusion / unusual pose / off-center
+            // framing) that only one orientation triggers. Cost is
+            // one extra inference per body (~100 ms on an iPad Pro,
+            // acceptable for one-shot analyze).
+            let mirrorAroundMidX = CGAffineTransform(scaleX: -1, y: 1)
+                .translatedBy(x: -2 * padded.midX, y: 0)
+            let flippedCrop = crop.transformed(by: mirrorAroundMidX)
+                .cropped(to: padded)
+            let letterboxedFlipped = letterbox(image: flippedCrop, into: inputSize)
+            let flippedDets = runDetector(letterboxed: letterboxedFlipped,
+                                          ciContext: ciContext)
+            // Undo the mirror on each detection's rect: its x range
+            // is currently relative to the flipped crop content, so
+            // reflect around padded.midX back to source coords.
+            let mirroredBack = flippedDets.map { det -> NudityDetection in
+                let newMinX = padded.minX + padded.maxX - det.rect.maxX
+                return NudityDetection(
+                    rect: CGRect(
+                        x: newMinX,
+                        y: det.rect.origin.y,
+                        width: det.rect.width,
+                        height: det.rect.height
+                    ),
+                    label: det.label,
+                    confidence: det.confidence
+                )
+            }
+            all.append(contentsOf: mirroredBack)
         }
-        // Detections from neighboring body crops can cover the same
-        // pixel region — the Create ML path runs NMS per-pass but
-        // doesn't know about the union, and the YOLO path runs NMS
-        // only inside parseDetections. Global NMS strips cross-crop
-        // duplicates in both cases.
+        // Detections from neighboring body crops, and the TTA pair on
+        // the same body, can all cover the same pixel region. The
+        // Create ML path runs NMS per-pass but doesn't know about the
+        // union, and the YOLO path runs NMS only inside parseDetections.
+        // Global NMS strips cross-crop + cross-TTA duplicates.
         return classAgnosticNMS(all, iouThreshold: 0.45)
     }
 
@@ -509,7 +559,9 @@ private final class NudityClassifier {
                     topClass = c
                 }
             }
-            guard topScore >= scoreThreshold, topClass < labels.count else { continue }
+            guard topClass < labels.count,
+                  topScore >= scoreThreshold(for: labels[topClass])
+            else { continue }
 
             // Create ML emits normalized [cx, cy, w, h] in the letterboxed
             // input's coordinate space. Undo the letterbox to land in
@@ -611,7 +663,9 @@ private final class NudityClassifier {
                 }
                 return topScore
             }()
-            guard score >= scoreThreshold, topClass < classCount else { continue }
+            guard topClass < classCount,
+                  score >= scoreThreshold(for: labels[topClass])
+            else { continue }
 
             // YOLO coords are input-pixel, top-down — hand to the
             // letterbox helper to undo the aspect-fit transform and flip
