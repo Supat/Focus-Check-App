@@ -413,7 +413,10 @@ struct ContentView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .liquidBadgeBackground(tint: Color.black.opacity(0.45), in: Capsule())
+        .liquidBadgeBackground(
+            tint: Color.black.opacity(0.45),
+            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+        )
     }
 
     /// One V / A / D row: tiny label, then a bipolar fill bar. Value
