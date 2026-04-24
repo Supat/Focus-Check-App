@@ -144,6 +144,31 @@ struct ModelArchive: Sendable {
         )!
     )
 
+    /// shamangary/SSR-Net (IJCAI'18) — compact age-only regression
+    /// network. 64² BGR input, single scalar output in [0, 100].
+    /// Uses a custom `SSR_module` layer (soft stagewise regression)
+    /// that's registered at model-load time via an MLCustomLayer
+    /// subclass (`SSRModule`, defined in `AgeEstimator.swift`).
+    ///
+    /// Replaces the earlier yu4u EfficientNetB3 model which showed a
+    /// systematic bias toward predicting "adult female" on on-device
+    /// inputs. SSR-Net is age-only; gender now falls back to
+    /// NudeNet's FACE_* inference exclusively.
+    ///
+    /// **License**: Apache-2.0 code, trained on MORPH2 / IMDB-WIKI.
+    /// Same research-only footing as the other optional tiers — do
+    /// not bundle in signed App Store builds.
+    ///
+    /// **Version**: `SSRNet-v1` directory, `age-model-v3` tag (v1/v2
+    /// were the retired yu4u model). Bump the pair together when the
+    /// export pipeline changes.
+    static let age = ModelArchive(
+        directoryName: "SSRNet-v1.mlmodelc",
+        sourceURL: URL(string:
+            "https://github.com/Supat/Focus-Check-App/releases/download/age-model-v3/SSRNet.mlmodelc.zip"
+        )!
+    )
+
     /// Persistent install path: `Application Support/<directoryName>`.
     /// Application Support is user-data, not purged on low-disk like Caches.
     func installedURL() throws -> URL {

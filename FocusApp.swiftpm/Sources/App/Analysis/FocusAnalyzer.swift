@@ -88,6 +88,12 @@ actor FocusAnalyzer {
         /// contract as `faceEmotions`. Read by the UI to render a
         /// per-subject pain badge under the head stack.
         var painScores: [PainScore?] = []
+        /// Per-face age prediction from SSR-Net, indexed alongside
+        /// `faceRectangles`. `nil` entries for faces the model
+        /// couldn't crop; empty array when the age model isn't
+        /// installed. Age-only — gender comes from `nudityGenders`
+        /// (NudeNet's FACE_* branch) exclusively now.
+        var ageEstimations: [AgePrediction?] = []
     }
 
     private let device: MTLDevice
@@ -100,12 +106,14 @@ actor FocusAnalyzer {
     private let clipScorer = CLIPScorer()
     private let emotionClassifier = EmotionClassifier()
     private let painDetector = PainDetector()
+    private let ageEstimator = AgeEstimator()
     private let depthInstaller = ModelArchiveInstaller(.depthAnything)
     private let nsfwInstaller = ModelArchiveInstaller(.nsfw)
     private let nudenetInstaller = ModelArchiveInstaller(.nudenet)
     private let clipInstaller = ModelArchiveInstaller(.clip)
     private let emotionInstaller = ModelArchiveInstaller(.emotion)
     private let openGraphAUInstaller = ModelArchiveInstaller(.openGraphAU)
+    private let ageInstaller = ModelArchiveInstaller(.age)
 
     private var source: CIImage?
 
@@ -271,6 +279,15 @@ actor FocusAnalyzer {
         try await openGraphAUInstaller.install(progress: progress)
     }
 
+    /// True when the SSR-Net age estimator is installed on disk.
+    var isAgeInstalled: Bool { ModelArchive.age.isInstalled() }
+
+    /// Download + install the SSR-Net age model. Lazy MLModel load
+    /// happens on first predict; no explicit reload needed.
+    func installAgeModel(progress: @Sendable @escaping (Double) -> Void) async throws {
+        try await ageInstaller.install(progress: progress)
+    }
+
     /// Eagerly compile the installed Core ML models so the first analyze
     /// after launch doesn't pay the ~1–3 s compile cost. Safe to call
     /// from a background task once the app is idle. No-op for models
@@ -281,6 +298,7 @@ actor FocusAnalyzer {
         _ = clipScorer.warm()
         _ = emotionClassifier.warm()
         _ = painDetector.warm()
+        _ = ageEstimator.warm()
     }
 
     /// Walk `Application Support/` and print every file + byte size.
@@ -338,6 +356,7 @@ actor FocusAnalyzer {
         var clipMatches: [CLIPMatch]
         var faceEmotions: [EmotionPrediction?]
         var painScores: [PainScore?]
+        var ageEstimations: [AgePrediction?]
     }
     private var cachedNonMode: NonModeResults?
 
@@ -388,6 +407,14 @@ actor FocusAnalyzer {
                 in: source,
                 ciContext: ciContext
             )
+            // Per-face age + gender via yu4u EfficientNetB3. Empty
+            // array when the model isn't installed.
+            let ageEstimations = ageEstimator.estimate(
+                faces: vision.faces,
+                rolls: vision.faceRolls,
+                in: source,
+                ciContext: ciContext
+            )
             let sensitive = await sensitiveFuture
 
             let computed = NonModeResults(
@@ -398,7 +425,8 @@ actor FocusAnalyzer {
                 nudity: nudity,
                 clipMatches: clipMatches,
                 faceEmotions: faceEmotions,
-                painScores: painScores
+                painScores: painScores,
+                ageEstimations: ageEstimations
             )
             cachedNonMode = computed
             nonMode = computed
@@ -444,6 +472,7 @@ actor FocusAnalyzer {
         let clipMatches = nonMode.clipMatches
         let faceEmotions = nonMode.faceEmotions
         let painScores = nonMode.painScores
+        let ageEstimations = nonMode.ageEstimations
 
         return Overlays(
             sharpness: sharpness,
@@ -465,7 +494,8 @@ actor FocusAnalyzer {
             nudityDetections: nudityDetections,
             clipMatches: clipMatches,
             faceEmotions: faceEmotions,
-            painScores: painScores
+            painScores: painScores,
+            ageEstimations: ageEstimations
         )
     }
 
