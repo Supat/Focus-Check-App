@@ -306,6 +306,12 @@ def build_parser() -> argparse.ArgumentParser:
     run_group = p.add_argument_group("run control")
     run_group.add_argument("--dry-run", action="store_true",
                            help="Enumerate photos, print UUIDs, do no I/O.")
+    run_group.add_argument("--name-prefix", default="",
+                           help="String prepended to every exported "
+                                "image / label / crop filename. Use to "
+                                "avoid collisions when running multiple "
+                                "libraries into the same output dir "
+                                "(e.g. `laulea_`, `outdoor_`).")
     run_group.add_argument("--convert-jpeg", action="store_true",
                            default=True,
                            help="Convert HEIC/RAW to JPEG on export. "
@@ -439,13 +445,33 @@ def main() -> None:
     skipped_export = 0
     skipped_label = 0
 
+    # Build a per-photo filename template. `{original_name}` gives
+    # the source's base filename minus extension; osxphotos' template
+    # engine substitutes it at export time. Prefixing here (rather
+    # than renaming after-the-fact) ensures the file lands with the
+    # right name on first write — safe under parallel runs pointed
+    # at the same output directory.
+    prefix = args.name_prefix or ""
+    export_template = (
+        f"{prefix}{{original_name}}" if prefix else None
+    )
+
     for photo in tqdm(photos, desc="Processing"):
         # PhotoExporter.export() COPIES the original (converting to
         # JPEG if requested). It does not modify the library. The
         # boolean options above only affect the copied output.
         try:
             exporter = osxphotos.PhotoExporter(photo)
-            results = exporter.export(str(images_dir), options=export_options)
+            if export_template is not None:
+                results = exporter.export(
+                    str(images_dir),
+                    filename=export_template,
+                    options=export_options,
+                )
+            else:
+                results = exporter.export(
+                    str(images_dir), options=export_options
+                )
             # `exported` holds final output paths regardless of whether
             # a JPEG conversion happened; `skipped` shows up when an
             # earlier run produced the same file (overwrite=False).
