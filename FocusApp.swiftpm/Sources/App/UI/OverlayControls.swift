@@ -200,7 +200,7 @@ struct OverlayControls: View {
         .pickerStyle(.segmented)
         .labelsHidden()
         .controlSize(.small)
-        .frame(width: 480)
+        .frame(width: 528)
         .disabled(!pickerActive)
         Toggle("", isOn: $viewModel.mosaicEnabled)
             .labelsHidden()
