@@ -77,15 +77,16 @@ private final class AgeGenderModel {
             throw AnalysisError.modelMissing
         }
         let config = MLModelConfiguration()
-        // `.cpuAndGPU` rather than `.all` — the ANE runs EfficientNetB3
-        // in F16, which is fine for the argmax-flavored emotion / pain
-        // tiers but bites this one. The age head is a 101-bin softmax
-        // whose expectation (`Σ i · p_i`) weights the long-tail bins
-        // (ages 80+) heavily, and F16 underflow on their tiny
-        // probabilities shifts the mean by 2–5 years on real faces.
-        // GPU F32 keeps the distribution faithful; one-shot per-photo
-        // inference makes the latency cost irrelevant.
-        config.computeUnits = .cpuAndGPU
+        // `.cpuOnly` is the only compute unit that reliably keeps the
+        // full F32 precision the 101-bin age softmax needs. `.all`
+        // delegates to the ANE (F16), `.cpuAndGPU` delegates to
+        // MPSGraph (also effectively F16 for matmul / conv on
+        // Apple-silicon), and both underflow the tail logits enough
+        // to collapse the softmax to (1.0, 0.0) on plausible face
+        // inputs. Pure-CPU EfficientNetB3 at 224² per face lands in
+        // the low hundreds of milliseconds — fine for the one-shot
+        // per-photo analyze path, not fine for video.
+        config.computeUnits = .cpuOnly
         do {
             self.model = try MLModel(contentsOf: url, configuration: config)
         } catch {
@@ -184,6 +185,19 @@ private final class AgeGenderModel {
         guard let agePrimary = rawProbabilities(for: resized, ciContext: ciContext),
               let ageFlipped = rawProbabilities(for: flipped, ciContext: ciContext)
         else { return nil }
+
+        // Diagnostic: top-3 age bins of the primary (un-flipped) pass,
+        // plus raw gender probs. Distinguishes "saturated at one bin"
+        // (precision bug) from "spread distribution but wrong mean"
+        // (preprocessing bug).
+        let topAge = agePrimary.age.enumerated()
+            .sorted { $0.element > $1.element }
+            .prefix(3)
+            .map { "\($0.offset):\(String(format: "%.2f", $0.element))" }
+            .joined(separator: " ")
+        print("[AgeGender] primary topAges=\(topAge) "
+              + "gender=[\(String(format: "%.3f", agePrimary.gender[0])),"
+              + "\(String(format: "%.3f", agePrimary.gender[1]))]")
 
         // Average the two heads element-wise. The softmax property is
         // preserved: averaging two probability vectors stays on the
