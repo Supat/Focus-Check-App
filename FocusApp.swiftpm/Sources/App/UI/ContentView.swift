@@ -355,7 +355,16 @@ struct ContentView: View {
     /// see at a glance which subjects are flagged and how severely.
     @ViewBuilder
     private func nudeSubjectHeadBadges(in size: CGSize) -> some View {
+        // Suppress the per-subject head stack whenever the NudeNet
+        // label overlay is actually painting rects — the two annotate
+        // the same subjects and stacking them gets noisy. The guard
+        // mirrors `nudityLabelOverlay`'s visibility condition so a
+        // Labels toggle with no detections still lets the head badges
+        // through.
+        let labelsActive = viewModel.showNudityLabels
+            && !viewModel.nudityDetections.isEmpty
         if !viewModel.overlayHidden,
+           !labelsActive,
            let extent = viewModel.sourceImage?.extent,
            extent.width > 0, extent.height > 0,
            viewModel.nudityLevels.count == viewModel.bodyRectangles.count {
