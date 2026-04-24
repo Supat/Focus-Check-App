@@ -268,6 +268,14 @@ private final class EmoNetModel {
                 return nil
             }
 
+            // Log the raw first two values so we can tell NaN-from-model
+            // apart from NaN-from-Swift-softmax-bug.
+            let sample0 = expr[0].floatValue
+            let sample1 = expr.count > 1 ? expr[1].floatValue : 0
+            if !sample0.isFinite || !sample1.isFinite {
+                print(String(format: "[EmoNet] predict: raw logits non-finite (e0=%.4f e1=%.4f) — Core ML overflow / bad weights", sample0, sample1))
+            }
+
             // Stable softmax over the expression logits.
             var logits = [Float](repeating: 0, count: Self.classOrder.count)
             for i in 0..<logits.count {

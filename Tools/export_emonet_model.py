@@ -146,9 +146,37 @@ def main() -> None:
             ct.TensorType(name="valence"),
             ct.TensorType(name="arousal"),
         ],
+        # EmoNet's ResNet-50 backbone produces activations that overflow
+        # F16 range on natural faces (post-conv + batchnorm can exceed
+        # 65504), which propagates as NaN through the rest of the graph.
+        # Convert at F32 — ~100 MB model but stable inference.
+        compute_precision=ct.precision.FLOAT32,
         compute_units=ct.ComputeUnit.ALL,
         convert_to="mlprogram",
     )
+
+    # Post-conversion sanity: run the compiled model on a dummy input
+    # and fail loudly if Core ML introduces NaN/Inf. Lighter-weight than
+    # asking the maintainer to notice it on-device.
+    import numpy as np
+    from PIL import Image
+    test = Image.fromarray(
+        np.random.randint(0, 255, (INPUT_SIZE, INPUT_SIZE, 3), dtype=np.uint8)
+    )
+    out = mlmodel.predict({"image": test})
+    exp = np.asarray(out["expression"])
+    if not np.isfinite(exp).all():
+        raise RuntimeError(
+            "Core ML model emits non-finite expression logits on a random "
+            "test image. F16/F32 precision, input layout, or the converter "
+            "itself may be at fault. Inspect coremltools warnings above."
+        )
+    print(
+        f"[sanity-coreml] expression range [{exp.min():.3f}, {exp.max():.3f}] "
+        f"valence={float(np.asarray(out['valence'])):.3f} "
+        f"arousal={float(np.asarray(out['arousal'])):.3f}"
+    )
+
     mlmodel.save("EmoNet.mlpackage")
     print(f"Wrote EmoNet.mlpackage (weights: {WEIGHTS_PATH}, input: {INPUT_SIZE}² RGB)")
 
