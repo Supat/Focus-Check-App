@@ -145,6 +145,7 @@ struct OverlayControls: View {
     @ViewBuilder
     private var perSubjectCluster: some View {
         Label("Per subject", systemImage: "person.crop.square.filled.and.at.rectangle")
+            .labelStyle(.iconOnly)
             .font(.caption)
         Picker("Per-subject gate", selection: $viewModel.nudityGate) {
             Text("All").tag(NudityLevel.none)
@@ -157,6 +158,7 @@ struct OverlayControls: View {
         .controlSize(.small)
         .frame(width: 280)
         Label("Labels", systemImage: "tag")
+            .labelStyle(.iconOnly)
             .font(.caption)
         Toggle("", isOn: $viewModel.showNudityLabels)
             .labelsHidden()
@@ -177,6 +179,7 @@ struct OverlayControls: View {
         let pickerActive = classifierPath || viewModel.forceCensor
 
         Label("Mosaic", systemImage: "eye.slash")
+            .labelStyle(.iconOnly)
             .font(.caption)
         Picker("Mosaic mode", selection: $viewModel.mosaicMode) {
             ForEach(MosaicMode.allCases) { mode in
@@ -194,6 +197,7 @@ struct OverlayControls: View {
             .controlSize(.small)
             .disabled(!viewModel.sensitiveContentAvailability.isReady)
         Label("Force", systemImage: "eye.slash.circle.fill")
+            .labelStyle(.iconOnly)
             .font(.caption)
         Toggle("", isOn: $viewModel.forceCensor)
             .labelsHidden()
