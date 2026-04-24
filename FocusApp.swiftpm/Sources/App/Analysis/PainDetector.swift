@@ -220,9 +220,20 @@ private final class OpenGraphAUModel {
 
             // Index → AU mapping for PSPI inputs (positions in auIDs):
             //  4 → 2, 6 → 4, 7 → 5, 9 → 6, 10 → 7.
+            //
+            // OpenGraphAU's convention is that sigmoid prob > 0.5 means
+            // the AU is present — clearly-absent AUs still return
+            // probabilities in the 0.3–0.45 range, and summing those
+            // raw values inflates PSPI on neutral faces (observed
+            // floor ≈ 0.8 on unambiguous neutrals). Calibrate with
+            // `max(0, 2·(prob − 0.5))` so below-threshold AUs count
+            // as zero and the 0.5–1.0 probability band maps linearly
+            // onto [0, 1] before the PSPI sum.
             func p(_ i: Int) -> Float {
                 let v = probs[i].floatValue
-                return v.isFinite ? max(0, min(1, v)) : 0
+                guard v.isFinite else { return 0 }
+                let clamped = max(0, min(1, v))
+                return max(0, 2 * (clamped - 0.5))
             }
             let au4 = p(2)
             let au6 = p(4)
@@ -230,10 +241,12 @@ private final class OpenGraphAUModel {
             let au9 = p(6)
             let au10 = p(7)
             // AU43 proxy: 1 - (eye openness / typical-open EAR).
-            // Vision's eye landmarks give us roughly h/w ≈ 0.3 on a
-            // wide-open eye, dropping toward 0 as the lids close.
-            // Clamp so partially-open values don't saturate the sum.
-            let au43 = max(0, min(1, 1 - eyeOpenness / 0.3))
+            // Vision's eye landmarks give us roughly h/w ≈ 0.2 on a
+            // comfortably-open eye (wider when surprised / staring).
+            // Anchoring the reference at 0.2 instead of 0.3 keeps
+            // normal open eyes near zero AU43; narrower-than-normal
+            // openness still climbs toward 1 as lids close.
+            let au43 = max(0, min(1, 1 - eyeOpenness / 0.2))
             let pspi = au4 + max(au6, au7) + max(au9, au10) + au43
 
             return PainScore(
