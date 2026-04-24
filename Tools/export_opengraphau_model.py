@@ -145,7 +145,16 @@ class OpenGraphAUWrapper(torch.nn.Module):
 
 
 def main() -> None:
-    wrapper = OpenGraphAUWrapper().eval()
+    # OpenGraphAU's resnet.py resolves "pretrain_models/..." relative
+    # to os.getcwd(), so chdir into the repo for the duration of the
+    # model construction. Save the original cwd so the mlpackage still
+    # lands next to wherever the user invoked the script from.
+    original_cwd = os.getcwd()
+    os.chdir(OPENGRAPHAU_REPO)
+    try:
+        wrapper = OpenGraphAUWrapper().eval()
+    finally:
+        os.chdir(original_cwd)
     dummy = torch.rand(1, 3, INPUT_SIZE, INPUT_SIZE)
 
     with torch.no_grad():
