@@ -94,14 +94,26 @@ struct ModelArchive: Sendable {
         kind: .bundle
     )
 
-    /// FER+ emotion classifier — Microsoft's 8-class CNN (neutral,
-    /// happiness, surprise, sadness, anger, disgust, fear, contempt).
-    /// 64² grayscale input, ~34 MB compiled. Runs once per detected
-    /// face on analyze. ONNX Model Zoo, MIT-licensed.
+    /// EmoNet (Toisoul et al. 2021) — ResNet-50-based face emotion
+    /// model that jointly regresses continuous Valence + Arousal and
+    /// an 8-class discrete emotion. 256² RGB input, 3 named outputs
+    /// (expression / valence / arousal). Replaces the earlier FER+
+    /// integration because FER+'s discrete-label-only output was
+    /// projecting onto PAD via a lookup table; EmoNet regresses V/A
+    /// directly, so the pleasure / arousal axes reflect the image
+    /// instead of the nearest-anchor snap.
+    ///
+    /// **License**: Imperial College CPD, research use only. Fine
+    /// for Playgrounds / local dev; do not ship in signed App Store
+    /// builds.
+    ///
+    /// **Version**: `EmoNet-v1` directory, `emotion-model-v2` tag
+    /// so existing FER+ installs (`EmotionFERPlus.mlmodelc/`) get
+    /// orphaned and the Download button re-appears for a clean pull.
     static let emotion = ModelArchive(
-        directoryName: "EmotionFERPlus.mlmodelc",
+        directoryName: "EmoNet-v1.mlmodelc",
         sourceURL: URL(string:
-            "https://github.com/Supat/Focus-Check-App/releases/download/emotion-model-v1/EmotionFERPlus.mlmodelc.zip"
+            "https://github.com/Supat/Focus-Check-App/releases/download/emotion-model-v2/EmoNet.mlmodelc.zip"
         )!
     )
 

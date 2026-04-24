@@ -304,7 +304,7 @@ struct ModelArchive {
 - `ModelArchive.nsfw` → `nsfw-model-v1` release tag
 - `ModelArchive.nudenet` → `nudenet-model-v1` release tag (per-subject detector)
 - `ModelArchive.clip` → `clip-model-v1` release tag (context scorer, bundle)
-- `ModelArchive.emotion` → `emotion-model-v1` release tag (FER+ per-face classifier)
+- `ModelArchive.emotion` → `emotion-model-v2` release tag (EmoNet per-face classifier, **research-only license** — do not ship in signed builds)
 
 Maintainer workflow (one-time, requires a Mac):
 

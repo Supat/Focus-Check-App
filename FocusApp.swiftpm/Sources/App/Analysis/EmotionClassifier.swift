@@ -74,11 +74,13 @@ struct EmotionPrediction: Hashable, Sendable {
     let pad: PADVector
 }
 
-/// Thin wrapper around the FER+ Core ML model. Runs per face — the
+/// Thin wrapper around the EmoNet Core ML model. Runs per face — the
 /// analyzer iterates `VNDetectFaceLandmarksRequest` rectangles, crops
-/// each, resizes to 64² grayscale, and calls `classify`.
+/// each, resizes to 256² RGB, and calls `classify`. EmoNet regresses
+/// valence + arousal directly (no anchor-table projection), so P/A
+/// come from the model; Mehrabian's lookup still drives D.
 struct EmotionClassifier {
-    private var model: FERPlusModel? { FERPlusModel.shared }
+    private var model: EmoNetModel? { EmoNetModel.shared }
 
     var isReady: Bool { ModelArchive.emotion.isInstalled() }
 
@@ -105,15 +107,27 @@ struct EmotionClassifier {
 
 // MARK: - Model wrapper
 
-private final class FERPlusModel {
-    static var shared: FERPlusModel? = {
-        try? FERPlusModel()
+private final class EmoNetModel {
+    static var shared: EmoNetModel? = {
+        try? EmoNetModel()
     }()
+
+    /// EmoNet's 8-class head outputs logits in this order. Our
+    /// `EmotionLabel` enum uses a different ordering, so mapping the
+    /// model's index to our label goes through this array.
+    private static let classOrder: [EmotionLabel] = [
+        .neutral, .happy, .sad, .surprise, .fear, .disgust, .anger, .contempt
+    ]
 
     private let model: MLModel
     private let inputName: String
-    private let outputName: String
     private let inputSize: CGSize
+
+    // Output names baked in by the Tools/export_emonet_model.py
+    // converter; these match the `ct.TensorType(name:)` calls there.
+    private static let expressionOutput = "expression"
+    private static let valenceOutput    = "valence"
+    private static let arousalOutput    = "arousal"
 
     /// Minimum top-class softmax score required to surface a
     /// prediction. Below this the face is returned as nil so the UI
@@ -134,16 +148,13 @@ private final class FERPlusModel {
         }
 
         let inputs = model.modelDescription.inputDescriptionsByName
-        let outputs = model.modelDescription.outputDescriptionsByName
-        guard let input = inputs.first(where: { $0.value.type == .image }) ?? inputs.first,
-              let output = outputs.first
+        guard let input = inputs.first(where: { $0.value.type == .image }) ?? inputs.first
         else {
-            throw AnalysisError.modelLoadFailed("Emotion model has no usable input/output.")
+            throw AnalysisError.modelLoadFailed("Emotion model has no usable image input.")
         }
         self.inputName = input.key
-        self.outputName = output.key
 
-        var resolvedSize = CGSize(width: 64, height: 64)
+        var resolvedSize = CGSize(width: 256, height: 256)
         if let constraint = input.value.imageConstraint {
             resolvedSize = CGSize(
                 width: constraint.pixelsWide,
@@ -153,17 +164,20 @@ private final class FERPlusModel {
         self.inputSize = resolvedSize
     }
 
-    /// Crop the face rect from the source, convert to grayscale + the
-    /// model's input size, run inference, and map the top softmax
-    /// index to an `EmotionLabel`. Returns nil on any failure or when
-    /// the top score falls under `confidenceFloor`.
+    /// Crop the face rect from the source, resize to the model's
+    /// input size as RGB, run inference, and return the combined
+    /// EmotionPrediction. `expression` drives the discrete label +
+    /// confidence; `valence` and `arousal` are used directly for the
+    /// P and A axes of PAD; D is Mehrabian-projected from the
+    /// softmax because EmoNet doesn't regress dominance.
     func predict(face: CGRect,
                  source: CIImage,
                  ciContext: CIContext) -> EmotionPrediction? {
         let extent = source.extent
-        // Pad the face rect outward so the crop includes forehead / chin
-        // — FER+ was trained on AFFECT/FER2013 crops that typically
-        // enclose the whole face, not just the landmarks bounding box.
+        // Pad the face rect outward so the crop includes forehead /
+        // chin — EmoNet was trained on AffectNet / AFEW-VA crops that
+        // typically enclose the whole face, not just the landmarks
+        // bounding box.
         let pad = face.width * 0.15
         let padded = face.insetBy(dx: -pad, dy: -pad)
         let clamped = padded.intersection(extent)
@@ -171,21 +185,14 @@ private final class FERPlusModel {
             return nil
         }
 
-        let cropped = source.cropped(to: clamped)
-        let gray = cropped.applyingFilter("CIColorMatrix", parameters: [
-            "inputRVector": CIVector(x: 0.2126, y: 0.7152, z: 0.0722, w: 0),
-            "inputGVector": CIVector(x: 0.2126, y: 0.7152, z: 0.0722, w: 0),
-            "inputBVector": CIVector(x: 0.2126, y: 0.7152, z: 0.0722, w: 0),
-            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1),
-        ])
-        let resized = gray.stretched(to: inputSize)
+        let resized = source.cropped(to: clamped).stretched(to: inputSize)
 
         let w = Int(inputSize.width)
         let h = Int(inputSize.height)
         var pixelBuffer: CVPixelBuffer?
         let attrs: [CFString: Any] = [kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary]
         CVPixelBufferCreate(kCFAllocatorDefault, w, h,
-                            kCVPixelFormatType_OneComponent8,
+                            kCVPixelFormatType_32BGRA,
                             attrs as CFDictionary,
                             &pixelBuffer)
         guard let pb = pixelBuffer else { return nil }
@@ -196,16 +203,14 @@ private final class FERPlusModel {
                 inputName: MLFeatureValue(pixelBuffer: pb)
             ])
             let result = try model.prediction(from: features)
-            guard let scores = result.featureValue(for: outputName)?.multiArrayValue,
-                  scores.count >= EmotionLabel.allCases.count
+            guard let expr = result.featureValue(for: Self.expressionOutput)?.multiArrayValue,
+                  expr.count >= Self.classOrder.count
             else { return nil }
 
-            // Raw scores may be logits (pre-softmax) or probabilities.
-            // Normalize via stable softmax before thresholding so the
-            // confidenceFloor works uniformly.
-            var logits = [Float](repeating: 0, count: EmotionLabel.allCases.count)
+            // Stable softmax over the expression logits.
+            var logits = [Float](repeating: 0, count: Self.classOrder.count)
             for i in 0..<logits.count {
-                logits[i] = scores[i].floatValue
+                logits[i] = expr[i].floatValue
             }
             let maxL = logits.max() ?? 0
             var expSum: Float = 0
@@ -224,28 +229,36 @@ private final class FERPlusModel {
                 topScore = probs[i]
                 topIdx = i
             }
-            guard topScore >= confidenceFloor else { return nil }
-            let labels = EmotionLabel.allCases
-            guard topIdx < labels.count else { return nil }
-
-            // Confidence-weighted PAD projection — use the full
-            // softmax distribution rather than the top class so a
-            // mixture like "mostly neutral with some sad" lands
-            // between the anchor points instead of snapping onto
-            // neutral's (0,0,0).
-            var p: Float = 0
-            var a: Float = 0
-            var d: Float = 0
-            for i in 0..<probs.count where i < labels.count {
-                let anchor = labels[i].padAnchor
-                p += probs[i] * anchor.pleasure
-                a += probs[i] * anchor.arousal
-                d += probs[i] * anchor.dominance
+            guard topScore >= confidenceFloor, topIdx < Self.classOrder.count else {
+                return nil
             }
+            let topLabel = Self.classOrder[topIdx]
+
+            // Valence + Arousal come straight from EmoNet's regression
+            // heads — this is the whole point of using it instead of
+            // FER+. Scalars sit in [-1, 1] by design; clamp defensively
+            // in case the export introduced numerical slop.
+            let valence = (result.featureValue(for: Self.valenceOutput)?
+                .multiArrayValue?[0].floatValue) ?? 0
+            let arousal = (result.featureValue(for: Self.arousalOutput)?
+                .multiArrayValue?[0].floatValue) ?? 0
+
+            // EmoNet doesn't regress dominance, so project D from the
+            // 8-class softmax via Mehrabian's anchors. Same trick we
+            // used for FER+, applied only to the dominance axis now.
+            var d: Float = 0
+            for i in 0..<probs.count where i < Self.classOrder.count {
+                d += probs[i] * Self.classOrder[i].padAnchor.dominance
+            }
+
             return EmotionPrediction(
-                label: labels[topIdx],
+                label: topLabel,
                 confidence: topScore,
-                pad: PADVector(pleasure: p, arousal: a, dominance: d)
+                pad: PADVector(
+                    pleasure: max(-1, min(1, valence)),
+                    arousal: max(-1, min(1, arousal)),
+                    dominance: max(-1, min(1, d))
+                )
             )
         } catch {
             return nil
