@@ -757,7 +757,7 @@ final class FocusRenderer {
     /// pass a `multiplier` above 1.
     private static func mosaicTileSize(source: CIImage, multiplier: CGFloat = 1.0) -> Float {
         let longerSide = max(source.extent.width, source.extent.height)
-        return max(Float(longerSide / 48 * multiplier), 4)
+        return max(Float(longerSide / 96 * multiplier), 4)
     }
 
     private static func regionMosaic(source: CIImage,
