@@ -64,6 +64,12 @@ def resolve_auto_pad(model: onnx.ModelProto) -> onnx.ModelProto:
         for d in (1, 1, INPUT_SIZE, INPUT_SIZE):
             inp.type.tensor_type.shape.dim.add().dim_value = d
 
+    # Nuke stale `value_info` entries — they still reference the
+    # pre-override symbolic batch dim, which makes shape_inference
+    # raise "Inferred shape and existing shape differ in rank" when
+    # the re-propagated shapes don't match what's cached.
+    del model.graph.value_info[:]
+
     model = shape_inference.infer_shapes(model)
 
     shape_map: dict[str, list[int]] = {}
