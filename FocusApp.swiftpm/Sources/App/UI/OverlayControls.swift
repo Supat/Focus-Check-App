@@ -83,6 +83,7 @@ struct OverlayControls: View {
             clipInstallRow
             emotionInstallRow
             painInstallRow
+            ageGenderInstallRow
         }
         #if os(iOS)
         .onPencilSqueeze { phase in
@@ -497,6 +498,54 @@ struct OverlayControls: View {
                     .lineLimit(2)
                 Spacer()
                 Button("Retry") { viewModel.downloadOpenGraphAUModel() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+        }
+    }
+
+    /// Age / gender estimator install row. Same download / progress /
+    /// retry pattern as the other optional model tiers. Output is a
+    /// per-face age ± stdev readout plus a gender glyph that takes
+    /// precedence over NudeNet's body-context inference.
+    @ViewBuilder
+    private var ageGenderInstallRow: some View {
+        switch viewModel.ageGenderInstall {
+        case .installed:
+            EmptyView()
+
+        case .notInstalled:
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.down.circle")
+                    .foregroundStyle(.secondary)
+                Text("Age / gender estimator not installed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Download") { viewModel.downloadAgeGenderModel() }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+            }
+
+        case .downloading(let progress):
+            HStack(spacing: 8) {
+                ProgressView(value: progress)
+                Text("\(Int(progress * 100))%")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44, alignment: .trailing)
+            }
+
+        case .failed(let message):
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+                Text(message)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                Spacer()
+                Button("Retry") { viewModel.downloadAgeGenderModel() }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
             }

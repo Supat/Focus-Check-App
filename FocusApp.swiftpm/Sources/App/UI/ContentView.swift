@@ -370,20 +370,34 @@ struct ContentView: View {
            viewModel.nudityLevels.count == viewModel.bodyRectangles.count {
             ForEach(Array(viewModel.bodyRectangles.enumerated()), id: \.offset) { index, body in
                 let level = viewModel.nudityLevels[index]
-                let gender = index < viewModel.nudityGenders.count
-                    ? viewModel.nudityGenders[index]
-                    : .unknown
                 let prediction = predictionForBody(body)
                 let emotion = prediction?.label
+                let age = ageForBody(body)
+                // Gender precedence: the face-specific age/gender model
+                // wins when its prediction cleared the confidence floor;
+                // otherwise fall back to NudeNet's body-context inference.
+                let nudenetGender = index < viewModel.nudityGenders.count
+                    ? viewModel.nudityGenders[index]
+                    : .unknown
+                let gender: SubjectGender = {
+                    if let age, age.genderConfidence >= 0.6 { return age.gender }
+                    return nudenetGender
+                }()
                 // Badge renders when any of the per-subject signals
                 // have something to say — covered+ nudity, an emotion
-                // prediction, or a pain score. Safe clothed photos
-                // without any of these stay unadorned.
-                if level >= .covered || prediction != nil || painForBody(body) != nil {
+                // prediction, a pain score, or an age estimate. Safe
+                // clothed photos without any of these stay unadorned.
+                if level >= .covered || prediction != nil
+                    || painForBody(body) != nil || age != nil {
                     let rect = viewRect(for: body, source: extent, in: size)
                     let pain = painForBody(body)
                     VStack(spacing: 4) {
-                        SubjectHeadBadge(level: level, gender: gender, emotion: emotion)
+                        SubjectHeadBadge(
+                            level: level,
+                            gender: gender,
+                            emotion: emotion,
+                            age: age
+                        )
                         // PAD + Pain live in the same meter row and
                         // share the single showPADMeter toggle.
                         if viewModel.showPADMeter
@@ -488,6 +502,20 @@ struct ContentView: View {
             let center = CGPoint(x: face.midX, y: face.midY)
             if body.contains(center) {
                 return viewModel.painScores[i]
+            }
+        }
+        return nil
+    }
+
+    /// Find the age / gender prediction for the face matched to `body`.
+    /// Same index-alignment contract as `predictionForBody`.
+    private func ageForBody(_ body: CGRect) -> AgeGenderPrediction? {
+        guard !viewModel.ageEstimations.isEmpty else { return nil }
+        for (i, face) in viewModel.faceRectangles.enumerated()
+            where i < viewModel.ageEstimations.count {
+            let center = CGPoint(x: face.midX, y: face.midY)
+            if body.contains(center) {
+                return viewModel.ageEstimations[i]
             }
         }
         return nil
@@ -763,6 +791,12 @@ private struct SubjectHeadBadge: View {
     /// shield/gender cluster. nil when the classifier wasn't run on
     /// this subject's face or fell under its confidence floor.
     let emotion: EmotionLabel?
+    /// Optional age / gender prediction from yu4u's EfficientNetB3.
+    /// When present, the age reads as "mean ± stdev" to the right of
+    /// the glyph cluster and the gender glyph lights up regardless of
+    /// nudity level (clothed subjects still get their gender shown
+    /// when the face classifier committed to one).
+    let age: AgeGenderPrediction?
 
     var body: some View {
         HStack(spacing: 2) {
@@ -779,17 +813,36 @@ private struct SubjectHeadBadge: View {
                 Text(emotion.emoji)
                     .font(.caption)
             }
-            if level >= .covered, let glyph = gender.glyph {
-                // Unicode Mars/Venus glyphs — rendered via Text instead
-                // of Image(systemName:) because they aren't SF Symbols.
+            // Show the gender glyph when either the nudity level
+            // crossed the "covered" threshold (original rule) or the
+            // age/gender model committed a confident prediction for
+            // this subject. Pick the tint based on whichever signal
+            // is stronger — level colour wins when present, white
+            // otherwise so clothed-subject glyphs stay readable.
+            if let glyph = gender.glyph,
+               level >= .covered || age != nil {
                 Text(glyph)
                     .font(.caption.weight(.bold))
-                    .foregroundStyle(tint)
+                    .foregroundStyle(level >= .covered ? tint : .white)
+            }
+            if let age {
+                Text(Self.ageText(for: age))
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.white)
             }
         }
         .padding(.horizontal, 4)
         .padding(.vertical, 2)
         .liquidBadgeBackground(tint: Color.black.opacity(0.45), in: Capsule())
+    }
+
+    /// Format "mean ± stdev" with the stdev collapsed to nothing when
+    /// it rounds to zero — keeps the badge compact on high-confidence
+    /// predictions where the spread isn't interesting.
+    private static func ageText(for age: AgeGenderPrediction) -> String {
+        let mean = Int(age.age.rounded())
+        let band = Int(age.ageStdev.rounded())
+        return band > 0 ? "\(mean)±\(band)" : "\(mean)"
     }
 
     private var tint: Color {

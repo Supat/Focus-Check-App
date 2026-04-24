@@ -144,6 +144,31 @@ struct ModelArchive: Sendable {
         )!
     )
 
+    /// yu4u/age-gender-estimation (EfficientNetB3) — per-face age +
+    /// gender classifier. 224² RGB input, two softmax heads:
+    /// `pred_gender` [1, 2] (female / male) and `pred_age` [1, 101]
+    /// (probability over ages 0…100; expectation gives a continuous
+    /// estimate, std-dev gives uncertainty).
+    ///
+    /// Supersedes NudeNet's FACE_* branch for per-subject gender when
+    /// installed — this model is face-specific and trained for the
+    /// task instead of inferred as a side-effect of body-part
+    /// detection.
+    ///
+    /// **License**: code is MIT, but the IMDB-WIKI training set is
+    /// "academic research only". Treat the compiled model the same
+    /// way we treat EmoNet / OpenGraphAU — fine for Playgrounds /
+    /// local dev; do not bundle in a signed App Store build.
+    ///
+    /// **Version**: `AgeGender-v1` directory, `age-model-v1` tag.
+    /// Bump the pair together when the export pipeline changes.
+    static let ageGender = ModelArchive(
+        directoryName: "AgeGender-v1.mlmodelc",
+        sourceURL: URL(string:
+            "https://github.com/Supat/Focus-Check-App/releases/download/age-model-v1/AgeGender.mlmodelc.zip"
+        )!
+    )
+
     /// Persistent install path: `Application Support/<directoryName>`.
     /// Application Support is user-data, not purged on low-disk like Caches.
     func installedURL() throws -> URL {

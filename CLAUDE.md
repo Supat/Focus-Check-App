@@ -145,6 +145,35 @@ inside the non-mode-dependent cache so mode switches don't re-run it.
   set mixes nudity / scene / safe-art / medical / minor-presence
   anchors so the top match functions as a coarse context label.
 
+### Per-face age + gender estimation (yu4u EfficientNetB3, optional)
+Sixth tier, complementary to the other per-face tiers: `AgeEstimator`
+runs a downloaded EfficientNetB3 model per face to get a continuous
+age estimate and a binary gender classification. The model's two
+softmax heads are reduced Swift-side:
+
+- age = `Σ i · p_i` over 101 bins (0…100), clamped to [0, 100]
+- ageStdev = `sqrt(Σ (i − μ)² · p_i)` — spread of the distribution,
+  surfaced as an uncertainty band in the head-badge readout
+- gender = argmax of the 2-class head; `genderConfidence` lets the
+  UI collapse below-threshold calls back to `.unknown`
+
+Gender precedence: when this model's prediction clears a 0.6
+confidence floor, it supersedes NudeNet's body-context gender
+inference at the display layer. NudeNet's gender remains the
+fallback for subjects this model didn't score.
+
+- Model: yu4u/age-gender-estimation v0.6 release
+  (`EfficientNetB3_224_weights.11-3.44.hdf5`, MAE 3.44 on IMDB-WIKI)
+- Input: 224² RGB in [0, 255] (EfficientNet's Rescaling + Normalization
+  layers are baked into the graph)
+- License: MIT code, **but the IMDB-WIKI training data is
+  "academic research only"** — treat the compiled model the same
+  way as EmoNet / OpenGraphAU; do not ship in signed App Store builds
+- Known bias caveats: IMDB-WIKI skews toward lighter-skinned faces
+  and celebrity-age labels, so confidence should be read as ordinal
+  rather than calibrated. Presenting "mean ± stdev" instead of a
+  point estimate communicates that honestly.
+
 ### Per-face pain detection (OpenGraphAU + PSPI, optional)
 Fifth tier, complementary to the emotion classifier: `PainDetector`
 runs a downloaded OpenGraphAU model per face to get multi-label
@@ -330,6 +359,7 @@ struct ModelArchive {
 - `ModelArchive.clip` → `clip-model-v1` release tag (context scorer, bundle)
 - `ModelArchive.emotion` → `emotion-model-v5` release tag (EmoNet per-face classifier, **research-only license** — do not ship in signed builds)
 - `ModelArchive.openGraphAU` → `pain-model-v1` release tag (OpenGraphAU AU detector for PSPI pain proxy, **research-only license** — do not ship in signed builds)
+- `ModelArchive.ageGender` → `age-model-v1` release tag (yu4u/age-gender-estimation EfficientNetB3 — per-face age + gender, **research-only training data** — do not ship in signed builds)
 
 Maintainer workflow (one-time, requires a Mac):
 
@@ -371,6 +401,16 @@ ditto -c -k --sequesterRsrc --keepParent \
       /tmp/OpenGraphAU.mlmodelc OpenGraphAU.mlmodelc.zip
 zip -d OpenGraphAU.mlmodelc.zip '__MACOSX/*' 2>/dev/null || true
 gh release upload pain-model-v1 OpenGraphAU.mlmodelc.zip
+
+# yu4u/age-gender-estimation EfficientNetB3 (per-face age + gender).
+curl -L -O \
+  https://github.com/yu4u/age-gender-estimation/releases/download/v0.6/EfficientNetB3_224_weights.11-3.44.hdf5
+python3 Tools/export_age_gender_model.py
+xcrun coremlcompiler compile AgeGender.mlpackage /tmp/
+ditto -c -k --sequesterRsrc --keepParent \
+      /tmp/AgeGender.mlmodelc AgeGender.mlmodelc.zip
+zip -d AgeGender.mlmodelc.zip '__MACOSX/*' 2>/dev/null || true
+gh release upload age-model-v1 AgeGender.mlmodelc.zip
 ```
 
 `OverlayControls` renders a dedicated install/progress/retry row for
@@ -394,8 +434,13 @@ each, gated by the analyzer's availability flags.
 - **SCA in Playgrounds** will always be `.disabled` — the NSFW fallback
   download is the only way sensitive-content flagging works in
   unsigned builds
-- **No demographic inference** (gender, age, ethnicity) — Vision doesn't
-  expose these and we're not shipping a third-party classifier for them
+- **Demographic inference is present but research-only.** The
+  `.ageGender` tier (yu4u EfficientNetB3) covers age + gender; NudeNet's
+  FACE_* branch provides a coarser gender fallback. Both backends are
+  trained on datasets with "research only" terms — the compiled models
+  are fine for Playgrounds / local dev but must not be bundled in
+  signed App Store builds. No ethnicity classifier is planned; Vision
+  doesn't expose one and we aren't shipping a third-party one
 - **NudeNet detector format assumptions** — `NudityDetector` expects
   Create ML's object-detector output (`coordinates` Nx4 + `confidence` NxC).
   If a maintainer converts NudeNet with a different export shape (raw

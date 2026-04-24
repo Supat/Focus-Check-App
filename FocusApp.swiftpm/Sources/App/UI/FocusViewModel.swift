@@ -209,6 +209,12 @@ final class FocusViewModel: ObservableObject {
     /// model isn't installed; `nil` entries for faces the detector
     /// couldn't score.
     @Published var painScores: [PainScore?] = []
+    /// Per-face age + gender prediction from yu4u's EfficientNetB3,
+    /// indexed parallel to `faceRectangles`. Empty array when the
+    /// age-gender model isn't installed; `nil` entries for faces
+    /// that couldn't be cropped. When populated, the gender signal
+    /// here supersedes the body-context `nudityGenders` at the UI.
+    @Published var ageEstimations: [AgeGenderPrediction?] = []
     /// User toggle: draw NudeNet detection boxes + class labels on top
     /// of the image. Hidden by default so most users don't see the raw
     /// detector output.
@@ -247,6 +253,10 @@ final class FocusViewModel: ObservableObject {
     /// (pain / PSPI proxy). Same state shape as the other optional
     /// model tiers.
     @Published var openGraphAUInstall: DepthInstallState = .notInstalled
+    /// Install state for the yu4u age / gender estimator (per-face
+    /// EfficientNetB3). Same state shape as the other optional
+    /// model tiers.
+    @Published var ageGenderInstall: DepthInstallState = .notInstalled
     @Published var isAnalyzing: Bool = false
     @Published var errorMessage: String?
     @Published var depthAvailable: Bool = false
@@ -260,6 +270,7 @@ final class FocusViewModel: ObservableObject {
     private var clipInstallTask: Task<Void, Never>?
     private var emotionInstallTask: Task<Void, Never>?
     private var openGraphAUInstallTask: Task<Void, Never>?
+    private var ageGenderInstallTask: Task<Void, Never>?
 
     init() {
         self.analyzer = FocusAnalyzer()
@@ -276,6 +287,7 @@ final class FocusViewModel: ObservableObject {
         let clipInstalled = ModelArchive.clip.isInstalled()
         let emotionInstalled = ModelArchive.emotion.isInstalled()
         let openGraphAUInstalled = ModelArchive.openGraphAU.isInstalled()
+        let ageGenderInstalled = ModelArchive.ageGender.isInstalled()
         self.depthAvailable = depthInstalled
         self.depthInstall = depthInstalled ? .installed : .notInstalled
         self.nsfwInstall = nsfwInstalled ? .installed : .notInstalled
@@ -283,6 +295,7 @@ final class FocusViewModel: ObservableObject {
         self.clipInstall = clipInstalled ? .installed : .notInstalled
         self.emotionInstall = emotionInstalled ? .installed : .notInstalled
         self.openGraphAUInstall = openGraphAUInstalled ? .installed : .notInstalled
+        self.ageGenderInstall = ageGenderInstalled ? .installed : .notInstalled
 
         let analyzer = self.analyzer
         // Pre-compile installed Core ML models in the background after
@@ -370,6 +383,34 @@ final class FocusViewModel: ObservableObject {
                 }
             }
             await MainActor.run { [weak self] in self?.emotionInstallTask = nil }
+        }
+    }
+
+    /// Download the yu4u age / gender estimator. Same install-state
+    /// pattern as the other optional-model install rows.
+    func downloadAgeGenderModel() {
+        guard ageGenderInstallTask == nil else { return }
+        ageGenderInstall = .downloading(progress: 0)
+        let analyzer = self.analyzer
+        ageGenderInstallTask = Task { [weak self] in
+            do {
+                try await analyzer.installAgeGenderModel { [weak self] p in
+                    Task { @MainActor [weak self] in
+                        self?.ageGenderInstall = .downloading(progress: p)
+                    }
+                }
+                await MainActor.run { [weak self] in
+                    self?.ageGenderInstall = .installed
+                }
+            } catch {
+                let stillInstalled = ModelArchive.ageGender.isInstalled()
+                await MainActor.run { [weak self] in
+                    self?.ageGenderInstall = stillInstalled
+                        ? .installed
+                        : .failed(error.localizedDescription)
+                }
+            }
+            await MainActor.run { [weak self] in self?.ageGenderInstallTask = nil }
         }
     }
 
@@ -549,6 +590,7 @@ final class FocusViewModel: ObservableObject {
                     self?.clipMatches = overlays.clipMatches
                     self?.faceEmotions = overlays.faceEmotions
                     self?.painScores = overlays.painScores
+                    self?.ageEstimations = overlays.ageEstimations
                     self?.isAnalyzing = false
                     print("[ViewModel] sourceImage set, isAnalyzing=false")
                 }
@@ -591,6 +633,7 @@ final class FocusViewModel: ObservableObject {
         clipMatches = []
         faceEmotions = []
         painScores = []
+        ageEstimations = []
         exposureInfo = nil
         errorMessage = nil
         isAnalyzing = false
@@ -677,6 +720,7 @@ final class FocusViewModel: ObservableObject {
                     self?.clipMatches = overlays.clipMatches
                     self?.faceEmotions = overlays.faceEmotions
                     self?.painScores = overlays.painScores
+                    self?.ageEstimations = overlays.ageEstimations
                     self?.isAnalyzing = false
                 }
             } catch is CancellationError {
