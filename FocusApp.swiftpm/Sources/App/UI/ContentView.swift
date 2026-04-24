@@ -166,6 +166,7 @@ struct ContentView: View {
                     motionBlurBadge
                     nudeSubjectsBadge
                     contextBadge
+                    moodBadge
                 }
                 .padding([.leading, .bottom], 12)
             }
@@ -502,6 +503,37 @@ struct ContentView: View {
             .padding(.vertical, 6)
             .liquidBadgeBackground(in: Capsule())
         }
+    }
+
+    /// Pleasure / Arousal / Dominance readout for the highest-
+    /// confidence face's emotion. Derived from FER+'s softmax via
+    /// Mehrabian's published anchor points — no separate regressor
+    /// runs. Hides when no face met the confidence floor or press-
+    /// and-hold compare is active.
+    @ViewBuilder
+    private var moodBadge: some View {
+        let top = viewModel.faceEmotions
+            .compactMap { $0 }
+            .max(by: { $0.confidence < $1.confidence })
+        if let top,
+           viewModel.sourceImage != nil,
+           !viewModel.overlayHidden {
+            HStack(spacing: 6) {
+                Image(systemName: "heart.text.square")
+                Text("P\(Self.signedPAD(top.pad.pleasure)) A\(Self.signedPAD(top.pad.arousal)) D\(Self.signedPAD(top.pad.dominance))")
+                    .font(.caption2.monospacedDigit())
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .liquidBadgeBackground(in: Capsule())
+        }
+    }
+
+    /// Format a PAD axis value as "+0.81" / "-0.63" / "0.00" —
+    /// consistent width regardless of sign, two decimals.
+    private static func signedPAD(_ v: Float) -> String {
+        let clamped = max(-1, min(1, v))
+        return String(format: "%+.2f", clamped)
     }
 
     /// Upper-case the first letter of `s` while leaving the rest

@@ -30,13 +30,48 @@ enum EmotionLabel: String, CaseIterable, Sendable, Hashable {
         case .contempt: return "😒"
         }
     }
+
+    /// Anchor coordinates in Mehrabian's Pleasure-Arousal-Dominance
+    /// (PAD) space, from his own mapping of discrete emotion
+    /// categories. Each axis is in [-1, 1] by convention. Callers
+    /// project FER+'s full softmax onto this table to produce a
+    /// continuous PAD estimate.
+    var padAnchor: PADVector {
+        switch self {
+        case .happy:    return PADVector(pleasure:  0.81, arousal:  0.51, dominance:  0.46)
+        case .surprise: return PADVector(pleasure:  0.40, arousal:  0.67, dominance: -0.13)
+        case .neutral:  return PADVector(pleasure:  0.00, arousal:  0.00, dominance:  0.00)
+        case .sad:      return PADVector(pleasure: -0.63, arousal: -0.27, dominance: -0.33)
+        case .fear:     return PADVector(pleasure: -0.64, arousal:  0.60, dominance: -0.43)
+        case .disgust:  return PADVector(pleasure: -0.60, arousal:  0.35, dominance:  0.11)
+        case .anger:    return PADVector(pleasure: -0.51, arousal:  0.59, dominance:  0.25)
+        case .contempt: return PADVector(pleasure: -0.55, arousal:  0.43, dominance:  0.39)
+        }
+    }
+}
+
+/// Three-axis affective projection: Pleasure (negative to positive
+/// affect), Arousal (calm to excited), Dominance (submissive to
+/// controlling). Each axis in [-1, 1]. This app computes PAD as a
+/// confidence-weighted blend of FER+'s softmax over
+/// `EmotionLabel.padAnchor`, not via a dedicated regressor — see
+/// CLAUDE.md for the trade-offs.
+struct PADVector: Hashable, Sendable {
+    let pleasure: Float
+    let arousal: Float
+    let dominance: Float
+
+    static let zero = PADVector(pleasure: 0, arousal: 0, dominance: 0)
 }
 
 /// One per-face emotion record produced by `EmotionClassifier`. Top
-/// emotion + its confidence so the UI can hide low-confidence guesses.
+/// emotion + its confidence drives the discrete-label UI; the full
+/// PAD projection is kept so views can surface continuous affect
+/// without another inference pass.
 struct EmotionPrediction: Hashable, Sendable {
     let label: EmotionLabel
     let confidence: Float
+    let pad: PADVector
 }
 
 /// Thin wrapper around the FER+ Core ML model. Runs per face — the
@@ -192,7 +227,26 @@ private final class FERPlusModel {
             guard topScore >= confidenceFloor else { return nil }
             let labels = EmotionLabel.allCases
             guard topIdx < labels.count else { return nil }
-            return EmotionPrediction(label: labels[topIdx], confidence: topScore)
+
+            // Confidence-weighted PAD projection — use the full
+            // softmax distribution rather than the top class so a
+            // mixture like "mostly neutral with some sad" lands
+            // between the anchor points instead of snapping onto
+            // neutral's (0,0,0).
+            var p: Float = 0
+            var a: Float = 0
+            var d: Float = 0
+            for i in 0..<probs.count where i < labels.count {
+                let anchor = labels[i].padAnchor
+                p += probs[i] * anchor.pleasure
+                a += probs[i] * anchor.arousal
+                d += probs[i] * anchor.dominance
+            }
+            return EmotionPrediction(
+                label: labels[topIdx],
+                confidence: topScore,
+                pad: PADVector(pleasure: p, arousal: a, dominance: d)
+            )
         } catch {
             return nil
         }
