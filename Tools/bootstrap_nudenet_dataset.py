@@ -122,11 +122,14 @@ REVIEW_ONLY_CLASSES = {
     "MALE_GENITALIA_ORGASM",
 }
 
-# Pixel padding applied around each detection's box when writing the
-# crop thumbnail. Fractional margin on the shorter side; gives the
-# reviewer enough context (hair / skin tone / surroundings) to
-# disambiguate cases that a tight crop can't resolve.
-CROP_PADDING_FRAC = 0.20
+# Pixel padding applied around each detection's box when writing
+# the crop thumbnail. Fractional margin on the shorter side. Set
+# to zero by default — NudeNet's boxes are already loose around
+# the actual feature (a "breast" box typically includes adjacent
+# skin), so adding more padding makes the crop heavily background-
+# dominated. Bump to 0.05 / 0.10 if a specific reviewer wants more
+# context.
+CROP_PADDING_FRAC = 0.0
 
 # Per-label confidence overrides — match the on-device app's
 # NudityDetector profile now that the bootstrap also runs NudeNet
