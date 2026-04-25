@@ -582,15 +582,14 @@ struct ContentView: View {
     }
 
     /// Compact warning chip surfaced inside `nudeSubjectHeadBadges`
-    /// — atom hazard glyph + cellularbars whose fill encodes
-    /// severity. The atom is SF Symbols' closest analogue to the
-    /// radioactive trefoil (the catalog has no dedicated trefoil
-    /// pictogram). See `genitalWarning(forBodyAt:)` for the ladder.
+    /// — `exclamationmark.triangle.fill` (the universal ISO-7010
+    /// hazard pictogram) + cellularbars whose fill encodes
+    /// severity. See `genitalWarning(forBodyAt:)` for the ladder.
     private func genitalWarningChip(
         bars: Double, color: Color
     ) -> some View {
         HStack(spacing: 2) {
-            Image(systemName: "atom")
+            Image(systemName: "exclamationmark.triangle.fill")
             Image(systemName: "cellularbars", variableValue: bars)
         }
         .font(.caption2)
