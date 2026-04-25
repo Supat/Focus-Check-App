@@ -131,14 +131,21 @@ REVIEW_ONLY_CLASSES = {
 # context.
 CROP_PADDING_FRAC = 0.0
 
-# Per-label confidence overrides. Empty by design — the bootstrap
-# is intentionally decoupled from the on-device app's per-class
-# profile so the dataset reflects NudeNet's "neutral" precision/
-# recall at a single uniform threshold. The on-device app tunes
-# per-class for live mosaicing; that's a different surface with
-# different goals (recall on male-genital, FP-suppression on face)
-# and shouldn't bleed into how training data is collected.
-CLASS_THRESHOLD_OVERRIDES: dict[str, float] = {}
+# Per-label confidence overrides. Values mirror the on-device app's
+# `NudityDetector.scoreThreshold(for:)` profile because we have
+# matching empirical evidence on this user's photo distribution that
+# the per-class adjustments are correct (face branch noisy → bumped,
+# male-genital training-data skew → loosened). They are *referenced
+# from* the app's profile but **not coupled** — duplicated values,
+# not a shared constant, so a future tweak to the live-mosaic
+# gating doesn't silently change how training data is collected.
+# Reconfirm against the dataset's empirical confidence-band
+# distribution if you regenerate from a different photo distribution.
+CLASS_THRESHOLD_OVERRIDES: dict[str, float] = {
+    "FACE_MALE":              0.50,  # cf. NudityDetector.scoreThreshold(for:)
+    "FACE_FEMALE":            0.50,
+    "MALE_GENITALIA_EXPOSED": 0.10,
+}
 
 # Outward padding applied to each YOLOv8n person box before we
 # crop and run NudeNet on the result. Matches NudityDetector.swift's
@@ -204,6 +211,137 @@ correct class becomes FLACCID again (post-resolution). When in
 doubt between AROUSAL and ORGASM on a still frame, prefer AROUSAL
 — ORGASM should be the rarer, unambiguous label.
 """
+
+
+class _VisionPersonDetector:
+    """Apple Vision body-rect + pose-keypoint detector, mirroring the
+    on-device `FocusAnalyzer.runVision` body-anchor logic. Combines
+    `VNDetectHumanRectanglesRequest` with `VNDetectHumanBodyPoseRequest`
+    so subjects the rect detector misses on unusual poses still get
+    caught via their joint cluster.
+
+    Init raises ImportError when the runtime isn't macOS or
+    `pyobjc-framework-Vision` isn't installed; callers fall back to
+    the YOLOv8n path.
+
+    `detect_persons` returns pixel-coord top-down xyxy tuples (same
+    convention as cv2 / YOLOv8n's xyxy output) so the downstream
+    crop / NudeNet pipeline doesn't care which detector ran.
+    """
+
+    # Joint-confidence floor for inclusion in a pose-derived rect.
+    # Apple's recognizedPoints API hands back keypoints with
+    # per-joint confidence in [0, 1]; below 0.1 the joint is usually
+    # extrapolated rather than observed.
+    POSE_JOINT_CONF_FLOOR = 0.1
+    # Outward padding around the joint cluster to include skin /
+    # shoulders the joints don't directly cover. Matches the
+    # on-device `bodyRect` derivation.
+    POSE_RECT_PADDING_FRAC = 0.20
+    # IoU above which a pose-derived rect is considered "already
+    # covered" by an existing body-rect observation and dropped.
+    POSE_DEDUP_IOU = 0.30
+
+    def __init__(self) -> None:
+        # Imports are local so a non-Mac runtime fails cleanly with
+        # ImportError instead of a partial module.
+        import Foundation  # noqa: F401
+        import Vision      # noqa: F401
+        self._Foundation = Foundation
+        self._Vision = Vision
+        self._all_joints_key = Vision.VNHumanBodyPoseObservationJointsGroupNameAll
+
+    def detect_persons(self, image_path: str,
+                       img_w: int, img_h: int) -> list[tuple[float, float, float, float]]:
+        url = self._Foundation.NSURL.fileURLWithPath_(image_path)
+        handler = self._Vision.VNImageRequestHandler.alloc() \
+            .initWithURL_options_(url, None)
+
+        rect_req = self._Vision.VNDetectHumanRectanglesRequest.alloc().init()
+        # The default is upper-body-only; explicit False matches the
+        # on-device `bodyRects.upperBodyOnly = false`.
+        rect_req.setUpperBodyOnly_(False)
+        pose_req = self._Vision.VNDetectHumanBodyPoseRequest.alloc().init()
+
+        ok, _err = handler.performRequests_error_([rect_req, pose_req], None)
+        if not ok:
+            return []
+
+        rects: list[tuple[float, float, float, float]] = []
+
+        # Body-rect observations. Vision's boundingBox is normalized
+        # [0, 1] with origin at bottom-left (Y-up). Convert to
+        # image-pixel top-down xyxy so the rest of the pipeline
+        # (cv2, YOLO-style) doesn't need a special case.
+        for obs in (rect_req.results() or []):
+            bbox = obs.boundingBox()
+            x1 = float(bbox.origin.x) * img_w
+            y_bot = float(bbox.origin.y) * img_h
+            bw = float(bbox.size.width) * img_w
+            bh = float(bbox.size.height) * img_h
+            x2 = x1 + bw
+            # Top-down y: flip via image height.
+            y1_td = img_h - (y_bot + bh)
+            y2_td = img_h - y_bot
+            rects.append((x1, y1_td, x2, y2_td))
+
+        # Pose-derived rects. Take all joints, drop low-confidence
+        # ones, take the AABB of the survivors, pad outward, and
+        # IoU-dedupe against the body-rect output.
+        for obs in (pose_req.results() or []):
+            pose_rect = self._pose_observation_rect(obs, img_w, img_h)
+            if pose_rect is None:
+                continue
+            covered = any(
+                self._iou(pose_rect, r) > self.POSE_DEDUP_IOU
+                for r in rects
+            )
+            if not covered:
+                rects.append(pose_rect)
+
+        return rects
+
+    def _pose_observation_rect(self, obs, img_w: int, img_h: int):
+        pts, err = obs.recognizedPointsForGroupKey_error_(
+            self._all_joints_key, None
+        )
+        if err is not None or not pts:
+            return None
+        xs: list[float] = []
+        ys: list[float] = []
+        for _, pt in pts.items():
+            if pt.confidence() < self.POSE_JOINT_CONF_FLOOR:
+                continue
+            loc = pt.location()
+            xs.append(float(loc.x) * img_w)
+            ys.append((1.0 - float(loc.y)) * img_h)  # Y flip → top-down
+        if len(xs) < 4:
+            return None
+        x1, x2 = min(xs), max(xs)
+        y1, y2 = min(ys), max(ys)
+        bw = x2 - x1
+        bh = y2 - y1
+        if bw <= 0 or bh <= 0:
+            return None
+        pad = self.POSE_RECT_PADDING_FRAC
+        return (
+            max(0.0, x1 - pad * bw),
+            max(0.0, y1 - pad * bh),
+            min(float(img_w), x2 + pad * bw),
+            min(float(img_h), y2 + pad * bh),
+        )
+
+    @staticmethod
+    def _iou(a, b) -> float:
+        ax1, ay1, ax2, ay2 = a
+        bx1, by1, bx2, by2 = b
+        ix1 = max(ax1, bx1); iy1 = max(ay1, by1)
+        ix2 = min(ax2, bx2); iy2 = min(ay2, by2)
+        iw = max(0.0, ix2 - ix1)
+        ih = max(0.0, iy2 - iy1)
+        inter = iw * ih
+        union = (ax2 - ax1) * (ay2 - ay1) + (bx2 - bx1) * (by2 - by1) - inter
+        return (inter / union) if union > 0 else 0.0
 
 
 def class_agnostic_nms(detections: list[dict], iou_threshold: float) -> list[dict]:
@@ -351,12 +489,12 @@ def build_parser() -> argparse.ArgumentParser:
     label_group.add_argument("--inference-resolution", type=int, default=320,
                              help="NudeNet input size (320 bundled, 640 "
                                   "for the 640m variant).")
-    label_group.add_argument("--confidence", type=float, default=0.50,
-                             help="Confidence floor for pre-labels, applied "
-                                  "uniformly to every NudeNet class. The "
-                                  "bootstrap intentionally avoids per-class "
-                                  "tuning — that's a property of the on-"
-                                  "device app, not the training dataset.")
+    label_group.add_argument("--confidence", type=float, default=0.40,
+                             help="Default confidence floor for pre-labels. "
+                                  "Mirrors the on-device app's default "
+                                  "(referenced, not coupled). Per-class "
+                                  "overrides apply on top: face labels at "
+                                  "0.50, MALE_GENITALIA_EXPOSED at 0.10.")
     label_group.add_argument("--person-detector",
                              default="yolov8n.pt",
                              help="Path / Ultralytics model name for the "
@@ -463,13 +601,17 @@ def main() -> None:
     labels_dir.mkdir(parents=True, exist_ok=True)
     crops_dir.mkdir(parents=True, exist_ok=True)
 
-    # Initialize NudeNet + the YOLOv8n person detector if we're
-    # labeling. Per-body cropping (mirroring the on-device app's
+    # Initialize NudeNet + a person detector if we're labeling.
+    # Per-body cropping (mirroring the on-device app's
     # NudityDetector) gives NudeNet a much better effective
     # resolution per subject and lets us discard hallucinations
-    # that don't land on a person.
+    # that don't land on a person. Person-detector preference:
+    # Apple Vision (matches the on-device anchor logic byte-for-byte
+    # — body-rects unioned with pose-derived rects) when available;
+    # YOLOv8n fallback for non-Mac runtimes.
     detector = None
     person_detector = None
+    person_detector_kind = None
     if not args.skip_labeling:
         try:
             from nudenet import NudeDetector
@@ -483,14 +625,27 @@ def main() -> None:
         except Exception as exc:
             sys.exit(f"ERROR: NudeNet init failed: {exc}")
         try:
-            from ultralytics import YOLO
+            person_detector = _VisionPersonDetector()
+            person_detector_kind = "vision"
+            print("Person detection: Apple Vision "
+                  "(VNDetectHumanRectangles + VNDetectHumanBodyPose)")
         except ImportError:
-            sys.exit("ERROR: ultralytics not installed. Run: pip install ultralytics")
-        try:
-            # Auto-downloads to ~/.cache/ultralytics on first use.
-            person_detector = YOLO(args.person_detector)
-        except Exception as exc:
-            sys.exit(f"ERROR: YOLO person detector init failed: {exc}")
+            try:
+                from ultralytics import YOLO
+            except ImportError:
+                sys.exit(
+                    "ERROR: neither pyobjc-framework-Vision nor "
+                    "ultralytics is installed. Install one: "
+                    "`pip install pyobjc-framework-Vision` (Mac) or "
+                    "`pip install ultralytics`."
+                )
+            try:
+                person_detector = YOLO(args.person_detector)
+                person_detector_kind = "yolo"
+                print(f"Person detection: YOLOv8n ({args.person_detector}) — "
+                      "Vision unavailable on this runtime")
+            except Exception as exc:
+                sys.exit(f"ERROR: YOLO person detector init failed: {exc}")
         try:
             import cv2  # noqa: F401  used for the BGR ndarray pipeline
         except ImportError:
@@ -611,15 +766,20 @@ def main() -> None:
             continue
 
         try:
-            person_results = person_detector(
-                img_bgr, classes=[0], verbose=False
-            )
-            person_boxes = [
-                tuple(b) for b in
-                person_results[0].boxes.xyxy.cpu().numpy()
-            ]
+            if person_detector_kind == "vision":
+                person_boxes = person_detector.detect_persons(
+                    str(exported), img_w, img_h
+                )
+            else:
+                person_results = person_detector(
+                    img_bgr, classes=[0], verbose=False
+                )
+                person_boxes = [
+                    tuple(b) for b in
+                    person_results[0].boxes.xyxy.cpu().numpy()
+                ]
         except Exception as exc:
-            print(f"  YOLO person-det failed on {exported.name}: {exc}",
+            print(f"  person-det failed on {exported.name}: {exc}",
                   file=sys.stderr)
             skipped_label += 1
             continue
