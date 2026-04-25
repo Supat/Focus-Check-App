@@ -40,14 +40,20 @@ struct ContentView: View {
                                 Label("Remove photo", systemImage: "xmark.circle")
                             }
                         }
-                        // Full-screen lives on the leading side
-                        // alongside the destructive Remove — both
-                        // are *view-state* actions on the loaded
-                        // photo, separated visually from the
-                        // import / export I/O cluster on the
-                        // trailing side.
-                        ToolbarItem(placement: .topBarLeading) {
+                        // Full-screen sits in front of the
+                        // export / import I/O pair on the trailing
+                        // side, with a fixed-width spacer between
+                        // them so it reads as a separate group
+                        // (view-state action vs. file I/O).
+                        // ToolbarSpacer is iOS 26+; older OSes
+                        // fall back to plain adjacency, which keeps
+                        // the order correct but loses the visual
+                        // gap.
+                        ToolbarItem(placement: .primaryAction) {
                             fullScreenButton
+                        }
+                        if #available(iOS 26.0, macOS 26.0, *) {
+                            ToolbarSpacer(.fixed, placement: .primaryAction)
                         }
                         ToolbarItem(placement: .primaryAction) {
                             exportButton
