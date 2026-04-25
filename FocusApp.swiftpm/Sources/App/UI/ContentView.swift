@@ -40,7 +40,13 @@ struct ContentView: View {
                                 Label("Remove photo", systemImage: "xmark.circle")
                             }
                         }
-                        ToolbarItem(placement: .primaryAction) {
+                        // Full-screen lives on the leading side
+                        // alongside the destructive Remove — both
+                        // are *view-state* actions on the loaded
+                        // photo, separated visually from the
+                        // import / export I/O cluster on the
+                        // trailing side.
+                        ToolbarItem(placement: .topBarLeading) {
                             fullScreenButton
                         }
                         ToolbarItem(placement: .primaryAction) {
