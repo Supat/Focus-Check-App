@@ -220,6 +220,7 @@ struct ContentView: View {
                         aestheticBadge
                     }
                     HStack(spacing: 8) {
+                        megapixelsBadge
                         exposureBadge
                         motionBlurBadge
                         nudeSubjectsBadge
@@ -313,6 +314,27 @@ struct ContentView: View {
             }
         }
         .disabled(isExporting)
+    }
+
+    /// Integer megapixel count of the loaded source. Sits in front
+    /// of the EXIF badge so resolution reads at a glance even when
+    /// the photo carries no EXIF (e.g. screenshots, exported PNGs).
+    @ViewBuilder
+    private var megapixelsBadge: some View {
+        if let extent = viewModel.sourceImage?.extent,
+           !viewModel.overlayHidden {
+            let mp = Int((extent.width * extent.height / 1_000_000).rounded())
+            if mp > 0 {
+                HStack(spacing: 6) {
+                    Image(systemName: "photo")
+                    Text("\(mp) MP")
+                        .font(.caption.monospacedDigit())
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .liquidBadgeBackground(in: Capsule())
+            }
+        }
     }
 
     @ViewBuilder
