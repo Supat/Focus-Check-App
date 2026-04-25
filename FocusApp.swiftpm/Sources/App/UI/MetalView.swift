@@ -57,12 +57,16 @@ struct MetalView: UIViewRepresentable {
         if let layer = view.layer as? CAMetalLayer {
             layer.wantsExtendedDynamicRangeContent = true
             layer.pixelFormat = .rgba16Float
-            // `.resize` lets Core Animation stretch the existing
-            // drawable smoothly when we pause + freeze auto-resize
-            // for a layout transition. Default value already, but
-            // pin it explicitly so a future config change doesn't
-            // regress the full-screen smoothness.
-            layer.contentsGravity = .resize
+            // `.resizeAspect` preserves the bitmap's proportions
+            // when the layer bounds animate during a paused full-
+            // screen transition. The default `.resize` would
+            // stretch non-uniformly (entering FS makes the image
+            // look vertically elongated; exiting compresses it).
+            // With aspect-fit, newly-exposed area shows as black
+            // briefly until the unpaused renderer redraws at the
+            // final drawable size — much less visually jarring
+            // than a distorted image.
+            layer.contentsGravity = .resizeAspect
         }
         view.delegate = context.coordinator
         return view
