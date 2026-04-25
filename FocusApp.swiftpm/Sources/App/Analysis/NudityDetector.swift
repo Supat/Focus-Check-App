@@ -528,25 +528,63 @@ private final class NudityClassifier {
 
     private func parseDetections(from result: MLFeatureProvider,
                                  letterbox: Letterbox) -> [NudityDetection] {
-        // Path 1: Create ML object-detector format — the clean case, NMS
-        // already applied inside the model. Outputs are paired multi-arrays
-        // `coordinates` (Nx4, normalized [cx,cy,w,h]) + `confidence` (NxC).
+        // Path 1: Create ML object-detector format. Paired multi-array
+        // outputs `coordinates` (Nx4 normalized [cx,cy,w,h]) +
+        // `confidence` (NxC). NMS is already applied inside the
+        // model, but we still run a class-agnostic pass below since
+        // we attribute detections to bodies downstream and want
+        // overlapping cross-class predictions deduplicated.
+        let detections: [NudityDetection]
         if let coords = result.featureValue(for: coordinatesName)?.multiArrayValue,
            let conf = result.featureValue(for: confidenceName)?.multiArrayValue,
            coords.shape.count >= 2, conf.shape.count >= 2 {
-            return parseCreateMLDetections(coords: coords, conf: conf, letterbox: letterbox)
+            detections = parseCreateMLDetections(coords: coords, conf: conf, letterbox: letterbox)
+        } else {
+            // Path 2: raw YOLO tensor from coremltools-converted
+            // ONNX — one multi-array output, no NMS baked in. Try
+            // each output until one's shape matches a YOLO layout.
+            var found: [NudityDetection] = []
+            for name in result.featureNames {
+                guard let array = result.featureValue(for: name)?.multiArrayValue else { continue }
+                if let parsed = parseYOLODetections(array: array, letterbox: letterbox) {
+                    found = parsed
+                    break
+                }
+            }
+            detections = found
         }
+        return classAgnosticNMS(detections, iouThreshold: 0.45)
+    }
 
-        // Path 2: raw YOLO tensor from coremltools-converted ONNX — one
-        // multi-array output, no NMS baked in. Iterate all model outputs
-        // and accept the first one whose shape matches a YOLO layout.
-        for name in result.featureNames {
-            guard let array = result.featureValue(for: name)?.multiArrayValue else { continue }
-            if let detections = parseYOLODetections(array: array, letterbox: letterbox) {
-                return classAgnosticNMS(detections, iouThreshold: 0.45)
+    /// Materialize a `NudityDetection` from one row's per-class scores
+    /// + an optional objectness multiplier (YOLOv5) + a rect builder.
+    /// Returns nil when the row's top class fails the per-label
+    /// confidence threshold. Both parse paths route through this so
+    /// the argmax / threshold / label-lookup logic lives in one place.
+    private func makeDetection(
+        classScore: (Int) -> Float,
+        objectness: Float? = nil,
+        rect: () -> CGRect
+    ) -> NudityDetection? {
+        let classCount = labels.count
+        var topClass = 0
+        var topScore: Float = -1
+        for c in 0..<classCount {
+            let s = classScore(c)
+            if s > topScore {
+                topScore = s
+                topClass = c
             }
         }
-        return []
+        let combined = (objectness ?? 1.0) * topScore
+        guard topClass < classCount,
+              combined >= scoreThreshold(for: labels[topClass])
+        else { return nil }
+        return NudityDetection(
+            rect: rect(),
+            label: labels[topClass],
+            confidence: combined
+        )
     }
 
     // MARK: - Create ML object-detector path
@@ -556,58 +594,44 @@ private final class NudityClassifier {
                                          letterbox: Letterbox) -> [NudityDetection] {
         let count = coords.shape.first?.intValue ?? 0
         guard count > 0 else { return [] }
-        let classCount = conf.shape[1].intValue
         let strideBox = coords.strides[0].intValue
         let strideConf = conf.strides[0].intValue
 
         var detections: [NudityDetection] = []
         detections.reserveCapacity(count)
-
         for i in 0..<count {
-            var topClass = 0
-            var topScore: Float = -1
-            for c in 0..<classCount {
-                let score = conf[i * strideConf + c].floatValue
-                if score > topScore {
-                    topScore = score
-                    topClass = c
+            // Create ML emits normalized [cx, cy, w, h] in the
+            // letterboxed input's coordinate space. Undo the
+            // letterbox to land in source-extent CIImage Y-up.
+            let det = makeDetection(
+                classScore: { c in conf[i * strideConf + c].floatValue },
+                rect: {
+                    let cx = CGFloat(coords[i * strideBox + 0].floatValue)
+                    let cy = CGFloat(coords[i * strideBox + 1].floatValue)
+                    let bw = CGFloat(coords[i * strideBox + 2].floatValue)
+                    let bh = CGFloat(coords[i * strideBox + 3].floatValue)
+                    return letterbox.sourceRectFromNormalized(cx: cx, cy: cy, w: bw, h: bh)
                 }
-            }
-            guard topClass < labels.count,
-                  topScore >= scoreThreshold(for: labels[topClass])
-            else { continue }
-
-            // Create ML emits normalized [cx, cy, w, h] in the letterboxed
-            // input's coordinate space. Undo the letterbox to land in
-            // source-extent CIImage Y-up coords.
-            let cx = CGFloat(coords[i * strideBox + 0].floatValue)
-            let cy = CGFloat(coords[i * strideBox + 1].floatValue)
-            let bw = CGFloat(coords[i * strideBox + 2].floatValue)
-            let bh = CGFloat(coords[i * strideBox + 3].floatValue)
-
-            let rect = letterbox.sourceRectFromNormalized(cx: cx, cy: cy, w: bw, h: bh)
-            detections.append(NudityDetection(
-                rect: rect,
-                label: labels[topClass],
-                confidence: topScore
-            ))
+            )
+            if let det { detections.append(det) }
         }
         return detections
     }
 
     // MARK: - Raw YOLO path
 
-    /// Decode a raw YOLOv5 or YOLOv8 output tensor. Returns nil when the
-    /// shape doesn't look like either layout; the caller then moves on
-    /// to the next output. Returns detections *before* NMS — the caller
-    /// runs `classAgnosticNMS` afterward.
+    /// Decode a raw YOLOv5 or YOLOv8 output tensor. Returns nil when
+    /// the shape doesn't look like either layout; the caller then
+    /// moves on to the next output. Returns detections *before* NMS
+    /// — the parseDetections() caller runs classAgnosticNMS afterward.
     ///
     /// Supported layouts (shape is `[1, a, b]`):
     ///   * YOLOv5: `[1, N, 5+C]` — per-anchor row [cx, cy, w, h, obj, cls0..clsC-1]
     ///   * YOLOv8: `[1, 4+C, N]` — channels-first, no objectness column
     ///
-    /// Coords are in model-input pixel space (0...inputSize); this decoder
-    /// undoes the letterbox to land in source-extent CIImage coords.
+    /// Coords are in model-input pixel space (0...inputSize); this
+    /// decoder undoes the letterbox to land in source-extent CIImage
+    /// coords.
     private func parseYOLODetections(array: MLMultiArray,
                                      letterbox: Letterbox) -> [NudityDetection]? {
         let shape = array.shape.map(\.intValue)
@@ -617,9 +641,9 @@ private final class NudityClassifier {
         let v5Feats = 5 + classCount
         let v8Feats = 4 + classCount
 
-        // Layout probing. Prefer YOLOv5 when the last dim matches, else
-        // YOLOv8 (channels-first). Reject anything else so we don't
-        // accidentally "decode" a classifier head.
+        // Layout probing. Prefer YOLOv5 when the last dim matches,
+        // else YOLOv8 (channels-first). Reject anything else so we
+        // don't accidentally "decode" a classifier head.
         let numAnchors: Int
         let numFeats: Int
         let channelsFirst: Bool
@@ -639,11 +663,10 @@ private final class NudityClassifier {
         } else {
             return nil
         }
-
         let classOffset = hasObjectness ? 5 : 4
 
-        // Index helper. For `[1, F, N]` (YOLOv8), stride over anchors.
-        // For `[1, N, F]` (YOLOv5), stride over features.
+        // Index helper. For `[1, F, N]` (YOLOv8), stride over
+        // anchors. For `[1, N, F]` (YOLOv5), stride over features.
         func read(anchor a: Int, feat f: Int) -> Float {
             let flat = channelsFirst ? (f * numAnchors + a) : (a * numFeats + f)
             return array[flat].floatValue
@@ -651,50 +674,28 @@ private final class NudityClassifier {
 
         var detections: [NudityDetection] = []
         detections.reserveCapacity(min(numAnchors, 256))
-
         for a in 0..<numAnchors {
-            // Max-class scan first — many anchors have all-low class scores,
-            // so early-reject before computing the combined score avoids
-            // the objectness read for most rows. Not a huge saving but
-            // meaningful over 25k anchors.
-            var topClass = 0
-            var topScore: Float = -1
-            for c in 0..<classCount {
-                let s = read(anchor: a, feat: classOffset + c)
-                if s > topScore {
-                    topScore = s
-                    topClass = c
+            // YOLOv5: final score = obj * cls. YOLOv8: score = cls
+            // only (no objectness column). The upstream exporter is
+            // expected to have applied the sigmoids already —
+            // coremltools does this by default when the ONNX graph
+            // includes them.
+            let det = makeDetection(
+                classScore: { c in read(anchor: a, feat: classOffset + c) },
+                objectness: hasObjectness ? read(anchor: a, feat: 4) : nil,
+                rect: {
+                    // YOLO coords are input-pixel, top-down — hand
+                    // to the letterbox helper to undo the aspect-fit
+                    // transform and flip to source-extent CIImage Y-up.
+                    letterbox.sourceRect(
+                        cx: CGFloat(read(anchor: a, feat: 0)),
+                        cy: CGFloat(read(anchor: a, feat: 1)),
+                        w: CGFloat(read(anchor: a, feat: 2)),
+                        h: CGFloat(read(anchor: a, feat: 3))
+                    )
                 }
-            }
-            // YOLOv5: final score = obj * cls. YOLOv8: score = cls only
-            // (no objectness column). The upstream exporter is expected
-            // to have applied the sigmoids already — coremltools does this
-            // by default when the ONNX graph includes them.
-            let score: Float = {
-                if hasObjectness {
-                    let obj = read(anchor: a, feat: 4)
-                    return obj * topScore
-                }
-                return topScore
-            }()
-            guard topClass < classCount,
-                  score >= scoreThreshold(for: labels[topClass])
-            else { continue }
-
-            // YOLO coords are input-pixel, top-down — hand to the
-            // letterbox helper to undo the aspect-fit transform and flip
-            // to source-extent CIImage Y-up.
-            let rect = letterbox.sourceRect(
-                cx: CGFloat(read(anchor: a, feat: 0)),
-                cy: CGFloat(read(anchor: a, feat: 1)),
-                w: CGFloat(read(anchor: a, feat: 2)),
-                h: CGFloat(read(anchor: a, feat: 3))
             )
-            detections.append(NudityDetection(
-                rect: rect,
-                label: labels[topClass],
-                confidence: score
-            ))
+            if let det { detections.append(det) }
         }
         return detections
     }
