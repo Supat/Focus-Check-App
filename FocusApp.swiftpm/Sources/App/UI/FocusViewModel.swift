@@ -172,14 +172,15 @@ final class FocusViewModel: ObservableObject {
 
     private func animateZoom(toScale target: CGFloat, toAnchor targetAnchor: CGPoint) {
         zoomAnimationTask?.cancel()
-        // Starting (or ending) a new zoom wipes any pan from the prior
-        // zoomed state — otherwise the transition would interpolate
-        // scale/anchor while a stale pan offset stayed fixed, producing
-        // a visual jump at either end.
-        zoomPanOffset = .zero
-
+        // Capture the starting pan and interpolate it to zero
+        // alongside scale + anchor. Without this, a non-zero pan
+        // (user dragged to a corner while zoomed in) would snap to
+        // zero on the first frame, making the zoom-out look like
+        // it pivots from the centered image rather than from the
+        // viewing position. Both toggle directions end at pan = 0.
         let startScale = zoomScale
         let startAnchor = zoomAnchor
+        let startPan = zoomPanOffset
         let duration: Double = 0.25
         let stepDuration: Double = 1.0 / 60.0
         let steps = max(1, Int(duration / stepDuration))
@@ -206,15 +207,19 @@ final class FocusViewModel: ObservableObject {
                 let newScale = startScale + (target - startScale) * eased
                 let ax = startAnchor.x + (targetAnchor.x - startAnchor.x) * eased
                 let ay = startAnchor.y + (targetAnchor.y - startAnchor.y) * eased
+                let panW = startPan.width + (0 - startPan.width) * eased
+                let panH = startPan.height + (0 - startPan.height) * eased
 
                 self?.zoomScale = newScale
                 self?.zoomAnchor = CGPoint(x: ax, y: ay)
+                self?.zoomPanOffset = CGSize(width: panW, height: panH)
 
                 try? await Task.sleep(nanoseconds: stepNS)
             }
             if !Task.isCancelled {
                 self?.zoomScale = target
                 self?.zoomAnchor = targetAnchor
+                self?.zoomPanOffset = .zero
             }
         }
     }
