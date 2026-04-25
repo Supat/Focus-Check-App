@@ -542,6 +542,15 @@ final class FocusRenderer {
     /// the composition visible — useful for evidence / documentary
     /// frames where the subject must remain unidentifiable AND
     /// unexposed. Both paths respect the per-subject gate.
+    ///
+    /// "Explicit anatomy" means any GENITALIA label that isn't
+    /// COVERED. That covers the raw NudeNet exposed labels
+    /// (`MALE_GENITALIA_EXPOSED` / `FEMALE_GENITALIA_EXPOSED`) plus
+    /// the GenitalClassifier's sub-class labels for exposed states
+    /// (`MALE_GENITALIA_FLACCID` / `_AROUSAL` / `_ORGASM`), while
+    /// excluding the classifier's `MALE_GENITALIA_COVERED` and
+    /// NudeNet's `FEMALE_GENITALIA_COVERED`. A clothed subject
+    /// passes through with only the eye bar applied.
     private static func mosaicJacket(inputs: FocusCompositeInputs,
                                      gates: MosaicGates) -> CIImage {
         var result = inputs.source
@@ -557,7 +566,10 @@ final class FocusRenderer {
             bodies: inputs.bodies,
             levels: inputs.nudityLevels,
             gate: inputs.nudityGate
-        ).filter { $0.label.uppercased().contains("GENITALIA_EXPOSED") }
+        ).filter { det in
+            let upper = det.label.uppercased()
+            return upper.contains("GENITALIA") && !upper.contains("COVERED")
+        }
         if !genitalDetections.isEmpty {
             result = regionMosaic(source: result, regions: genitalDetections.map(\.rect))
         }
