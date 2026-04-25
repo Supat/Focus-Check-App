@@ -147,10 +147,12 @@ final class FocusViewModel: ObservableObject {
     func toggleZoom(at normalized: CGPoint) {
         let zoomedIn = zoomScale > 1.001
         let targetScale: CGFloat = zoomedIn ? 1.0 : nativeZoomScale()
-        let targetAnchor: CGPoint = zoomedIn
-            ? CGPoint(x: 0.5, y: 0.5)
-            : normalized
-        animateZoom(toScale: targetScale, toAnchor: targetAnchor)
+        // Anchor at the tap location for both directions — matches
+        // Photos.app: the content under the finger stays under the
+        // finger as the image scales. At the zoom-out endpoint
+        // (scale=1) the renderer's fit() ignores anchor anyway, so
+        // the final frame is centered regardless.
+        animateZoom(toScale: targetScale, toAnchor: normalized)
     }
 
     /// Zoom factor that maps one source pixel onto one drawable
