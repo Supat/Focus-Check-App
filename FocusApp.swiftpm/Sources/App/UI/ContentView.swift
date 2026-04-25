@@ -582,14 +582,14 @@ struct ContentView: View {
     }
 
     /// Compact warning chip surfaced inside `nudeSubjectHeadBadges`
-    /// — `exclamationmark.triangle.fill` (the universal ISO-7010
-    /// hazard pictogram) + cellularbars whose fill encodes
+    /// — `brain.filled.head.profile` (head silhouette with a
+    /// filled-brain interior) + cellularbars whose fill encodes
     /// severity. See `genitalWarning(forBodyAt:)` for the ladder.
     private func genitalWarningChip(
         bars: Double, color: Color
     ) -> some View {
         HStack(spacing: 2) {
-            Image(systemName: "exclamationmark.triangle.fill")
+            Image(systemName: "brain.filled.head.profile")
             Image(systemName: "cellularbars", variableValue: bars)
         }
         .font(.caption2)
