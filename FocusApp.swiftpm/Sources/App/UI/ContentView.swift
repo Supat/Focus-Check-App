@@ -182,6 +182,7 @@ struct ContentView: View {
                                 )
                             nudityLabelOverlay(in: geo.size)
                             nudeSubjectHeadBadges(in: geo.size)
+                            genitalWarningBadges(in: geo.size)
                         }
                         // Contain any zoomed overlays (label boxes, head
                         // badges) to the image area — without this, a
@@ -516,6 +517,64 @@ struct ContentView: View {
             }
             .allowsHitTesting(false)
         }
+    }
+
+    /// Per-detection warning glyph placed above each NudeNet
+    /// genital-area detection whose label is *not* COVERED.
+    /// Colour encodes severity:
+    ///
+    ///   • `FEMALE_GENITALIA_EXPOSED`               → grey
+    ///     (the all-male-corpus classifier doesn't refine this
+    ///     class; on a female subject it's a generic exposure
+    ///     warning without a state grading)
+    ///   • `MALE_GENITALIA_FLACCID`                 → yellow
+    ///   • `MALE_GENITALIA_AROUSAL`                 → orange
+    ///   • `MALE_GENITALIA_ORGASM`                  → red
+    ///   • `MALE_GENITALIA_EXPOSED` (raw NudeNet,
+    ///     classifier not installed / under-confident) → yellow
+    ///     (default to the lowest male severity until the
+    ///     classifier rewrites it).
+    ///
+    /// Independent of the Labels toggle — the badge always
+    /// surfaces when an explicitly-exposed genital detection is
+    /// present so the viewer can spot the flagged regions even
+    /// with the bounding-box overlay off. Suppressed by the
+    /// press-and-hold compare gesture via `overlayHidden`.
+    @ViewBuilder
+    private func genitalWarningBadges(in size: CGSize) -> some View {
+        if !viewModel.overlayHidden,
+           !viewModel.nudityDetections.isEmpty,
+           let extent = viewModel.sourceImage?.extent,
+           extent.width > 0, extent.height > 0 {
+            let warnings = viewModel.nudityDetections.filter { det in
+                let upper = det.label.uppercased()
+                return upper.contains("GENITALIA") && !upper.contains("COVERED")
+            }
+            ForEach(Array(warnings.enumerated()), id: \.offset) { _, det in
+                let r = viewRect(for: det.rect, source: extent, in: size)
+                Image(systemName: "exclamationmark.warninglight.fill")
+                    .font(.title2)
+                    .foregroundStyle(genitalWarningTint(for: det.label))
+                    .padding(6)
+                    .background(.regularMaterial, in: Circle())
+                    .position(x: r.midX, y: max(12, r.minY - 18))
+                    .allowsHitTesting(false)
+            }
+        }
+    }
+
+    /// Colour for the `genitalWarningBadges` glyph based on the
+    /// NudeNet (or GenitalClassifier-overridden) label string.
+    /// Match order: female first, then male sub-classes ordered
+    /// by escalating severity, with a yellow fallback for the raw
+    /// MALE_GENITALIA_EXPOSED (un-graded) label.
+    private func genitalWarningTint(for label: String) -> Color {
+        let upper = label.uppercased()
+        if upper.contains("FEMALE")  { return .gray }
+        if upper.contains("ORGASM")  { return .red }
+        if upper.contains("AROUSAL") { return .orange }
+        if upper.contains("FLACCID") { return .yellow }
+        return .yellow
     }
 
     /// Floating per-subject warning badge placed above each body whose
