@@ -13,6 +13,16 @@ struct ContentView: View {
     /// the whole window. Toggled from the toolbar button and from the
     /// floating close button that appears over the image while active.
     @State private var isFullScreen = false
+    /// True for the duration of the full-screen toggle's SwiftUI
+    /// animation. While true the MTKView is paused and its drawable
+    /// is frozen so Core Animation can scale the existing bitmap
+    /// smoothly — without this, MTKView's per-frame composite
+    /// contends with SwiftUI's layout work for the navigation bar,
+    /// status bar, and OverlayControls reflow, producing visible
+    /// jitter on iPad. Reset by a delayed task once the 200 ms
+    /// transition is done.
+    @State private var fullScreenAnimating = false
+    @State private var fullScreenSettleTask: Task<Void, Never>?
     /// Drag-baseline for the pan gesture — captures the VM's pan at
     /// gesture start so successive drags accumulate rather than snap
     /// back to zero. Re-seeded on zoom toggle.
@@ -94,7 +104,7 @@ struct ContentView: View {
                 } else {
                     GeometryReader { geo in
                         ZStack {
-                            MetalView(viewModel: viewModel)
+                            MetalView(viewModel: viewModel, isPaused: fullScreenAnimating)
                                 .ignoresSafeArea(edges: .horizontal)
                                 .contentShape(Rectangle())
                                 .gesture(
@@ -232,11 +242,7 @@ struct ContentView: View {
             // active — the regular toolbar is hidden, so the user needs
             // an on-image way back.
             if isFullScreen {
-                Button {
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        isFullScreen = false
-                    }
-                } label: {
+                Button { toggleFullScreen() } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.title)
                         .symbolRenderingMode(.palette)
@@ -247,24 +253,38 @@ struct ContentView: View {
         }
     }
 
-    /// Triggers an async composite + PNG encode on the view model, then
-    /// presents the system share sheet so the user can save to Files,
-    /// Photos, or send via any registered share target.
     /// Toggles the full-screen mode: hides the navigation bar, bottom
     /// controls, and status bar so the image occupies the whole window.
     /// Animates lightly so the chrome fades instead of snapping.
     private var fullScreenButton: some View {
-        Button {
-            withAnimation(.easeOut(duration: 0.2)) {
-                isFullScreen.toggle()
-            }
-        } label: {
+        Button { toggleFullScreen() } label: {
             Label(
                 isFullScreen ? "Exit full screen" : "Full screen",
                 systemImage: isFullScreen
                     ? "arrow.down.right.and.arrow.up.left"
                     : "arrow.up.left.and.arrow.down.right"
             )
+        }
+    }
+
+    /// Flip `isFullScreen` inside an animation, marking MetalView
+    /// paused for the same duration so the renderer doesn't fight
+    /// SwiftUI's layout work for the navbar / status bar / bottom-
+    /// panel reflow. The settle task is `+30 ms` past the animation
+    /// so the unpause draws into the already-final layout — without
+    /// the cushion the resume race could land a frame onto a still-
+    /// interpolating drawable size.
+    private func toggleFullScreen() {
+        fullScreenSettleTask?.cancel()
+        fullScreenAnimating = true
+        withAnimation(.easeOut(duration: 0.2)) {
+            isFullScreen.toggle()
+        }
+        fullScreenSettleTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(230))
+            if !Task.isCancelled {
+                fullScreenAnimating = false
+            }
         }
     }
 
