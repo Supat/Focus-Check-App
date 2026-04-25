@@ -240,30 +240,40 @@ final class FocusRenderer {
             guard inputs.mosaic else { return inputs.source }
             switch inputs.mosaicMode {
             case .tabloid:
-                // Eye black bar + groin pixelation. Groin position is
-                // implied from NudeNet's GENITALIA_* detections rather
-                // than the pose-derived `gatedGroins`: NudeNet ties
-                // the box to actual visible anatomy (or clothed-over
-                // anatomy via the COVERED variants), so the mosaic
-                // lands accurately on tucked / sideways / partially-
-                // occluded poses where the body-pose hip-joint
-                // estimate misses. Subject gate applies through the
-                // standard gateDetections helper.
+                // Eye black bar + groin pixelation.
+                //
+                // Groin source priority is per-subject rather than
+                // global: pose-derived hip-joint estimates first
+                // (preferred — they're calibrated to anatomy and
+                // include clothed subjects), with NudeNet GENITALIA_*
+                // detections filling gaps for any subject the pose
+                // pass missed (occluded body, sideways framing,
+                // tight crop). A NudeNet detection is added only
+                // when no existing pose-derived groin already covers
+                // its area, so the priority isn't "all pose OR all
+                // NudeNet" — it's "pose where available, NudeNet to
+                // fill in".
                 var result = inputs.source
                 if !gatedEyes.isEmpty {
                     result = blackBarOverlay(source: result, bars: gatedEyes)
                 }
+                var groinRegions = gatedGroins
                 let genitalDetections = Self.gateDetections(
                     inputs.nudityDetections,
                     bodies: inputs.bodies,
                     levels: inputs.nudityLevels,
                     gate: inputs.nudityGate
                 ).filter { $0.label.uppercased().contains("GENITALIA") }
-                if !genitalDetections.isEmpty {
-                    result = regionMosaic(
-                        source: result,
-                        regions: genitalDetections.map(\.rect)
-                    )
+                for det in genitalDetections {
+                    let alreadyCovered = groinRegions.contains { existing in
+                        existing.intersects(det.rect)
+                    }
+                    if !alreadyCovered {
+                        groinRegions.append(det.rect)
+                    }
+                }
+                if !groinRegions.isEmpty {
+                    result = regionMosaic(source: result, regions: groinRegions)
                 }
                 return result
             case .eyes:
