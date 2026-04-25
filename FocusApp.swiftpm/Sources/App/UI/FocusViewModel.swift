@@ -10,6 +10,7 @@ enum OverlayStyle: String, CaseIterable, Identifiable {
     case heatmap    = "Heatmap"
     case focusError = "Error"
     case motion     = "Motion"
+    case errorLevel = "ELA"
 
     var id: String { rawValue }
 
@@ -21,6 +22,7 @@ enum OverlayStyle: String, CaseIterable, Identifiable {
         case .heatmap:    return "thermometer.sun"
         case .focusError: return "scope"
         case .motion:     return "wind"
+        case .errorLevel: return "rectangle.dashed"
         }
     }
 
@@ -321,6 +323,11 @@ final class FocusViewModel: ObservableObject {
     @Published var focalPlane: Float?
     @Published var motionBlur: MotionBlurReport?
     @Published var motionOverlay: CIImage?
+    /// Per-pixel ELA diff produced once per image load. Renderer
+    /// applies threshold-driven gain at display time so the slider
+    /// scrubs sensitivity. nil while ELA hasn't completed for the
+    /// current source or if the round-trip failed.
+    @Published var errorLevelOverlay: CIImage?
     @Published var exposureInfo: ExposureInfo?
     @Published var isSensitive: Bool?
     @Published var sensitiveLabel: String?
@@ -695,6 +702,7 @@ final class FocusViewModel: ObservableObject {
                     self?.ageEstimations = overlays.ageEstimations
                     self?.qualityScore = overlays.quality
                     self?.aestheticScore = overlays.aesthetic
+                    self?.errorLevelOverlay = overlays.errorLevel
                     self?.isAnalyzing = false
                     self?.analysisProgress = nil
                     // Delete the previous import's temp file once
@@ -869,6 +877,7 @@ final class FocusViewModel: ObservableObject {
                     self?.ageEstimations = overlays.ageEstimations
                     self?.qualityScore = overlays.quality
                     self?.aestheticScore = overlays.aesthetic
+                    self?.errorLevelOverlay = overlays.errorLevel
                     self?.isAnalyzing = false
                     self?.analysisProgress = nil
                 }

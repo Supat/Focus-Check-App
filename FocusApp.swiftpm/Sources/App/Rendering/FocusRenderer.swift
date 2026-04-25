@@ -14,6 +14,9 @@ struct FocusCompositeInputs {
     var sharpness: CIImage?
     var depth: CIImage?
     var motion: CIImage?
+    /// Per-pixel ELA diff. Consumed by the `.errorLevel` overlay
+    /// style; renderer applies threshold-driven gain.
+    var errorLevel: CIImage?
     var mosaic: Bool
     var mosaicMode: MosaicMode
     var faces: [CGRect]
@@ -185,6 +188,7 @@ final class FocusRenderer {
                 sharpness: viewModel.sharpnessOverlay,
                 depth: viewModel.depthOverlay,
                 motion: viewModel.motionOverlay,
+                errorLevel: viewModel.errorLevelOverlay,
                 mosaic: applyMosaic,
                 mosaicMode: viewModel.mosaicMode,
                 faces: viewModel.faceRectangles,
@@ -261,6 +265,9 @@ final class FocusRenderer {
         let motionOverlay = inputs.motion.map {
             fit(image: $0, into: drawableSize, zoom: zoomScale, anchor: zoomAnchor, pan: zoomPan)
         }
+        let elaOverlay = inputs.errorLevel.map {
+            fit(image: $0, into: drawableSize, zoom: zoomScale, anchor: zoomAnchor, pan: zoomPan)
+        }
 
         let threshold = CGFloat(inputs.threshold)
         let tint = inputs.tint
@@ -284,7 +291,35 @@ final class FocusRenderer {
         case .motion:
             return motionComposite(base: fitted, motion: motionOverlay,
                                    threshold: threshold, tint: tint)
+        case .errorLevel:
+            return errorLevelComposite(base: fitted, ela: elaOverlay,
+                                       threshold: threshold)
         }
+    }
+
+    /// Display the ELA diff. Threshold scrubs gain so the user
+    /// can balance signal vs. sensor-noise floor — diffs are
+    /// typically tiny (linear values < 0.05) so without gain the
+    /// result reads as near-black; with gain, mismatched-history
+    /// regions stand out as brighter pixels. Falls back to the
+    /// fitted source when ELA hasn't completed yet (rare; covers
+    /// the moment between style change and the first analyse
+    /// pass on a freshly-loaded image).
+    private static func errorLevelComposite(base: CIImage, ela: CIImage?,
+                                            threshold: CGFloat) -> CIImage {
+        guard let ela else { return base }
+        let gain: CGFloat = 5 + threshold * 45
+        return ela.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": CIVector(x: gain, y: 0, z: 0, w: 0),
+            "inputGVector": CIVector(x: 0, y: gain, z: 0, w: 0),
+            "inputBVector": CIVector(x: 0, y: 0, z: gain, w: 0),
+            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1)
+        ])
+        .applyingFilter("CIColorClamp", parameters: [
+            "inputMinComponents": CIVector(x: 0, y: 0, z: 0, w: 0),
+            "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1)
+        ])
+        .cropped(to: base.extent)
     }
 
     // MARK: - Mosaic dispatch

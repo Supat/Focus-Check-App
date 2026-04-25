@@ -102,6 +102,10 @@ actor FocusAnalyzer {
         /// scalar + distribution shape as `quality`, different
         /// training set (AVA instead of TID2013).
         var aesthetic: QualityScore?
+        /// Per-pixel re-encode-diff from Error Level Analysis. nil
+        /// when the round-trip failed. Renderer applies gain via
+        /// the threshold slider at display time.
+        var errorLevel: CIImage?
     }
 
     private let device: MTLDevice
@@ -109,6 +113,7 @@ actor FocusAnalyzer {
     private let ciContext: CIContext
     private let laplacian: LaplacianVariance
     private let motionBlur: MotionBlurDetector
+    private let errorLevelAnalyzer: ErrorLevelAnalyzer
     private let sensitiveContent = SensitiveContentChecker()
     private let nudityDetector = NudityDetector()
     private let clipScorer = CLIPScorer()
@@ -144,6 +149,7 @@ actor FocusAnalyzer {
         ])
         self.laplacian = LaplacianVariance(device: device, commandQueue: queue)
         self.motionBlur = MotionBlurDetector(ciContext: self.ciContext)
+        self.errorLevelAnalyzer = ErrorLevelAnalyzer(ciContext: self.ciContext)
         // DepthEstimator and NudityClassifier eager-load their Core ML
         // models (50 MB+ each, ANE compile ~1–3 s). Skipping that at
         // init keeps app launch under Swift Playgrounds' 5-second
@@ -390,6 +396,7 @@ actor FocusAnalyzer {
         var ageEstimations: [AgePrediction?]
         var quality: QualityScore?
         var aesthetic: QualityScore?
+        var errorLevel: CIImage?
     }
     private var cachedNonMode: NonModeResults?
 
@@ -408,7 +415,7 @@ actor FocusAnalyzer {
         // Step accounting — skips the non-mode stages entirely when
         // the cache hits (mode-only reanalyze).
         let needsNonMode = (cachedNonMode == nil)
-        let nonModeSteps = needsNonMode ? 10 : 0
+        let nonModeSteps = needsNonMode ? 11 : 0
         let totalSteps = nonModeSteps + 1
         var stepsDone = 0
         func tick(_ label: String) {
@@ -458,6 +465,7 @@ actor FocusAnalyzer {
         let ageEstimations = nonMode.ageEstimations
         let quality = nonMode.quality
         let aesthetic = nonMode.aesthetic
+        let errorLevel = nonMode.errorLevel
 
         return Overlays(
             sharpness: sharpness,
@@ -482,7 +490,8 @@ actor FocusAnalyzer {
             painScores: painScores,
             ageEstimations: ageEstimations,
             quality: quality,
-            aesthetic: aesthetic
+            aesthetic: aesthetic,
+            errorLevel: errorLevel
         )
     }
 
@@ -537,6 +546,12 @@ actor FocusAnalyzer {
         let quality = qualityAnalyzer.analyze(image: source, ciContext: ciContext)
         tick("Judging aesthetic quality")
         let aesthetic = aestheticAnalyzer.analyze(image: source, ciContext: ciContext)
+        tick("Analyzing error levels")
+        // Capped at 2K long-side internally; format-agnostic — JPEG /
+        // HEIF take the classic ELA path, PNG / TIFF degrade to a
+        // "JPEG susceptibility" map that still flags compression-
+        // history mismatches for typical pasted edits.
+        let errorLevel = errorLevelAnalyzer.analyze(source)
         tick("Checking sensitive content")
         let sensitive = await sensitiveFuture
 
@@ -551,7 +566,8 @@ actor FocusAnalyzer {
             painScores: painScores,
             ageEstimations: ageEstimations,
             quality: quality,
-            aesthetic: aesthetic
+            aesthetic: aesthetic,
+            errorLevel: errorLevel
         )
     }
 
