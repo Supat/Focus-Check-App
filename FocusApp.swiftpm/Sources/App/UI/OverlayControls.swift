@@ -219,26 +219,35 @@ struct OverlayControls: View {
             .controlSize(.small)
     }
 
+    /// Common install / progress / retry row used by every model
+    /// tier. Branches:
+    ///   - .installed → EmptyView (the row collapses to nothing)
+    ///   - .notInstalled → label + Download button
+    ///   - .downloading → progress bar with percent
+    ///   - .failed → error text + Retry button
+    /// `action` is invoked by both Download and Retry (they're the
+    /// same trigger).
     @ViewBuilder
-    private var depthInstallRow: some View {
-        switch viewModel.depthInstall {
+    private func installRow(
+        state: DepthInstallState,
+        label: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        switch state {
         case .installed:
-            // Depth mode is ready — no row needed.
             EmptyView()
-
         case .notInstalled:
             HStack(spacing: 8) {
                 Image(systemName: "arrow.down.circle")
                     .foregroundStyle(.secondary)
-                Text("Depth model (~50 MB) not installed.")
+                Text(label)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button("Download") { viewModel.downloadDepthModel() }
+                Button("Download", action: action)
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
             }
-
         case .downloading(let progress):
             HStack(spacing: 8) {
                 ProgressView(value: progress)
@@ -247,7 +256,6 @@ struct OverlayControls: View {
                     .foregroundStyle(.secondary)
                     .frame(width: 44, alignment: .trailing)
             }
-
         case .failed(let message):
             HStack(spacing: 8) {
                 Image(systemName: "exclamationmark.triangle")
@@ -257,394 +265,73 @@ struct OverlayControls: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
                 Spacer()
-                Button("Retry") { viewModel.downloadDepthModel() }
+                Button("Retry", action: action)
                     .buttonStyle(.bordered)
                     .controlSize(.small)
             }
         }
     }
 
-    /// NSFW fallback install row. Only visible when SCA is not .simpleInterventions
-    /// or .descriptiveInterventions — there's no point prompting for the fallback
-    /// model if the primary classifier is already available.
+    private var depthInstallRow: some View {
+        installRow(state: viewModel.depthInstall,
+                   label: "Depth model (~50 MB) not installed.",
+                   action: viewModel.downloadDepthModel)
+    }
+
+    /// SCA's primary backend supersedes the NSFW fallback when it's
+    /// active (Communication Safety on iOS, Sensitive Content
+    /// Warning on macOS). No point prompting for a redundant
+    /// install if the primary is already up.
     @ViewBuilder
     private var nsfwInstallRow: some View {
         let sca = viewModel.sensitiveContentAvailability
         let scaActive = sca == .simpleInterventions || sca == .descriptiveInterventions
         if !scaActive {
-            switch viewModel.nsfwInstall {
-            case .installed:
-                EmptyView()
-
-            case .notInstalled:
-                HStack(spacing: 8) {
-                    Image(systemName: "arrow.down.circle")
-                        .foregroundStyle(.secondary)
-                    Text("NSFW fallback model not installed.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Download") { viewModel.downloadNSFWModel() }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                }
-
-            case .downloading(let progress):
-                HStack(spacing: 8) {
-                    ProgressView(value: progress)
-                    Text("\(Int(progress * 100))%")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .frame(width: 44, alignment: .trailing)
-                }
-
-            case .failed(let message):
-                HStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .foregroundStyle(.orange)
-                    Text(message)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                    Spacer()
-                    Button("Retry") { viewModel.downloadNSFWModel() }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                }
-            }
+            installRow(state: viewModel.nsfwInstall,
+                       label: "NSFW fallback model not installed.",
+                       action: viewModel.downloadNSFWModel)
         }
     }
 
-    /// NudeNet per-subject detector install row — parallels `nsfwInstallRow`
-    /// but unconditional: per-subject rating is additive to whichever
-    /// primary classifier is active.
-    @ViewBuilder
     private var nudenetInstallRow: some View {
-        switch viewModel.nudenetInstall {
-        case .installed:
-            EmptyView()
-
-        case .notInstalled:
-            HStack(spacing: 8) {
-                Image(systemName: "arrow.down.circle")
-                    .foregroundStyle(.secondary)
-                Text("Per-subject detector (NudeNet) not installed.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button("Download") { viewModel.downloadNudeNetModel() }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-            }
-
-        case .downloading(let progress):
-            HStack(spacing: 8) {
-                ProgressView(value: progress)
-                Text("\(Int(progress * 100))%")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .frame(width: 44, alignment: .trailing)
-            }
-
-        case .failed(let message):
-            HStack(spacing: 8) {
-                Image(systemName: "exclamationmark.triangle")
-                    .foregroundStyle(.orange)
-                Text(message)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                Spacer()
-                Button("Retry") { viewModel.downloadNudeNetModel() }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-            }
-        }
+        installRow(state: viewModel.nudenetInstall,
+                   label: "Per-subject detector (NudeNet) not installed.",
+                   action: viewModel.downloadNudeNetModel)
     }
 
-    /// CLIP context-scorer install row. Same shape as the other three
-    /// install rows. Unconditional — CLIP is additive to every other
-    /// signal in the pipeline, whether or not SCA / NSFW / NudeNet are
-    /// active.
-    @ViewBuilder
     private var clipInstallRow: some View {
-        switch viewModel.clipInstall {
-        case .installed:
-            EmptyView()
-
-        case .notInstalled:
-            HStack(spacing: 8) {
-                Image(systemName: "arrow.down.circle")
-                    .foregroundStyle(.secondary)
-                Text("Context scorer (CLIP) not installed.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button("Download") { viewModel.downloadCLIPModel() }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-            }
-
-        case .downloading(let progress):
-            HStack(spacing: 8) {
-                ProgressView(value: progress)
-                Text("\(Int(progress * 100))%")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .frame(width: 44, alignment: .trailing)
-            }
-
-        case .failed(let message):
-            HStack(spacing: 8) {
-                Image(systemName: "exclamationmark.triangle")
-                    .foregroundStyle(.orange)
-                Text(message)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                Spacer()
-                Button("Retry") { viewModel.downloadCLIPModel() }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-            }
-        }
+        installRow(state: viewModel.clipInstall,
+                   label: "Context scorer (CLIP) not installed.",
+                   action: viewModel.downloadCLIPModel)
     }
 
-    /// FER+ emotion classifier install row. Drawn with the same
-    /// download / progress / retry variants as the other optional
-    /// models. Unconditional — emotion scoring is additive and
-    /// independent of the other tiers.
-    @ViewBuilder
     private var emotionInstallRow: some View {
-        switch viewModel.emotionInstall {
-        case .installed:
-            EmptyView()
-
-        case .notInstalled:
-            HStack(spacing: 8) {
-                Image(systemName: "arrow.down.circle")
-                    .foregroundStyle(.secondary)
-                Text("Emotion classifier (FER+) not installed.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button("Download") { viewModel.downloadEmotionModel() }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-            }
-
-        case .downloading(let progress):
-            HStack(spacing: 8) {
-                ProgressView(value: progress)
-                Text("\(Int(progress * 100))%")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .frame(width: 44, alignment: .trailing)
-            }
-
-        case .failed(let message):
-            HStack(spacing: 8) {
-                Image(systemName: "exclamationmark.triangle")
-                    .foregroundStyle(.orange)
-                Text(message)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                Spacer()
-                Button("Retry") { viewModel.downloadEmotionModel() }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-            }
-        }
+        installRow(state: viewModel.emotionInstall,
+                   label: "Emotion classifier (FER+) not installed.",
+                   action: viewModel.downloadEmotionModel)
     }
 
-    /// OpenGraphAU / pain detector install row. Same download /
-    /// progress / retry pattern as the other optional model tiers.
-    /// The resulting per-face PSPI score is additive to whatever the
-    /// emotion classifier contributes.
-    @ViewBuilder
     private var painInstallRow: some View {
-        switch viewModel.openGraphAUInstall {
-        case .installed:
-            EmptyView()
-
-        case .notInstalled:
-            HStack(spacing: 8) {
-                Image(systemName: "arrow.down.circle")
-                    .foregroundStyle(.secondary)
-                Text("Pain detector (OpenGraphAU) not installed.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button("Download") { viewModel.downloadOpenGraphAUModel() }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-            }
-
-        case .downloading(let progress):
-            HStack(spacing: 8) {
-                ProgressView(value: progress)
-                Text("\(Int(progress * 100))%")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .frame(width: 44, alignment: .trailing)
-            }
-
-        case .failed(let message):
-            HStack(spacing: 8) {
-                Image(systemName: "exclamationmark.triangle")
-                    .foregroundStyle(.orange)
-                Text(message)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                Spacer()
-                Button("Retry") { viewModel.downloadOpenGraphAUModel() }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-            }
-        }
+        installRow(state: viewModel.openGraphAUInstall,
+                   label: "Pain detector (OpenGraphAU) not installed.",
+                   action: viewModel.downloadOpenGraphAUModel)
     }
 
-    /// Age estimator install row. Same download / progress / retry
-    /// pattern as the other optional model tiers. Output is a
-    /// per-face age readout; gender comes from NudeNet's FACE_*
-    /// branch (not from this model) — SSR-Net is age-only.
-    @ViewBuilder
     private var ageInstallRow: some View {
-        switch viewModel.ageInstall {
-        case .installed:
-            EmptyView()
-
-        case .notInstalled:
-            HStack(spacing: 8) {
-                Image(systemName: "arrow.down.circle")
-                    .foregroundStyle(.secondary)
-                Text("Age estimator not installed.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button("Download") { viewModel.downloadAgeModel() }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-            }
-
-        case .downloading(let progress):
-            HStack(spacing: 8) {
-                ProgressView(value: progress)
-                Text("\(Int(progress * 100))%")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .frame(width: 44, alignment: .trailing)
-            }
-
-        case .failed(let message):
-            HStack(spacing: 8) {
-                Image(systemName: "exclamationmark.triangle")
-                    .foregroundStyle(.orange)
-                Text(message)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                Spacer()
-                Button("Retry") { viewModel.downloadAgeModel() }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-            }
-        }
+        installRow(state: viewModel.ageInstall,
+                   label: "Age estimator not installed.",
+                   action: viewModel.downloadAgeModel)
     }
 
-    /// NIMA technical-quality install row. Full-image score in
-    /// [1, 10]. Same download / progress / retry pattern as the
-    /// other optional tiers.
-    @ViewBuilder
     private var qualityInstallRow: some View {
-        switch viewModel.qualityInstall {
-        case .installed:
-            EmptyView()
-
-        case .notInstalled:
-            HStack(spacing: 8) {
-                Image(systemName: "arrow.down.circle")
-                    .foregroundStyle(.secondary)
-                Text("Quality judge (NIMA) not installed.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button("Download") { viewModel.downloadQualityModel() }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-            }
-
-        case .downloading(let progress):
-            HStack(spacing: 8) {
-                ProgressView(value: progress)
-                Text("\(Int(progress * 100))%")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .frame(width: 44, alignment: .trailing)
-            }
-
-        case .failed(let message):
-            HStack(spacing: 8) {
-                Image(systemName: "exclamationmark.triangle")
-                    .foregroundStyle(.orange)
-                Text(message)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                Spacer()
-                Button("Retry") { viewModel.downloadQualityModel() }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-            }
-        }
+        installRow(state: viewModel.qualityInstall,
+                   label: "Quality judge (NIMA) not installed.",
+                   action: viewModel.downloadQualityModel)
     }
 
-    /// NIMA aesthetic-quality install row. Same architecture as the
-    /// technical variant; different training set (AVA). Scored
-    /// independently and shown as a sibling badge.
-    @ViewBuilder
     private var aestheticInstallRow: some View {
-        switch viewModel.aestheticInstall {
-        case .installed:
-            EmptyView()
-
-        case .notInstalled:
-            HStack(spacing: 8) {
-                Image(systemName: "arrow.down.circle")
-                    .foregroundStyle(.secondary)
-                Text("Aesthetic judge (NIMA) not installed.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button("Download") { viewModel.downloadAestheticModel() }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-            }
-
-        case .downloading(let progress):
-            HStack(spacing: 8) {
-                ProgressView(value: progress)
-                Text("\(Int(progress * 100))%")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .frame(width: 44, alignment: .trailing)
-            }
-
-        case .failed(let message):
-            HStack(spacing: 8) {
-                Image(systemName: "exclamationmark.triangle")
-                    .foregroundStyle(.orange)
-                Text(message)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                Spacer()
-                Button("Retry") { viewModel.downloadAestheticModel() }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-            }
-        }
+        installRow(state: viewModel.aestheticInstall,
+                   label: "Aesthetic judge (NIMA) not installed.",
+                   action: viewModel.downloadAestheticModel)
     }
 }
