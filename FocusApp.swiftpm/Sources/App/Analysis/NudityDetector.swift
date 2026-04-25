@@ -207,14 +207,34 @@ struct NudityDetector {
     /// lowering above. Fix: take the best score per gender and
     /// require female to beat male by a `femaleMargin` before
     /// committing. On a tie (or small female lead), go male.
+    ///
+    /// **Genital override**: any `MALE_GENITALIA_*` detection
+    /// (raw NudeNet `MALE_GENITALIA_EXPOSED` or any of the
+    /// GenitalClassifier sub-classes — COVERED / FLACCID /
+    /// AROUSAL / ORGASM) forces `.male` regardless of the face
+    /// branch. The genital signal is anatomically definitive
+    /// where the face branch is just a noisy classifier; a male-
+    /// genital detection on a body whose face came back
+    /// FACE_FEMALE means the face branch was wrong, not the
+    /// other way around. NudeNet's `FEMALE_GENITALIA_*` labels
+    /// are NOT used for the inverse override — on real-world
+    /// corpora those are too often misclassified male anatomy
+    /// (the training-data bias) to be trusted as a female signal.
     private func inferGender(from detections: [NudityDetection]) -> SubjectGender {
         var bestMale: Float = 0
         var bestFemale: Float = 0
+        var hasMaleGenitalSignal = false
         for det in detections {
             let upper = det.label.uppercased()
             if upper == "FACE_MALE"        { bestMale = max(bestMale, det.confidence) }
             else if upper == "FACE_FEMALE" { bestFemale = max(bestFemale, det.confidence) }
+            else if upper.hasPrefix("MALE_GENITALIA") {
+                hasMaleGenitalSignal = true
+            }
         }
+        // Anatomical override — male genital detection trumps any
+        // face-branch verdict.
+        if hasMaleGenitalSignal { return .male }
         // No face labels attributed → can't commit.
         if bestMale == 0, bestFemale == 0 { return .unknown }
         // Only one head fired → take that one.
