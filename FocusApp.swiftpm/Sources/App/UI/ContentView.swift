@@ -132,37 +132,41 @@ struct ContentView: View {
                                         }
                                 )
                                 // Press-and-hold for 3 s on the image
-                                // toggles the overlay / badges. Apple's
-                                // LongPressGesture has neither a clean
-                                // "fire at minimumDuration while still
-                                // pressed" callback (its onChanged
-                                // fires at touch-down, its onEnded /
-                                // perform fire on release), nor a
-                                // public touch-began event. So we run
-                                // our own timer: a LongPressGesture
-                                // with minimumDuration=0 recognizes on
-                                // touch-down, kicks off a 3 s sleep,
-                                // and the toggle runs after the sleep
-                                // unless the gesture ended early.
+                                // toggles the overlay / badges. Use a
+                                // zero-distance DragGesture as a
+                                // touch-began signal — its onChanged
+                                // fires immediately at touch-down with
+                                // translation ≈ 0, which LongPressGesture
+                                // does not emit reliably in a
+                                // simultaneousGesture context. Movement
+                                // beyond 20 pt cancels the hold (the
+                                // user is panning or scrolling, not
+                                // deliberately holding still).
                                 .simultaneousGesture(
-                                    LongPressGesture(
-                                        minimumDuration: 0,
-                                        maximumDistance: 20
-                                    )
-                                    .onChanged { value in
-                                        guard value, badgeHoldTask == nil else { return }
-                                        badgeHoldTask = Task { @MainActor in
-                                            try? await Task.sleep(for: .seconds(3))
-                                            if !Task.isCancelled {
-                                                viewModel.overlayHidden.toggle()
+                                    DragGesture(minimumDistance: 0)
+                                        .onChanged { value in
+                                            if badgeHoldTask == nil {
+                                                badgeHoldTask = Task { @MainActor in
+                                                    try? await Task.sleep(for: .seconds(3))
+                                                    if !Task.isCancelled {
+                                                        viewModel.overlayHidden.toggle()
+                                                    }
+                                                    badgeHoldTask = nil
+                                                }
                                             }
+                                            let moved = hypot(
+                                                value.translation.width,
+                                                value.translation.height
+                                            )
+                                            if moved > 20 {
+                                                badgeHoldTask?.cancel()
+                                                badgeHoldTask = nil
+                                            }
+                                        }
+                                        .onEnded { _ in
+                                            badgeHoldTask?.cancel()
                                             badgeHoldTask = nil
                                         }
-                                    }
-                                    .onEnded { _ in
-                                        badgeHoldTask?.cancel()
-                                        badgeHoldTask = nil
-                                    }
                                 )
                             nudityLabelOverlay(in: geo.size)
                             nudeSubjectHeadBadges(in: geo.size)
