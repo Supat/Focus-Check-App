@@ -182,7 +182,6 @@ struct ContentView: View {
                                 )
                             nudityLabelOverlay(in: geo.size)
                             nudeSubjectHeadBadges(in: geo.size)
-                            genitalWarningBadges(in: geo.size)
                         }
                         // Contain any zoomed overlays (label boxes, head
                         // badges) to the image area — without this, a
@@ -519,108 +518,84 @@ struct ContentView: View {
         }
     }
 
-    /// Per-detection warning badge placed above each NudeNet
-    /// genital-area detection. Pairs an `exclamationmark.octagon.fill`
-    /// with a `cellularbars` level indicator whose fill encodes
-    /// severity:
+    /// Highest-severity genital warning style for the body at
+    /// `bodyIndex`, or nil when no genital detection is best-
+    /// attributed to that body. Severity ladder:
     ///
-    ///   Bars   Colour   Label match
+    ///   Bars   Colour   Source label
     ///   ────   ──────   ──────────────────────────────────────
-    ///   0/4    grey     COVERED or raw EXPOSED (no sub-class
-    ///                   assigned — also covers FEMALE_*, since
-    ///                   the classifier doesn't refine female
-    ///                   detections)
+    ///   0/4    grey     COVERED (subject not nude) or raw
+    ///                   EXPOSED (no sub-class assigned — also
+    ///                   covers FEMALE_*, since the classifier
+    ///                   doesn't refine female detections)
     ///   1/4    grey     COVERED on a subject whose aggregated
-    ///                   NudityLevel is `.nude` — the genital
-    ///                   region is clothed but other regions
-    ///                   aren't, worth a low-grade signal
+    ///                   NudityLevel is `.nude` (genitals clothed,
+    ///                   other regions aren't — low-grade signal)
     ///   2/4    yellow   MALE_GENITALIA_FLACCID
     ///   3/4    orange   MALE_GENITALIA_AROUSAL
     ///   4/4    red      MALE_GENITALIA_ORGASM
     ///
-    /// Suppressed when the Labels toggle (`showNudityLabels`) is
-    /// on — the per-detection bounding-box overlay already
-    /// annotates the same regions, and stacking both gets
-    /// visually noisy. Also suppressed by the press-and-hold
-    /// compare gesture via `overlayHidden`. Mirrors the same
-    /// labels-active suppression `nudeSubjectHeadBadges` uses.
-    @ViewBuilder
-    private func genitalWarningBadges(in size: CGSize) -> some View {
-        let labelsActive = viewModel.showNudityLabels
-            && !viewModel.nudityDetections.isEmpty
-        if !viewModel.overlayHidden,
-           !labelsActive,
-           !viewModel.nudityDetections.isEmpty,
-           let extent = viewModel.sourceImage?.extent,
-           extent.width > 0, extent.height > 0 {
-            let warnings = viewModel.nudityDetections.filter { det in
-                det.label.uppercased().contains("GENITALIA")
-            }
-            ForEach(Array(warnings.enumerated()), id: \.offset) { _, det in
-                let r = viewRect(for: det.rect, source: extent, in: size)
-                let style = genitalWarningStyle(
-                    for: det.label,
-                    subjectLevel: subjectLevel(for: det)
-                )
-                HStack(spacing: 2) {
-                    Image(systemName: "exclamationmark.octagon.fill")
-                    Image(systemName: "cellularbars", variableValue: style.bars)
-                }
-                .font(.caption2)
-                .foregroundStyle(style.color)
-                .padding(.horizontal, 4)
-                .padding(.vertical, 2)
-                .liquidBadgeBackground(in: Capsule())
-                .position(x: r.midX, y: max(8, r.minY - 12))
-                .allowsHitTesting(false)
-            }
-        }
-    }
-
-    /// Cellularbars `variableValue` (0–1) + foreground colour for
-    /// the genital warning badge. Severity ladder is detection
-    /// label → fill fraction; the all-male classifier's exposed
-    /// sub-classes win over everything else. A COVERED detection
-    /// on a subject whose aggregated NudityLevel reached `.nude`
-    /// gets a low-grade 1/4-bar signal — the genital region is
-    /// clothed but other regions are exposed, which is worth
-    /// surfacing.
-    private func genitalWarningStyle(
-        for label: String,
-        subjectLevel: NudityLevel
-    ) -> (bars: Double, color: Color) {
-        let upper = label.uppercased()
-        if upper.contains("ORGASM")  { return (1.00, .red) }
-        if upper.contains("AROUSAL") { return (0.75, .orange) }
-        if upper.contains("FLACCID") { return (0.50, .yellow) }
-        if upper.contains("COVERED") && subjectLevel == .nude {
-            return (0.25, .gray)
-        }
-        return (0.00, .gray)
-    }
-
-    /// Find the `NudityLevel` of the body that owns a given
-    /// detection, by max intersection area against the per-body
-    /// rectangles. Returns `.none` when no body overlaps (loose
-    /// detections in dead space) or when the per-body levels
-    /// haven't been populated yet (NudeNet model not installed).
-    private func subjectLevel(for det: NudityDetection) -> NudityLevel {
+    /// Body attribution mirrors NudityDetector.analyze() — max
+    /// intersection area wins. When multiple genital detections
+    /// land on the same body the highest-severity verdict is
+    /// returned so the badge encodes the worst-case state.
+    private func genitalWarning(
+        forBodyAt bodyIndex: Int
+    ) -> (bars: Double, color: Color)? {
         guard !viewModel.bodyRectangles.isEmpty,
-              viewModel.nudityLevels.count == viewModel.bodyRectangles.count
-        else { return .none }
-        var bestIdx: Int? = nil
-        var bestArea: CGFloat = 0
-        for (i, body) in viewModel.bodyRectangles.enumerated() {
-            let inter = body.intersection(det.rect)
-            guard !inter.isNull else { continue }
-            let area = inter.width * inter.height
-            if area > bestArea {
-                bestArea = area
-                bestIdx = i
+              bodyIndex < viewModel.bodyRectangles.count
+        else { return nil }
+        let subjectLevel = bodyIndex < viewModel.nudityLevels.count
+            ? viewModel.nudityLevels[bodyIndex]
+            : .none
+
+        func style(for label: String) -> (bars: Double, color: Color) {
+            let upper = label.uppercased()
+            if upper.contains("ORGASM")  { return (1.00, .red) }
+            if upper.contains("AROUSAL") { return (0.75, .orange) }
+            if upper.contains("FLACCID") { return (0.50, .yellow) }
+            if upper.contains("COVERED") && subjectLevel == .nude {
+                return (0.25, .gray)
             }
+            return (0.00, .gray)
         }
-        if let idx = bestIdx { return viewModel.nudityLevels[idx] }
-        return .none
+
+        var top: (bars: Double, color: Color)? = nil
+        for det in viewModel.nudityDetections
+        where det.label.uppercased().contains("GENITALIA") {
+            var bestIdx: Int? = nil
+            var bestArea: CGFloat = 0
+            for (i, b) in viewModel.bodyRectangles.enumerated() {
+                let inter = b.intersection(det.rect)
+                guard !inter.isNull else { continue }
+                let area = inter.width * inter.height
+                if area > bestArea {
+                    bestArea = area
+                    bestIdx = i
+                }
+            }
+            guard bestIdx == bodyIndex else { continue }
+            let s = style(for: det.label)
+            if (top?.bars ?? -1) < s.bars { top = s }
+        }
+        return top
+    }
+
+    /// Compact warning chip surfaced inside `nudeSubjectHeadBadges`
+    /// — exclamation octagon + cellularbars whose fill encodes
+    /// severity. See `genitalWarning(forBodyAt:)` for the ladder.
+    private func genitalWarningChip(
+        bars: Double, color: Color
+    ) -> some View {
+        HStack(spacing: 2) {
+            Image(systemName: "exclamationmark.octagon.fill")
+            Image(systemName: "cellularbars", variableValue: bars)
+        }
+        .font(.caption2)
+        .foregroundStyle(color)
+        .padding(.horizontal, 4)
+        .padding(.vertical, 2)
+        .liquidBadgeBackground(in: Capsule())
     }
 
     /// Floating per-subject warning badge placed above each body whose
@@ -654,12 +629,15 @@ struct ContentView: View {
                 let gender = index < viewModel.nudityGenders.count
                     ? viewModel.nudityGenders[index]
                     : .unknown
+                let warning = genitalWarning(forBodyAt: index)
                 // Badge renders when any of the per-subject signals
                 // have something to say — covered+ nudity, an emotion
-                // prediction, a pain score, or an age estimate. Safe
+                // prediction, a pain score, an age estimate, or a
+                // genital detection attributed to this body. Safe
                 // clothed photos without any of these stay unadorned.
                 if level >= .covered || prediction != nil
-                    || painForBody(body) != nil || age != nil {
+                    || painForBody(body) != nil || age != nil
+                    || warning != nil {
                     let rect = viewRect(for: body, source: extent, in: size)
                     let pain = painForBody(body)
                     VStack(spacing: 4) {
@@ -669,6 +647,16 @@ struct ContentView: View {
                             emotion: emotion,
                             age: age
                         )
+                        // Genital warning chip — sits directly under
+                        // the head badge so the severity readout for
+                        // the most explicit anatomy on this subject
+                        // is visible before the optional PAD meter.
+                        if let warning {
+                            genitalWarningChip(
+                                bars: warning.bars,
+                                color: warning.color
+                            )
+                        }
                         // PAD + Pain live in the same meter row and
                         // share the single showPADMeter toggle.
                         if viewModel.showPADMeter
