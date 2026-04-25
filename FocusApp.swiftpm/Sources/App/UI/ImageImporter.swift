@@ -18,17 +18,23 @@ struct ImageImporter: View {
 
     var body: some View {
         Menu {
+            // Keyboard shortcuts attached here register with the
+            // system even while the menu is closed — iPadOS lists
+            // them in the ⌘-hold discoverability sheet, and an
+            // attached hardware keyboard fires them globally.
             Button {
                 showingPhotosPicker = true
             } label: {
                 Label("Photo Library", systemImage: "photo.stack")
             }
+            .keyboardShortcut("o", modifiers: .command)
 
             Button {
                 showingFileImporter = true
             } label: {
                 Label("Choose File…", systemImage: "folder")
             }
+            .keyboardShortcut("o", modifiers: [.command, .shift])
         } label: {
             if isLoading {
                 ProgressView().controlSize(.small)
