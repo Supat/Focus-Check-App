@@ -423,85 +423,11 @@ actor FocusAnalyzer {
         if let cached = cachedNonMode {
             nonMode = cached
         } else {
-            // Classifier runs on an independent compute path (SCA or the
-            // NSFW MLModel); kick it off early so its 100–300 ms latency
-            // overlaps with the rest of the non-mode pipeline.
-            async let sensitiveFuture = sensitiveContent.check(image: source, ciContext: ciContext)
-
-            tick("Detecting motion blur")
-            let motionReport = motionBlur.detect(in: source)
-            let motionOverlay = motionBlur.detectMap(in: source).flatMap {
-                upscale(image: $0, toExtentOf: source)
-            }
-            tick("Running Vision")
-            let vision = runVision(in: source)
-            tick("Classifying nudity")
-            let nudity = nudityDetector.analyze(
-                image: source, bodies: vision.bodies, ciContext: ciContext
-            )
-            tick("Scoring context")
-            // Zero-shot context scoring via CLIP. Returns [] when the
-            // model archive isn't installed so downstream UI just hides
-            // the Context badge.
-            let clipMatches = clipScorer.score(image: source, ciContext: ciContext)
-            tick("Classifying emotions")
-            // Per-face emotion classification via FER+. Same caching +
-            // empty-when-missing contract as the other optional tiers.
-            let faceEmotions = emotionClassifier.classify(
-                faces: vision.faces,
-                rolls: vision.faceRolls,
-                in: source,
-                ciContext: ciContext
-            )
-            tick("Estimating pain")
-            // Per-face PSPI via OpenGraphAU + Vision-derived AU43.
-            // Same empty-when-missing contract as the emotion tier.
-            let painScores = painDetector.classify(
-                faces: vision.faces,
-                rolls: vision.faceRolls,
-                eyeOpenness: vision.faceEyeOpenness,
-                in: source,
-                ciContext: ciContext
-            )
-            tick("Estimating age")
-            // Per-face age via SSR-Net. Empty array when the model
-            // isn't installed.
-            let ageEstimations = ageEstimator.estimate(
-                faces: vision.faces,
-                rolls: vision.faceRolls,
-                in: source,
-                ciContext: ciContext
-            )
-            tick("Judging technical quality")
-            // Whole-image NIMA quality score. nil when not installed.
-            let quality = qualityAnalyzer.analyze(image: source, ciContext: ciContext)
-            tick("Judging aesthetic quality")
-            // NIMA aesthetic variant — composition / mood / subject.
-            let aesthetic = aestheticAnalyzer.analyze(image: source, ciContext: ciContext)
-            tick("Checking sensitive content")
-            let sensitive = await sensitiveFuture
-
-            let computed = NonModeResults(
-                motion: motionReport,
-                motionOverlay: motionOverlay,
-                sensitive: sensitive,
-                vision: vision,
-                nudity: nudity,
-                clipMatches: clipMatches,
-                faceEmotions: faceEmotions,
-                painScores: painScores,
-                ageEstimations: ageEstimations,
-                quality: quality,
-                aesthetic: aesthetic
-            )
+            let computed = await computeNonModeResults(source: source, tick: tick)
             cachedNonMode = computed
             nonMode = computed
         }
         try Task.checkCancellation()
-
-        var sharpness: CIImage?
-        var depth: CIImage?
-        var focalPlane: Float?
 
         let modeLabel: String
         switch mode {
@@ -510,28 +436,10 @@ actor FocusAnalyzer {
         case .hybrid:    modeLabel = "Computing sharpness + depth"
         }
         tick(modeLabel)
-
-        switch mode {
-        case .sharpness:
-            let tex = try laplacian.sharpnessMap(from: source, ciContext: ciContext)
-            sharpness = upscale(texture: tex, toExtentOf: source)
-
-        case .depth:
-            guard let estimator = depthEstimator() else { throw AnalysisError.modelMissing }
-            let map = try estimator.depthMap(for: source, ciContext: ciContext)
-            depth = upscale(image: map, toExtentOf: source)
-
-        case .hybrid:
-            let tex = try laplacian.sharpnessMap(from: source, ciContext: ciContext)
-            sharpness = upscale(texture: tex, toExtentOf: source)
-            if let estimator = depthEstimator() {
-                let map = try estimator.depthMap(for: source, ciContext: ciContext)
-                depth = upscale(image: map, toExtentOf: source)
-                if let s = sharpness, let d = depth {
-                    focalPlane = computeFocalPlane(sharpness: s, depth: d)
-                }
-            }
-        }
+        let modeResult = try computeModeStage(mode: mode, source: source)
+        let sharpness = modeResult.sharpness
+        let depth = modeResult.depth
+        let focalPlane = modeResult.focalPlane
         progress?(1.0, nil)
 
         let vision = nonMode.vision
@@ -576,6 +484,106 @@ actor FocusAnalyzer {
             quality: quality,
             aesthetic: aesthetic
         )
+    }
+
+    /// Run every analyze stage that doesn't depend on the chosen
+    /// AnalysisMode. Result is cached on `self` so subsequent
+    /// reanalyze() calls only repeat the sharpness / depth stage.
+    /// Sensitive-content classification is launched first so its
+    /// 100–300 ms latency overlaps with the rest of the pipeline.
+    private func computeNonModeResults(
+        source: CIImage,
+        tick: (String) -> Void
+    ) async -> NonModeResults {
+        async let sensitiveFuture = sensitiveContent.check(image: source, ciContext: ciContext)
+
+        tick("Detecting motion blur")
+        let motionReport = motionBlur.detect(in: source)
+        let motionOverlay = motionBlur.detectMap(in: source).flatMap {
+            upscale(image: $0, toExtentOf: source)
+        }
+        tick("Running Vision")
+        let vision = runVision(in: source)
+        tick("Classifying nudity")
+        let nudity = nudityDetector.analyze(
+            image: source, bodies: vision.bodies, ciContext: ciContext
+        )
+        tick("Scoring context")
+        // Zero-shot context scoring via CLIP. Returns [] when the
+        // model archive isn't installed so downstream UI just hides
+        // the Context badge.
+        let clipMatches = clipScorer.score(image: source, ciContext: ciContext)
+        tick("Classifying emotions")
+        // Per-face emotion classification via FER+. Same caching +
+        // empty-when-missing contract as the other optional tiers.
+        let faceEmotions = emotionClassifier.classify(
+            faces: vision.faces, rolls: vision.faceRolls,
+            in: source, ciContext: ciContext
+        )
+        tick("Estimating pain")
+        // Per-face PSPI via OpenGraphAU + Vision-derived AU43.
+        let painScores = painDetector.classify(
+            faces: vision.faces, rolls: vision.faceRolls,
+            eyeOpenness: vision.faceEyeOpenness,
+            in: source, ciContext: ciContext
+        )
+        tick("Estimating age")
+        // Per-face age via SSR-Net.
+        let ageEstimations = ageEstimator.estimate(
+            faces: vision.faces, rolls: vision.faceRolls,
+            in: source, ciContext: ciContext
+        )
+        tick("Judging technical quality")
+        let quality = qualityAnalyzer.analyze(image: source, ciContext: ciContext)
+        tick("Judging aesthetic quality")
+        let aesthetic = aestheticAnalyzer.analyze(image: source, ciContext: ciContext)
+        tick("Checking sensitive content")
+        let sensitive = await sensitiveFuture
+
+        return NonModeResults(
+            motion: motionReport,
+            motionOverlay: motionOverlay,
+            sensitive: sensitive,
+            vision: vision,
+            nudity: nudity,
+            clipMatches: clipMatches,
+            faceEmotions: faceEmotions,
+            painScores: painScores,
+            ageEstimations: ageEstimations,
+            quality: quality,
+            aesthetic: aesthetic
+        )
+    }
+
+    /// Compute the mode-specific overlays (sharpness, depth, focal
+    /// plane). Hybrid degrades gracefully to sharpness-only when the
+    /// depth model isn't installed; pure-Depth throws so the caller
+    /// can surface the missing-model error.
+    private func computeModeStage(
+        mode: AnalysisMode, source: CIImage
+    ) throws -> (sharpness: CIImage?, depth: CIImage?, focalPlane: Float?) {
+        switch mode {
+        case .sharpness:
+            let tex = try laplacian.sharpnessMap(from: source, ciContext: ciContext)
+            return (upscale(texture: tex, toExtentOf: source), nil, nil)
+        case .depth:
+            guard let estimator = depthEstimator() else { throw AnalysisError.modelMissing }
+            let map = try estimator.depthMap(for: source, ciContext: ciContext)
+            return (nil, upscale(image: map, toExtentOf: source), nil)
+        case .hybrid:
+            let tex = try laplacian.sharpnessMap(from: source, ciContext: ciContext)
+            let sharpness = upscale(texture: tex, toExtentOf: source)
+            guard let estimator = depthEstimator() else {
+                return (sharpness, nil, nil)
+            }
+            let map = try estimator.depthMap(for: source, ciContext: ciContext)
+            let depth = upscale(image: map, toExtentOf: source)
+            let focalPlane: Float? = {
+                guard let s = sharpness, let d = depth else { return nil }
+                return computeFocalPlane(sharpness: s, depth: d)
+            }()
+            return (sharpness, depth, focalPlane)
+        }
     }
 
     /// Bundle of all Vision-derived rectangles and bars produced in one pass.
@@ -666,31 +674,11 @@ actor FocusAnalyzer {
             }
         }
 
-        // Full-body rectangles. VNDetectHumanRectanglesRequest frequently
-        // misses subjects in images where it *should* catch them — we
-        // augment below using pose-derived bounding boxes so NudeNet
-        // has a proper per-subject list.
-        for obs in bodyRects.results ?? [] {
-            results.bodies.append(Self.denormalize(obs.boundingBox, in: extent))
-        }
-        // Merge in pose-derived bodies that don't overlap an existing
-        // rect — catches subjects the body-rect request dropped. Dedup
-        // uses IoU against the smaller box (≥ 0.3) so tight crops of one
-        // person don't register as two.
-        for obs in bodyPose.results ?? [] {
-            guard let rect = Self.bodyRect(from: obs, in: extent) else { continue }
-            let overlapsExisting = results.bodies.contains { existing in
-                let inter = existing.intersection(rect)
-                guard !inter.isNull else { return false }
-                let interArea = inter.width * inter.height
-                let smallerArea = min(existing.width * existing.height,
-                                      rect.width * rect.height)
-                return smallerArea > 0 && interArea / smallerArea > 0.3
-            }
-            if !overlapsExisting {
-                results.bodies.append(rect)
-            }
-        }
+        results.bodies = Self.mergedBodies(
+            rects: bodyRects.results ?? [],
+            poses: bodyPose.results ?? [],
+            in: extent
+        )
 
         // Groin + chest from the shared pose observations. Pair each 2D
         // observation with the corresponding 3D one by index so the
@@ -704,23 +692,57 @@ actor FocusAnalyzer {
             if let c = Self.chestRect(from: obs, in: extent) { results.chests.append(c) }
         }
 
-        // Scale the mask up to the source extent so the compositor can feed
-        // it straight into blendWithMask. The pixel buffer is smaller than
-        // the source at .balanced quality; `samplingNearest()` preserves
-        // the block-aligned boundary instead of bilinearly smoothing it
-        // into a feathered edge, which keeps the silhouette visibly jagged.
-        if let mask = personSeg.results?.first?.pixelBuffer {
-            let maskImage = CIImage(cvPixelBuffer: mask).samplingNearest()
-            let sx = extent.width / maskImage.extent.width
-            let sy = extent.height / maskImage.extent.height
-            let scaled = maskImage.transformed(by: CGAffineTransform(scaleX: sx, y: sy))
-            let placed = scaled.transformed(
-                by: CGAffineTransform(translationX: extent.minX - scaled.extent.minX,
-                                      y: extent.minY - scaled.extent.minY)
-            )
-            results.personMask = placed.cropped(to: extent)
+        if let buffer = personSeg.results?.first?.pixelBuffer {
+            results.personMask = Self.scalePersonMask(buffer, to: extent)
         }
         return results
+    }
+
+    /// Union the body-rect detector's results with pose-derived
+    /// bodies, deduplicating using IoU against the smaller box
+    /// (≥ 0.3) so tight crops of one person don't register as two.
+    /// VNDetectHumanRectanglesRequest frequently misses subjects in
+    /// images where it *should* catch them, so the pose-derived
+    /// fallback covers NudeNet's per-subject list reliably.
+    private static func mergedBodies(
+        rects: [VNHumanObservation],
+        poses: [VNHumanBodyPoseObservation],
+        in extent: CGRect
+    ) -> [CGRect] {
+        var bodies: [CGRect] = rects.map { Self.denormalize($0.boundingBox, in: extent) }
+        for obs in poses {
+            guard let rect = Self.bodyRect(from: obs, in: extent) else { continue }
+            let overlapsExisting = bodies.contains { existing in
+                let inter = existing.intersection(rect)
+                guard !inter.isNull else { return false }
+                let interArea = inter.width * inter.height
+                let smallerArea = min(existing.width * existing.height,
+                                      rect.width * rect.height)
+                return smallerArea > 0 && interArea / smallerArea > 0.3
+            }
+            if !overlapsExisting {
+                bodies.append(rect)
+            }
+        }
+        return bodies
+    }
+
+    /// Scale Vision's segmentation mask up to the source extent so the
+    /// compositor can feed it straight into blendWithMask. The pixel
+    /// buffer is smaller than the source at .balanced quality;
+    /// `samplingNearest()` preserves the block-aligned boundary
+    /// instead of bilinearly smoothing it into a feathered edge,
+    /// which keeps the silhouette visibly jagged.
+    private static func scalePersonMask(_ buffer: CVPixelBuffer, to extent: CGRect) -> CIImage {
+        let maskImage = CIImage(cvPixelBuffer: buffer).samplingNearest()
+        let sx = extent.width / maskImage.extent.width
+        let sy = extent.height / maskImage.extent.height
+        let scaled = maskImage.transformed(by: CGAffineTransform(scaleX: sx, y: sy))
+        let placed = scaled.transformed(
+            by: CGAffineTransform(translationX: extent.minX - scaled.extent.minX,
+                                  y: extent.minY - scaled.extent.minY)
+        )
+        return placed.cropped(to: extent)
     }
 
     /// Derive one oriented eye bar from a face landmarks observation.
