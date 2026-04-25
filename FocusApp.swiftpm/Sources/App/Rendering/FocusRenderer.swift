@@ -265,9 +265,6 @@ final class FocusRenderer {
         let motionOverlay = inputs.motion.map {
             fit(image: $0, into: drawableSize, zoom: zoomScale, anchor: zoomAnchor, pan: zoomPan)
         }
-        let elaOverlay = inputs.errorLevel.map {
-            fit(image: $0, into: drawableSize, zoom: zoomScale, anchor: zoomAnchor, pan: zoomPan)
-        }
 
         let threshold = CGFloat(inputs.threshold)
         let tint = inputs.tint
@@ -292,24 +289,58 @@ final class FocusRenderer {
             return motionComposite(base: fitted, motion: motionOverlay,
                                    threshold: threshold, tint: tint)
         case .errorLevel:
-            return errorLevelComposite(base: fitted, ela: elaOverlay,
-                                       threshold: threshold)
+            return errorLevelComposite(
+                inputs: inputs, gates: gates,
+                drawableSize: drawableSize,
+                zoomScale: zoomScale, zoomAnchor: zoomAnchor, zoomPan: zoomPan,
+                threshold: threshold, fallback: fitted
+            )
         }
     }
 
-    /// Display the ELA diff. Threshold scrubs gain so the user
-    /// can balance signal vs. sensor-noise floor — diffs are
-    /// typically tiny (linear values < 0.05) so without gain the
-    /// result reads as near-black; with gain, mismatched-history
-    /// regions stand out as brighter pixels. Falls back to the
-    /// fitted source when ELA hasn't completed yet (rare; covers
-    /// the moment between style change and the first analyse
-    /// pass on a freshly-loaded image).
-    private static func errorLevelComposite(base: CIImage, ela: CIImage?,
-                                            threshold: CGFloat) -> CIImage {
-        guard let ela else { return base }
+    /// Display the ELA diff at the same fit / zoom / mosaic state
+    /// as the source-photo path. ELA is computed at a 2K long-side
+    /// cap so we first scale it back up into source-extent coords;
+    /// this lets the mosaic dispatch reuse the same gated regions
+    /// (which are in source extent) so eyes / faces / groins / etc.
+    /// are obscured in ELA mode the same way they are in the photo
+    /// view. Threshold scrubs gain so the user can balance signal
+    /// vs. sensor-noise floor — diffs are typically tiny (linear
+    /// values < 0.05) so without gain the result reads near-black,
+    /// with gain mismatched-history regions stand out as brighter
+    /// pixels. Falls back to the fitted source when ELA hasn't
+    /// completed yet (rare).
+    private static func errorLevelComposite(
+        inputs: FocusCompositeInputs,
+        gates: MosaicGates,
+        drawableSize: CGSize,
+        zoomScale: CGFloat,
+        zoomAnchor: CGPoint,
+        zoomPan: CGSize,
+        threshold: CGFloat,
+        fallback: CIImage
+    ) -> CIImage {
+        guard let ela = inputs.errorLevel else { return fallback }
+
+        // Scale ELA back into source-extent coords so the mosaic
+        // dispatch (which operates on source-extent regions) can
+        // be reused unchanged. CI's scale + translate is lazy —
+        // the actual upscale is folded into the same render the
+        // GPU does for the final composite.
+        let sourceExtent = inputs.source.extent
+        let scaleX = sourceExtent.width / ela.extent.width
+        let scaleY = sourceExtent.height / ela.extent.height
+        let elaInSrc = ela
+            .transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
+            .transformed(by: CGAffineTransform(
+                translationX: sourceExtent.minX - ela.extent.minX * scaleX,
+                y: sourceExtent.minY - ela.extent.minY * scaleY
+            ))
+            .cropped(to: sourceExtent)
+
+        // Apply gain in source coords.
         let gain: CGFloat = 5 + threshold * 45
-        return ela.applyingFilter("CIColorMatrix", parameters: [
+        let gained = elaInSrc.applyingFilter("CIColorMatrix", parameters: [
             "inputRVector": CIVector(x: gain, y: 0, z: 0, w: 0),
             "inputGVector": CIVector(x: 0, y: gain, z: 0, w: 0),
             "inputBVector": CIVector(x: 0, y: 0, z: gain, w: 0),
@@ -319,7 +350,24 @@ final class FocusRenderer {
             "inputMinComponents": CIVector(x: 0, y: 0, z: 0, w: 0),
             "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1)
         ])
-        .cropped(to: base.extent)
+        .cropped(to: sourceExtent)
+
+        // Hand the gained ELA to the mosaic dispatch in place of
+        // the original source. blackBarOverlay / regionMosaic /
+        // silhouetteMosaic all just read pixels from the source
+        // they're given, so the mosaic'd regions land on top of
+        // the ELA the same way they do on the photo.
+        let elaBase: CIImage
+        if inputs.mosaic {
+            var modified = inputs
+            modified.source = gained
+            elaBase = mosaicked(inputs: modified, gates: gates)
+        } else {
+            elaBase = gained
+        }
+
+        return fit(image: elaBase, into: drawableSize,
+                   zoom: zoomScale, anchor: zoomAnchor, pan: zoomPan)
     }
 
     // MARK: - Mosaic dispatch
