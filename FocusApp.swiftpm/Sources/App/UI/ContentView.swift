@@ -538,14 +538,18 @@ struct ContentView: View {
     ///   3/4    orange   MALE_GENITALIA_AROUSAL
     ///   4/4    red      MALE_GENITALIA_ORGASM
     ///
-    /// Independent of the Labels toggle — the badge always
-    /// surfaces when a genital detection is present so the viewer
-    /// can spot the flagged regions and their severity even with
-    /// the bounding-box overlay off. Suppressed by the press-and-
-    /// hold compare gesture via `overlayHidden`.
+    /// Suppressed when the Labels toggle (`showNudityLabels`) is
+    /// on — the per-detection bounding-box overlay already
+    /// annotates the same regions, and stacking both gets
+    /// visually noisy. Also suppressed by the press-and-hold
+    /// compare gesture via `overlayHidden`. Mirrors the same
+    /// labels-active suppression `nudeSubjectHeadBadges` uses.
     @ViewBuilder
     private func genitalWarningBadges(in size: CGSize) -> some View {
+        let labelsActive = viewModel.showNudityLabels
+            && !viewModel.nudityDetections.isEmpty
         if !viewModel.overlayHidden,
+           !labelsActive,
            !viewModel.nudityDetections.isEmpty,
            let extent = viewModel.sourceImage?.extent,
            extent.width > 0, extent.height > 0 {
