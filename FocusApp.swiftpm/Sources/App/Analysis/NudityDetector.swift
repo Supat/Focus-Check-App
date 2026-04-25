@@ -77,12 +77,23 @@ struct NudityAnalysis: Sendable {
 /// image, then attributes each detection to a body rectangle via
 /// intersection area so we can surface a per-subject rating without a
 /// classifier inference per person.
+///
+/// When the optional GenitalClassifier model is installed, every
+/// detection in `{MALE_GENITALIA_EXPOSED, FEMALE_GENITALIA_COVERED,
+/// FEMALE_GENITALIA_EXPOSED}` is re-classified into one of the five
+/// finer sub-classes (`MALE_GENITALIA_COVERED / FLACCID / AROUSAL /
+/// ORGASM` or `OTHER` → drop). Detections in BUTTOCKS_* / ANUS_* /
+/// other classes pass through unchanged.
 struct NudityDetector {
     /// Defer touching `NudityClassifier.shared` until the first detection
     /// run — the shared static loads a 10-MB+ Core ML model, which would
     /// otherwise synchronously block app launch when the analyzer is
     /// constructed during `FocusViewModel.init`.
     private var classifier: NudityClassifier? { NudityClassifier.shared }
+    /// Optional downstream classifier that re-labels NudeNet's
+    /// genital-region detections. Nil-safe: when not installed the
+    /// override pass is skipped and NudeNet's labels flow through.
+    private let genitalClassifier = GenitalClassifier()
 
     /// True when the NudeNet model is installed on disk. Mirrors the
     /// disk-presence check used by the other models — resolves without
@@ -93,7 +104,22 @@ struct NudityDetector {
     /// prediction — used by `FocusAnalyzer.prewarmModels` to absorb
     /// the compile cost before the user's first analyze tap. Returns
     /// true when the classifier is actually loaded.
-    func warm() -> Bool { classifier != nil }
+    func warm() -> Bool {
+        let n = classifier != nil
+        // Prime the genital classifier alongside; nil-safe when its
+        // model isn't installed.
+        _ = genitalClassifier.warm()
+        return n
+    }
+
+    /// NudeNet labels the genital classifier consumes. Only detections
+    /// in this set go through the override pass; everything else
+    /// (BUTTOCKS_*, ANUS_*, FACE_*, etc.) passes through unchanged.
+    private static let reclassifiableLabels: Set<String> = [
+        "MALE_GENITALIA_EXPOSED",
+        "FEMALE_GENITALIA_COVERED",
+        "FEMALE_GENITALIA_EXPOSED",
+    ]
 
     /// Run the detector and return per-subject levels plus the raw
     /// per-part detections (for optional UI overlay). Returns empty
@@ -118,10 +144,18 @@ struct NudityDetector {
         // inferences per image. Global NMS on the union drops
         // duplicates that landed in the overlap region between two
         // neighboring crops.
-        let detections = classifier.detect(
+        let rawDetections = classifier.detect(
             in: image,
             bodyCrops: bodies,
             ciContext: ciContext
+        )
+        // Override pass: re-label genital-region detections via the
+        // GenitalClassifier (when installed). OTHER verdicts drop the
+        // detection entirely. NudeNet's other classes pass through
+        // unchanged, so this never affects buttocks / anus / face /
+        // breast / etc. labels.
+        let detections = applyGenitalOverride(
+            rawDetections, in: image, ciContext: ciContext
         )
         guard !detections.isEmpty else {
             return NudityAnalysis(
@@ -195,7 +229,11 @@ struct NudityDetector {
 
     /// Map a bag of detections attributed to one subject into a level.
     /// Rules:
-    /// - genitalia / anus exposure → `.nude`
+    /// - any of the GenitalClassifier's exposed sub-classes
+    ///   (FLACCID / AROUSAL / ORGASM) or genitalia / anus exposure
+    ///   from raw NudeNet → `.nude`
+    /// - MALE_GENITALIA_COVERED → `.covered` (treated like other
+    ///   COVERED labels)
     /// - ≥ 2 exposed labels → `.nude`
     /// - 1 exposed label → `.partial`
     /// - only covered labels → `.covered`
@@ -209,6 +247,21 @@ struct NudityDetector {
 
         for det in detections {
             let upper = det.label.uppercased()
+            // GenitalClassifier sub-classes don't contain the
+            // EXPOSED / COVERED keywords; key them explicitly so
+            // FLACCID / AROUSAL / ORGASM count as exposed-genital
+            // and COVERED counts as covered.
+            if upper == "MALE_GENITALIA_FLACCID"
+                || upper == "MALE_GENITALIA_AROUSAL"
+                || upper == "MALE_GENITALIA_ORGASM" {
+                exposedCount += 1
+                hasCritical = true
+                continue
+            }
+            if upper == "MALE_GENITALIA_COVERED" {
+                hasCovered = true
+                continue
+            }
             if upper.contains("COVERED") {
                 hasCovered = true
             } else if upper.contains("EXPOSED") {
@@ -223,6 +276,48 @@ struct NudityDetector {
         if exposedCount == 1 { return .partial }
         if hasCovered { return .covered }
         return .none
+    }
+
+    /// Run each genital-region detection through the GenitalClassifier
+    /// and rewrite its label to one of MGC / MGF / MGA / MGO. OTHER
+    /// verdicts drop the detection (treat as NudeNet false positive).
+    /// Detections outside the reclassifiable set pass through
+    /// unchanged. No-op when the classifier model isn't installed —
+    /// raw NudeNet labels flow through and the rest of the pipeline
+    /// (mosaic / aggregate / inferGender) handles them as before.
+    private func applyGenitalOverride(
+        _ detections: [NudityDetection],
+        in image: CIImage,
+        ciContext: CIContext
+    ) -> [NudityDetection] {
+        guard genitalClassifier.isReady else { return detections }
+        var out: [NudityDetection] = []
+        out.reserveCapacity(detections.count)
+        for det in detections {
+            guard Self.reclassifiableLabels.contains(det.label) else {
+                out.append(det)
+                continue
+            }
+            guard let verdict = genitalClassifier.classify(
+                rect: det.rect, in: image, ciContext: ciContext
+            ) else {
+                // Below confidence floor or load failure — keep the
+                // original NudeNet label rather than guessing.
+                out.append(det)
+                continue
+            }
+            if verdict.subClass == .other {
+                // Drop. The classifier is confident this isn't
+                // genital anatomy — treat it as a false positive.
+                continue
+            }
+            out.append(NudityDetection(
+                rect: det.rect,
+                label: verdict.subClass.rawValue,
+                confidence: verdict.confidence
+            ))
+        }
+        return out
     }
 }
 

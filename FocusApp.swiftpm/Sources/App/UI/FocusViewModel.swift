@@ -70,6 +70,7 @@ struct InstallStates: Equatable {
     var age: DepthInstallState = .notInstalled
     var quality: DepthInstallState = .notInstalled
     var aesthetic: DepthInstallState = .notInstalled
+    var genitalClassifier: DepthInstallState = .notInstalled
 }
 
 /// Slot per archive for the in-flight download Task. Kept private +
@@ -85,6 +86,7 @@ struct InstallTasks {
     var age: Task<Void, Never>?
     var quality: Task<Void, Never>?
     var aesthetic: Task<Void, Never>?
+    var genitalClassifier: Task<Void, Never>?
 }
 
 /// Snapshot of where the analysis pipeline is. Reported from
@@ -455,6 +457,7 @@ final class FocusViewModel: ObservableObject {
         let ageInstalled = ModelArchive.age.isInstalled()
         let qualityInstalled = ModelArchive.quality.isInstalled()
         let aestheticInstalled = ModelArchive.aesthetic.isInstalled()
+        let genitalClassifierInstalled = ModelArchive.genitalClassifier.isInstalled()
         self.depthAvailable = depthInstalled
         self.installs = InstallStates(
             depth: depthInstalled ? .installed : .notInstalled,
@@ -465,7 +468,8 @@ final class FocusViewModel: ObservableObject {
             openGraphAU: openGraphAUInstalled ? .installed : .notInstalled,
             age: ageInstalled ? .installed : .notInstalled,
             quality: qualityInstalled ? .installed : .notInstalled,
-            aesthetic: aestheticInstalled ? .installed : .notInstalled
+            aesthetic: aestheticInstalled ? .installed : .notInstalled,
+            genitalClassifier: genitalClassifierInstalled ? .installed : .notInstalled
         )
 
         let analyzer = self.analyzer
@@ -628,6 +632,15 @@ final class FocusViewModel: ObservableObject {
             state: \.installs.aesthetic,
             task: \.installTasks.aesthetic,
             install: { try await $0.installAestheticModel(progress: $1) }
+        )
+    }
+
+    func downloadGenitalClassifierModel() {
+        download(
+            archive: .genitalClassifier,
+            state: \.installs.genitalClassifier,
+            task: \.installTasks.genitalClassifier,
+            install: { try await $0.installGenitalClassifierModel(progress: $1) }
         )
     }
 

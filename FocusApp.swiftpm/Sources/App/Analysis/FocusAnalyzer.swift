@@ -131,6 +131,7 @@ actor FocusAnalyzer {
     private let ageInstaller = ModelArchiveInstaller(.age)
     private let qualityInstaller = ModelArchiveInstaller(.quality)
     private let aestheticInstaller = ModelArchiveInstaller(.aesthetic)
+    private let genitalClassifierInstaller = ModelArchiveInstaller(.genitalClassifier)
 
     private var source: CIImage?
 
@@ -321,6 +322,21 @@ actor FocusAnalyzer {
     /// Download + install the NIMA aesthetic variant.
     func installAestheticModel(progress: @Sendable @escaping (Double) -> Void) async throws {
         try await aestheticInstaller.install(progress: progress)
+    }
+
+    /// True when the genital-region sub-class classifier is installed
+    /// on disk.
+    var isGenitalClassifierInstalled: Bool {
+        ModelArchive.genitalClassifier.isInstalled()
+    }
+
+    /// Download + install the genital-region sub-class classifier.
+    /// Lazy MLModel load happens on the first reclassifiable
+    /// detection; no explicit reload needed.
+    func installGenitalClassifierModel(
+        progress: @Sendable @escaping (Double) -> Void
+    ) async throws {
+        try await genitalClassifierInstaller.install(progress: progress)
     }
 
     /// Eagerly compile the installed Core ML models so the first analyze

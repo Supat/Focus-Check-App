@@ -86,6 +86,7 @@ struct OverlayControls: View {
             ageInstallRow
             qualityInstallRow
             aestheticInstallRow
+            genitalClassifierInstallRow
         }
         #if os(iOS)
         .onPencilSqueeze { phase in
@@ -333,5 +334,11 @@ struct OverlayControls: View {
         installRow(state: viewModel.installs.aesthetic,
                    label: "Aesthetic judge (NIMA) not installed.",
                    action: viewModel.downloadAestheticModel)
+    }
+
+    private var genitalClassifierInstallRow: some View {
+        installRow(state: viewModel.installs.genitalClassifier,
+                   label: "Genital sub-class classifier not installed.",
+                   action: viewModel.downloadGenitalClassifierModel)
     }
 }

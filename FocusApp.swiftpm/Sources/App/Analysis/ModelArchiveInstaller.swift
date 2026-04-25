@@ -209,6 +209,38 @@ struct ModelArchive: Sendable {
         )!
     )
 
+    /// Downstream classifier that re-labels NudeNet's genital-region
+    /// detections (`MALE_GENITALIA_EXPOSED`, `FEMALE_GENITALIA_COVERED`,
+    /// `FEMALE_GENITALIA_EXPOSED`) into a finer five-class schema:
+    ///
+    ///   MALE_GENITALIA_COVERED
+    ///   MALE_GENITALIA_FLACCID
+    ///   MALE_GENITALIA_AROUSAL
+    ///   MALE_GENITALIA_ORGASM
+    ///   OTHER  (NudeNet false positive — drop the detection)
+    ///
+    /// Trained via CreateML on crops harvested by
+    /// `Tools/extract_genital_crops.py` (no shared code with the
+    /// retired bootstrap-NudeNet pipeline). The classifier doesn't
+    /// touch detection — it only re-labels what NudeNet already
+    /// surfaced. NudeNet's BUTTOCKS_* / ANUS_* labels pass through
+    /// unchanged.
+    ///
+    /// **License**: weights derived from a personal corpus —
+    /// research-only training data, do not bundle in signed App
+    /// Store builds.
+    ///
+    /// **Version**: `GenitalClassifier-v1` directory,
+    /// `genital-classifier-v1` tag. Bump the pair together when
+    /// the export pipeline changes (e.g. backbone swap, class set
+    /// edit, padding strategy change).
+    static let genitalClassifier = ModelArchive(
+        directoryName: "GenitalClassifier-v1.mlmodelc",
+        sourceURL: URL(string:
+            "https://github.com/Supat/Focus-Check-App/releases/download/genital-classifier-v1/GenitalClassifier.mlmodelc.zip"
+        )!
+    )
+
     /// Persistent install path: `Application Support/<directoryName>`.
     /// Application Support is user-data, not purged on low-disk like Caches.
     func installedURL() throws -> URL {
