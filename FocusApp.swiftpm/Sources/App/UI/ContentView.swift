@@ -294,13 +294,26 @@ struct ContentView: View {
     /// Integer megapixel count of the loaded source. Sits in front
     /// of the EXIF badge so resolution reads at a glance even when
     /// the photo carries no EXIF (e.g. screenshots, exported PNGs).
+    /// Glows silver at 4K-or-above (≥ 8 MP) and gold beyond 8K
+    /// (> 33 MP) — gives the viewer a quick visual cue for
+    /// high-resolution sources.
     @ViewBuilder
     private var megapixelsBadge: some View {
         if let source = viewModel.sourceImage,
            !viewModel.overlayHidden {
             let pixels = source.extent.width * source.extent.height
             let mp = max(1, Int((pixels / 1_000_000).rounded()))
-            HStack(spacing: 6) {
+            // Reference resolutions:
+            //   4K UHD = 3840×2160 ≈ 8.3 MP
+            //   8K UHD = 7680×4320 ≈ 33.2 MP
+            // Use rounded-MP integer thresholds so the badge text
+            // and the glow are driven by the same number.
+            let glow: Color? = {
+                if mp > 33 { return Color(red: 1.00, green: 0.84, blue: 0.20) }
+                if mp >= 8 { return Color(red: 0.80, green: 0.82, blue: 0.88) }
+                return nil
+            }()
+            let badge = HStack(spacing: 6) {
                 Image(systemName: "photo")
                 Text("\(mp) MP")
                     .font(.caption.monospacedDigit())
@@ -308,6 +321,19 @@ struct ContentView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .liquidBadgeBackground(in: Capsule())
+
+            if let glow {
+                // phaseAnimator cycles a breathing opacity on the
+                // shadow so the edge glow pulses without any
+                // @State or animation plumbing on our side.
+                badge.phaseAnimator([0.35, 0.9]) { content, phase in
+                    content.shadow(color: glow.opacity(phase), radius: 9)
+                } animation: { _ in
+                    .easeInOut(duration: 1.2)
+                }
+            } else {
+                badge
+            }
         }
     }
 
