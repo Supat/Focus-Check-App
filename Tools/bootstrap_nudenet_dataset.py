@@ -131,23 +131,14 @@ REVIEW_ONLY_CLASSES = {
 # context.
 CROP_PADDING_FRAC = 0.0
 
-# Per-label confidence overrides — match the on-device app's
-# NudityDetector profile now that the bootstrap also runs NudeNet
-# on tight per-body crops (see the YOLOv8n person-detection step
-# below). With per-body cropping in place the precision FPs that
-# used to require 0.60 / 0.70 floors have collapsed:
-#  - FACE_* still gets a 0.50 floor (NudeNet's face head is a
-#    noisy side-task even on tight crops).
-#  - MALE_GENITALIA_EXPOSED drops to 0.10 because NudeNet's
-#    training data skews female and male-genital logits come in
-#    systematically lower; per-body cropping makes those low
-#    detections trustworthy where the whole-image pass made them
-#    pure noise.
-CLASS_THRESHOLD_OVERRIDES: dict[str, float] = {
-    "FACE_MALE":              0.50,
-    "FACE_FEMALE":            0.50,
-    "MALE_GENITALIA_EXPOSED": 0.10,
-}
+# Per-label confidence overrides. Empty by design — the bootstrap
+# is intentionally decoupled from the on-device app's per-class
+# profile so the dataset reflects NudeNet's "neutral" precision/
+# recall at a single uniform threshold. The on-device app tunes
+# per-class for live mosaicing; that's a different surface with
+# different goals (recall on male-genital, FP-suppression on face)
+# and shouldn't bleed into how training data is collected.
+CLASS_THRESHOLD_OVERRIDES: dict[str, float] = {}
 
 # Outward padding applied to each YOLOv8n person box before we
 # crop and run NudeNet on the result. Matches NudityDetector.swift's
@@ -360,11 +351,12 @@ def build_parser() -> argparse.ArgumentParser:
     label_group.add_argument("--inference-resolution", type=int, default=320,
                              help="NudeNet input size (320 bundled, 640 "
                                   "for the 640m variant).")
-    label_group.add_argument("--confidence", type=float, default=0.40,
-                             help="Default confidence floor for pre-labels. "
-                                  "Per-class overrides apply on top: face "
-                                  "labels are stricter (0.50), "
-                                  "MALE_GENITALIA_EXPOSED is looser (0.10).")
+    label_group.add_argument("--confidence", type=float, default=0.50,
+                             help="Confidence floor for pre-labels, applied "
+                                  "uniformly to every NudeNet class. The "
+                                  "bootstrap intentionally avoids per-class "
+                                  "tuning — that's a property of the on-"
+                                  "device app, not the training dataset.")
     label_group.add_argument("--person-detector",
                              default="yolov8n.pt",
                              help="Path / Ultralytics model name for the "
