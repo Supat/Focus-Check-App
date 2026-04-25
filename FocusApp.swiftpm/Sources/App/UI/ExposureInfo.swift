@@ -18,12 +18,24 @@ struct ExposureInfo: Equatable {
     /// for the exposure. nil when the tag is missing (common on synthesized
     /// or heavily-edited files).
     var flashFired: Bool?
+    /// TIFF "Software" field — typically the originating camera firmware
+    /// (e.g. "iPhone 14 Pro 17.0") or, for re-exported files, the editor
+    /// that touched the image last (e.g. "Adobe Photoshop 25.0",
+    /// "Adobe Lightroom 7.4 (Macintosh)"). nil when stripped or absent.
+    var software: String?
+    /// True when the source file embeds a C2PA / Content Credentials
+    /// manifest. Detected via a bounded byte-level scan for the JUMBF
+    /// `c2pa` box type (JPEG / HEIF / TIFF) or the `caBX` chunk type
+    /// (PNG); we don't parse the manifest contents — only its presence
+    /// is surfaced as a "this file carries provenance metadata" badge.
+    var hasContentCredentials: Bool = false
 
     static func read(from url: URL) -> ExposureInfo? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
         else { return nil }
         let exif = props[kCGImagePropertyExifDictionary] as? [CFString: Any] ?? [:]
+        let tiff = props[kCGImagePropertyTIFFDictionary] as? [CFString: Any] ?? [:]
 
         var info = ExposureInfo()
         info.focalLengthMM = (exif[kCGImagePropertyExifFocalLength] as? NSNumber)?.floatValue
@@ -40,7 +52,32 @@ struct ExposureInfo: Equatable {
         if let flash = (exif[kCGImagePropertyExifFlash] as? NSNumber)?.intValue {
             info.flashFired = (flash & 0x01) != 0
         }
+        if let sw = tiff[kCGImagePropertyTIFFSoftware] as? String {
+            let trimmed = sw.trimmingCharacters(in: .whitespacesAndNewlines)
+            info.software = trimmed.isEmpty ? nil : trimmed
+        }
+        info.hasContentCredentials = detectsContentCredentials(at: url)
         return info.isEmpty ? nil : info
+    }
+
+    /// Bounded byte-level scan for C2PA / Content Credentials
+    /// markers. C2PA manifests always live in the metadata header
+    /// near the front of the file regardless of container format,
+    /// so reading the first 4 MB is enough — that's well past the
+    /// header on any photo. Searching for both the JPEG / HEIF /
+    /// TIFF JUMBF box type ("c2pa") and the PNG chunk type ("caBX")
+    /// covers all spec-conformant carriers.
+    private static func detectsContentCredentials(at url: URL) -> Bool {
+        let cap = 4 * 1024 * 1024
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: cap), !data.isEmpty
+        else { return false }
+        let markers: [Data] = [
+            Data("c2pa".utf8),
+            Data("caBX".utf8)
+        ]
+        return markers.contains { data.range(of: $0) != nil }
     }
 
     /// "1/250 s" for fast shutters, "0.5 s" for long ones.
@@ -80,6 +117,8 @@ struct ExposureInfo: Equatable {
         fNumber == nil &&
         iso == nil &&
         subjectDistanceMeters == nil &&
-        flashFired == nil
+        flashFired == nil &&
+        software == nil &&
+        !hasContentCredentials
     }
 }

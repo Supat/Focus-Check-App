@@ -212,6 +212,7 @@ struct ContentView: View {
                     HStack(spacing: 8) {
                         megapixelsBadge
                         exposureBadge
+                        provenanceBadge
                         motionBlurBadge
                         nudeSubjectsBadge
                         contextBadge
@@ -376,6 +377,60 @@ struct ContentView: View {
                 .liquidBadgeBackground(in: Capsule())
             }
         }
+    }
+
+    /// Provenance: surfaces the TIFF Software field (originating
+    /// firmware or the editor that touched the file last) and a
+    /// green checkmark.seal when a C2PA / Content Credentials
+    /// manifest is embedded. Adobe and several major editors stamp
+    /// this on export now; phone cameras and older editors
+    /// generally don't, so absence isn't proof of authenticity.
+    @ViewBuilder
+    private var provenanceBadge: some View {
+        if let info = viewModel.exposureInfo,
+           viewModel.sourceImage != nil,
+           !viewModel.overlayHidden,
+           info.software != nil || info.hasContentCredentials {
+            HStack(spacing: 6) {
+                if info.hasContentCredentials {
+                    Image(systemName: "checkmark.seal.fill")
+                        .foregroundStyle(.green)
+                } else {
+                    Image(systemName: "wand.and.stars")
+                }
+                if let sw = info.software {
+                    Text(shortenedSoftware(sw))
+                        .font(.caption.monospacedDigit())
+                        .lineLimit(1)
+                } else {
+                    // C2PA manifest present but Software field
+                    // stripped — surface the credentials state alone.
+                    Text("Credentials")
+                        .font(.caption)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .liquidBadgeBackground(in: Capsule())
+        }
+    }
+
+    /// Trim verbose Software strings ("Adobe Photoshop 25.5.1
+    /// (Macintosh)" → "Adobe Photoshop") so the badge stays
+    /// readable in the bottom row without horizontal scrolling.
+    /// Strips trailing version tokens (anything starting with a
+    /// digit) and parenthesised platform tags.
+    private func shortenedSoftware(_ s: String) -> String {
+        var trimmed = s
+        if let paren = trimmed.firstIndex(of: "(") {
+            trimmed = String(trimmed[..<paren])
+        }
+        let parts = trimmed.split(separator: " ", omittingEmptySubsequences: true)
+        let words = parts.prefix { token in
+            !(token.first?.isNumber ?? false)
+        }
+        let joined = words.joined(separator: " ").trimmingCharacters(in: .whitespaces)
+        return joined.isEmpty ? trimmed.trimmingCharacters(in: .whitespaces) : joined
     }
 
     /// Navigation-bar principal item: the Explicit badge (when the
