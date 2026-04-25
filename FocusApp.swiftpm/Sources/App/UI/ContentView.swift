@@ -126,18 +126,29 @@ struct ContentView: View {
                                         }
                                 )
                                 // Press-and-hold on the image toggles the
-                                // overlay / badges. Each completed long-
-                                // press flips the state — a different
-                                // intent from the earlier "hidden only
-                                // while held" pattern, and from a single
-                                // tap (which conflicts with double-tap-to-
-                                // zoom and fires too easily mid-pan).
-                                .onLongPressGesture(
-                                    minimumDuration: 0.4,
-                                    maximumDistance: 20
-                                ) {
-                                    viewModel.overlayHidden.toggle()
-                                }
+                                // overlay / badges. Use the explicit
+                                // LongPressGesture with `.onChanged` so
+                                // the toggle fires at the 0.4 s
+                                // recognition mark — the convenience
+                                // `.onLongPressGesture(perform:)` waits
+                                // until the finger lifts because of
+                                // gesture arbitration with the drag-to-
+                                // pan recognizer above. `.onChanged`
+                                // sees the gesture's Bool value flip
+                                // from false → true at recognition,
+                                // which is exactly when we want the
+                                // toggle.
+                                .simultaneousGesture(
+                                    LongPressGesture(
+                                        minimumDuration: 0.4,
+                                        maximumDistance: 20
+                                    )
+                                    .onChanged { value in
+                                        if value {
+                                            viewModel.overlayHidden.toggle()
+                                        }
+                                    }
+                                )
                             nudityLabelOverlay(in: geo.size)
                             nudeSubjectHeadBadges(in: geo.size)
                         }
