@@ -286,6 +286,13 @@ final class FocusViewModel: ObservableObject {
 
     let analyzer: FocusAnalyzer
     private var currentTask: Task<Void, Never>?
+    /// URL of the file we copied to temporary storage in
+    /// `ImageImporter`. Tracked so we can delete the previous one
+    /// when a new image is loaded — otherwise every imported photo
+    /// (5–100 MB each) leaks into the temp directory until the OS
+    /// reclaims it, and the app's working set / disk footprint
+    /// grows linearly with imports per session.
+    private var previousLoadedURL: URL?
     private var installTask: Task<Void, Never>?
     private var nsfwInstallTask: Task<Void, Never>?
     private var nudenetInstallTask: Task<Void, Never>?
@@ -687,6 +694,13 @@ final class FocusViewModel: ObservableObject {
                     self?.aestheticScore = overlays.aesthetic
                     self?.isAnalyzing = false
                     self?.analysisProgress = nil
+                    // Delete the previous import's temp file once
+                    // the new sourceImage has replaced it (which
+                    // releases the old CIImage's hold on the
+                    // backing file). Track this load's URL for the
+                    // next swap.
+                    self?.cleanupPreviousImport()
+                    self?.previousLoadedURL = url
                     print("[ViewModel] sourceImage set, isAnalyzing=false")
                 }
             } catch is CancellationError {
@@ -705,12 +719,31 @@ final class FocusViewModel: ObservableObject {
         }
     }
 
+    /// Best-effort delete of the previous import's temp file. Called
+    /// after a new sourceImage has replaced the old one (so the old
+    /// CIImage's mmap on the file is released first). Errors are
+    /// silent — a stale temp file isn't a correctness issue, just a
+    /// disk-space one.
+    private func cleanupPreviousImport() {
+        guard let url = previousLoadedURL else { return }
+        let tmpRoot = FileManager.default.temporaryDirectory.path
+        // Sanity: only delete if it's actually under the temp dir.
+        // Refuse to touch anything else (e.g. the user picked a
+        // photos-library URL that we accidentally ended up tracking).
+        guard url.path.hasPrefix(tmpRoot) else { return }
+        try? FileManager.default.removeItem(at: url)
+        previousLoadedURL = nil
+    }
+
     func clear() {
         currentTask?.cancel()
         currentTask = nil
         zoomAnimationTask?.cancel()
         zoomAnimationTask = nil
+        // Drop the loaded image first so the CIImage releases its
+        // hold on the backing temp file, then delete the file.
         sourceImage = nil
+        cleanupPreviousImport()
         sourceName = nil
         sharpnessOverlay = nil
         depthOverlay = nil
