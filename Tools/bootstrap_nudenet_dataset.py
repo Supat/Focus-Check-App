@@ -330,21 +330,23 @@ class _VisionPersonDetector:
 
     def __init__(self) -> None:
         # Imports are local so a non-Mac runtime fails cleanly with
-        # ImportError instead of a partial module.
+        # ImportError instead of a partial module. Quartz is PyObjC's
+        # umbrella module — it surfaces CIImage / CIContext /
+        # CVPixelBuffer* / CGImage* alongside the regular Quartz
+        # types, which lets us avoid asking the user's venv for
+        # separate `pyobjc-framework-CoreImage` / `-CoreVideo`
+        # bindings (they're rarely pre-installed and the umbrella
+        # has everything we need).
         import Foundation  # noqa: F401
         import Vision      # noqa: F401
-        import CoreVideo   # noqa: F401
-        import CoreImage   # noqa: F401
         import Quartz      # noqa: F401
         self._Foundation = Foundation
         self._Vision = Vision
-        self._CoreVideo = CoreVideo
-        self._CoreImage = CoreImage
         self._Quartz = Quartz
         self._all_joints_key = Vision.VNHumanBodyPoseObservationJointsGroupNameAll
         # Lazy CIContext for rendering segmentation buffers; reused
         # across photos so we don't pay setup cost per image.
-        self._ci_context = CoreImage.CIContext.context()
+        self._ci_context = Quartz.CIContext.context()
 
     def detect_persons_with_mask(self, image_path: str,
                                  img_w: int, img_h: int):
@@ -361,7 +363,12 @@ class _VisionPersonDetector:
         # on-device `bodyRects.upperBodyOnly = false`.
         rect_req.setUpperBodyOnly_(False)
         pose_req = self._Vision.VNDetectHumanBodyPoseRequest.alloc().init()
-        seg_req = self._Vision.VNGeneratePersonSegmentationRequest.alloc().init()
+        # `init()` is NS_UNAVAILABLE on VNStatefulRequest subclasses;
+        # the designated initialiser takes a completion handler
+        # (None is fine — we read results synchronously after
+        # performRequests:error:).
+        seg_req = self._Vision.VNGeneratePersonSegmentationRequest \
+            .alloc().initWithCompletionHandler_(None)
         # `.balanced` is the speed/quality sweet spot — matches the
         # on-device app's `personSeg.qualityLevel = .balanced`.
         seg_req.setQualityLevel_(
@@ -371,7 +378,7 @@ class _VisionPersonDetector:
         # alpha image we can read byte-by-byte without unpacking
         # a 32-bit float.
         seg_req.setOutputPixelFormat_(
-            self._CoreVideo.kCVPixelFormatType_OneComponent8
+            self._Quartz.kCVPixelFormatType_OneComponent8
         )
 
         ok, _err = handler.performRequests_error_(
@@ -430,7 +437,7 @@ class _VisionPersonDetector:
         if buf is None:
             return None
 
-        ci_image = self._CoreImage.CIImage.imageWithCVPixelBuffer_(buf)
+        ci_image = self._Quartz.CIImage.imageWithCVPixelBuffer_(buf)
         if ci_image is None:
             return None
         extent = ci_image.extent()
