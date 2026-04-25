@@ -240,12 +240,30 @@ final class FocusRenderer {
             guard inputs.mosaic else { return inputs.source }
             switch inputs.mosaicMode {
             case .tabloid:
+                // Eye black bar + groin pixelation. Groin position is
+                // implied from NudeNet's GENITALIA_* detections rather
+                // than the pose-derived `gatedGroins`: NudeNet ties
+                // the box to actual visible anatomy (or clothed-over
+                // anatomy via the COVERED variants), so the mosaic
+                // lands accurately on tucked / sideways / partially-
+                // occluded poses where the body-pose hip-joint
+                // estimate misses. Subject gate applies through the
+                // standard gateDetections helper.
                 var result = inputs.source
                 if !gatedEyes.isEmpty {
                     result = blackBarOverlay(source: result, bars: gatedEyes)
                 }
-                if !gatedGroins.isEmpty {
-                    result = regionMosaic(source: result, regions: gatedGroins)
+                let genitalDetections = Self.gateDetections(
+                    inputs.nudityDetections,
+                    bodies: inputs.bodies,
+                    levels: inputs.nudityLevels,
+                    gate: inputs.nudityGate
+                ).filter { $0.label.uppercased().contains("GENITALIA") }
+                if !genitalDetections.isEmpty {
+                    result = regionMosaic(
+                        source: result,
+                        regions: genitalDetections.map(\.rect)
+                    )
                 }
                 return result
             case .eyes:
