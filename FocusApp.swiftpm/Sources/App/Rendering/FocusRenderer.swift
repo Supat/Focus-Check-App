@@ -216,177 +216,10 @@ final class FocusRenderer {
         // When NudeNet has classified each body, per-subject modes skip
         // bodies below the gate. With no NudeNet (`nudityLevels` empty),
         // every body qualifies — preserving pre-NudeNet behavior.
-        let gatedBodies = filterBodies(bodies: inputs.bodies,
-                                       levels: inputs.nudityLevels,
-                                       gate: inputs.nudityGate)
-        let gatedFaces = filterByBodyLevel(regions: inputs.faces,
-                                           bodies: inputs.bodies,
-                                           levels: inputs.nudityLevels,
-                                           gate: inputs.nudityGate)
-        let gatedChests = filterByBodyLevel(regions: inputs.chests,
-                                            bodies: inputs.bodies,
-                                            levels: inputs.nudityLevels,
-                                            gate: inputs.nudityGate)
-        let gatedGroins = filterByBodyLevel(regions: inputs.groins,
-                                            bodies: inputs.bodies,
-                                            levels: inputs.nudityLevels,
-                                            gate: inputs.nudityGate)
-        let gatedEyes = filterEyesByBodyLevel(eyes: inputs.eyes,
-                                              bodies: inputs.bodies,
-                                              levels: inputs.nudityLevels,
-                                              gate: inputs.nudityGate)
-
-        let baseSource: CIImage = {
-            guard inputs.mosaic else { return inputs.source }
-            switch inputs.mosaicMode {
-            case .tabloid:
-                // Eye black bar + groin pixelation.
-                //
-                // Groin source priority is per-subject rather than
-                // global: pose-derived hip-joint estimates first
-                // (preferred — they're calibrated to anatomy and
-                // include clothed subjects), with NudeNet GENITALIA_*
-                // detections filling gaps for any subject the pose
-                // pass missed (occluded body, sideways framing,
-                // tight crop). A NudeNet detection is added only
-                // when no existing pose-derived groin already covers
-                // its area, so the priority isn't "all pose OR all
-                // NudeNet" — it's "pose where available, NudeNet to
-                // fill in".
-                var result = inputs.source
-                if !gatedEyes.isEmpty {
-                    result = blackBarOverlay(source: result, bars: gatedEyes)
-                }
-                var groinRegions = gatedGroins
-                let genitalDetections = Self.gateDetections(
-                    inputs.nudityDetections,
-                    bodies: inputs.bodies,
-                    levels: inputs.nudityLevels,
-                    gate: inputs.nudityGate
-                ).filter { $0.label.uppercased().contains("GENITALIA") }
-                for det in genitalDetections {
-                    let alreadyCovered = groinRegions.contains { existing in
-                        existing.intersects(det.rect)
-                    }
-                    if !alreadyCovered {
-                        groinRegions.append(det.rect)
-                    }
-                }
-                if !groinRegions.isEmpty {
-                    result = regionMosaic(source: result, regions: groinRegions)
-                }
-                return result
-            case .eyes:
-                guard !gatedEyes.isEmpty else { return inputs.source }
-                return blackBarOverlay(source: inputs.source, bars: gatedEyes)
-            case .face:
-                guard !gatedFaces.isEmpty else { return inputs.source }
-                return regionMosaic(source: inputs.source, regions: gatedFaces)
-            case .chest:
-                guard !gatedChests.isEmpty else { return inputs.source }
-                return regionMosaic(source: inputs.source, regions: gatedChests)
-            case .groin:
-                guard !gatedGroins.isEmpty else { return inputs.source }
-                return regionMosaic(source: inputs.source, regions: gatedGroins)
-            case .body:
-                // Skip the mosaic outright when NudeNet excluded every body —
-                // nothing in the image crossed the gate.
-                if gatedBodies.isEmpty && !inputs.nudityLevels.isEmpty {
-                    return inputs.source
-                }
-                // Full-silhouette path only when no per-subject filtering
-                // happened — otherwise fall through to body-rects so clothed
-                // subjects aren't included in the silhouette blend.
-                if let mask = inputs.personMask,
-                   gatedBodies.count == inputs.bodies.count {
-                    return silhouetteMosaic(source: inputs.source, mask: mask)
-                }
-                if !gatedBodies.isEmpty {
-                    return regionMosaic(source: inputs.source, regions: gatedBodies)
-                }
-                if let mask = inputs.personMask {
-                    return silhouetteMosaic(source: inputs.source, mask: mask)
-                }
-                if !inputs.faces.isEmpty {
-                    return regionMosaic(source: inputs.source, regions: inputs.faces)
-                }
-                return inputs.source
-            case .privy:
-                // Subset of Nudity: cover every NudeNet detection except
-                // secondary regions the user explicitly spared —
-                // armpits, breasts, belly, feet. Genitalia / anus /
-                // buttocks / face-label detections still get mosaiced.
-                // Per-subject gate applies the same way as the other
-                // body-based modes: a detection survives only when its
-                // owning body's level meets or exceeds `nudityGate`.
-                let keep = Self.gateDetections(
-                    inputs.nudityDetections,
-                    bodies: inputs.bodies,
-                    levels: inputs.nudityLevels,
-                    gate: inputs.nudityGate
-                ).filter { det in
-                    let upper = det.label.uppercased()
-                    return !(upper.contains("ARMPITS")
-                          || upper.contains("BREAST")
-                          || upper.contains("BELLY")
-                          || upper.contains("FEET"))
-                }
-                guard !keep.isEmpty else { return inputs.source }
-                return regionMosaic(source: inputs.source,
-                                    regions: keep.map(\.rect))
-            case .nudity:
-                // Pixelate each NudeNet detection box directly. Per-
-                // subject gate is applied first so detections belonging
-                // to below-gate subjects are skipped alongside the
-                // body / chest / groin modes; 1.5x block size vs. the
-                // other region modes so tight detections read as solidly
-                // redacted instead of still-readable pixel noise.
-                let gated = Self.gateDetections(
-                    inputs.nudityDetections,
-                    bodies: inputs.bodies,
-                    levels: inputs.nudityLevels,
-                    gate: inputs.nudityGate
-                )
-                guard !gated.isEmpty else { return inputs.source }
-                let regions = gated.map(\.rect)
-                return regionMosaic(source: inputs.source, regions: regions)
-            case .jacket:
-                // Eye black bar + genital mosaic. Covers anonymity at
-                // the head and explicit anatomy at the crotch while
-                // leaving the rest of the composition visible — useful
-                // for evidence / documentary frames where the subject
-                // must remain unidentifiable AND unexposed. Both paths
-                // respect the per-subject gate: eyes filter through
-                // the existing body-level attribution and genital
-                // detections go through the same gateDetections helper
-                // the Privy / Nudity modes use.
-                var result = inputs.source
-                if !gatedEyes.isEmpty {
-                    // 95 % opacity — Jacket mode is a softer-anonymity
-                    // preset than Tabloid; the slightly translucent
-                    // strip lets a hint of eye/face structure through
-                    // for context while still breaking identifiability.
-                    result = blackBarOverlay(
-                        source: result,
-                        bars: gatedEyes,
-                        alpha: 0.95
-                    )
-                }
-                let genitalDetections = Self.gateDetections(
-                    inputs.nudityDetections,
-                    bodies: inputs.bodies,
-                    levels: inputs.nudityLevels,
-                    gate: inputs.nudityGate
-                ).filter { $0.label.uppercased().contains("GENITALIA_EXPOSED") }
-                if !genitalDetections.isEmpty {
-                    result = regionMosaic(
-                        source: result,
-                        regions: genitalDetections.map(\.rect)
-                    )
-                }
-                return result
-            }
-        }()
+        let gates = MosaicGates(inputs: inputs)
+        let baseSource = inputs.mosaic
+            ? mosaicked(inputs: inputs, gates: gates)
+            : inputs.source
 
         let fitted = fit(image: baseSource, into: drawableSize,
                          zoom: zoomScale, anchor: zoomAnchor, pan: zoomPan)
@@ -425,6 +258,200 @@ final class FocusRenderer {
             return motionComposite(base: fitted, motion: motionOverlay,
                                    threshold: threshold, tint: tint)
         }
+    }
+
+    // MARK: - Mosaic dispatch
+
+    /// Per-subject gating output. Each region array has been filtered
+    /// against the per-body NudeNet level so subjects below the gate
+    /// are omitted before any mosaic mode runs. With NudeNet absent
+    /// (`inputs.nudityLevels` empty), the gate is a no-op and every
+    /// region passes through.
+    private struct MosaicGates {
+        let bodies: [CGRect]
+        let faces: [CGRect]
+        let chests: [CGRect]
+        let groins: [CGRect]
+        let eyes: [EyeBar]
+
+        init(inputs: FocusCompositeInputs) {
+            self.bodies = filterBodies(bodies: inputs.bodies,
+                                       levels: inputs.nudityLevels,
+                                       gate: inputs.nudityGate)
+            self.faces = filterByBodyLevel(regions: inputs.faces,
+                                           bodies: inputs.bodies,
+                                           levels: inputs.nudityLevels,
+                                           gate: inputs.nudityGate)
+            self.chests = filterByBodyLevel(regions: inputs.chests,
+                                            bodies: inputs.bodies,
+                                            levels: inputs.nudityLevels,
+                                            gate: inputs.nudityGate)
+            self.groins = filterByBodyLevel(regions: inputs.groins,
+                                            bodies: inputs.bodies,
+                                            levels: inputs.nudityLevels,
+                                            gate: inputs.nudityGate)
+            self.eyes = filterEyesByBodyLevel(eyes: inputs.eyes,
+                                              bodies: inputs.bodies,
+                                              levels: inputs.nudityLevels,
+                                              gate: inputs.nudityGate)
+        }
+    }
+
+    /// Apply the per-mode mosaic against `inputs.source`. Caller is
+    /// responsible for the `inputs.mosaic` early-return — this is
+    /// only invoked when mosaic should fire.
+    private static func mosaicked(inputs: FocusCompositeInputs,
+                                  gates: MosaicGates) -> CIImage {
+        switch inputs.mosaicMode {
+        case .tabloid:
+            return mosaicTabloid(inputs: inputs, gates: gates)
+        case .eyes:
+            guard !gates.eyes.isEmpty else { return inputs.source }
+            return blackBarOverlay(source: inputs.source, bars: gates.eyes)
+        case .face:
+            guard !gates.faces.isEmpty else { return inputs.source }
+            return regionMosaic(source: inputs.source, regions: gates.faces)
+        case .chest:
+            guard !gates.chests.isEmpty else { return inputs.source }
+            return regionMosaic(source: inputs.source, regions: gates.chests)
+        case .groin:
+            guard !gates.groins.isEmpty else { return inputs.source }
+            return regionMosaic(source: inputs.source, regions: gates.groins)
+        case .body:
+            return mosaicBody(inputs: inputs, gates: gates)
+        case .privy:
+            return mosaicPrivy(inputs: inputs)
+        case .nudity:
+            return mosaicNudity(inputs: inputs)
+        case .jacket:
+            return mosaicJacket(inputs: inputs, gates: gates)
+        }
+    }
+
+    /// Eye black bar + groin pixelation.
+    ///
+    /// Groin source priority is per-subject rather than global:
+    /// pose-derived hip-joint estimates first (preferred — they're
+    /// calibrated to anatomy and include clothed subjects), with
+    /// NudeNet GENITALIA_* detections filling gaps for any subject
+    /// the pose pass missed (occluded body, sideways framing, tight
+    /// crop). A NudeNet detection is added only when no existing
+    /// pose-derived groin already covers its area, so the priority
+    /// isn't "all pose OR all NudeNet" — it's "pose where available,
+    /// NudeNet to fill in".
+    private static func mosaicTabloid(inputs: FocusCompositeInputs,
+                                      gates: MosaicGates) -> CIImage {
+        var result = inputs.source
+        if !gates.eyes.isEmpty {
+            result = blackBarOverlay(source: result, bars: gates.eyes)
+        }
+        var groinRegions = gates.groins
+        let genitalDetections = gateDetections(
+            inputs.nudityDetections,
+            bodies: inputs.bodies,
+            levels: inputs.nudityLevels,
+            gate: inputs.nudityGate
+        ).filter { $0.label.uppercased().contains("GENITALIA") }
+        for det in genitalDetections {
+            let alreadyCovered = groinRegions.contains { $0.intersects(det.rect) }
+            if !alreadyCovered {
+                groinRegions.append(det.rect)
+            }
+        }
+        if !groinRegions.isEmpty {
+            result = regionMosaic(source: result, regions: groinRegions)
+        }
+        return result
+    }
+
+    /// Body silhouette / body-rect mosaic with graceful fallbacks.
+    /// Skips entirely when NudeNet excluded every body. Uses the
+    /// person-segmentation mask when no per-subject filtering kicked
+    /// in, otherwise falls back to body rectangles so clothed
+    /// subjects don't end up under the silhouette.
+    private static func mosaicBody(inputs: FocusCompositeInputs,
+                                   gates: MosaicGates) -> CIImage {
+        if gates.bodies.isEmpty && !inputs.nudityLevels.isEmpty {
+            return inputs.source
+        }
+        if let mask = inputs.personMask,
+           gates.bodies.count == inputs.bodies.count {
+            return silhouetteMosaic(source: inputs.source, mask: mask)
+        }
+        if !gates.bodies.isEmpty {
+            return regionMosaic(source: inputs.source, regions: gates.bodies)
+        }
+        if let mask = inputs.personMask {
+            return silhouetteMosaic(source: inputs.source, mask: mask)
+        }
+        if !inputs.faces.isEmpty {
+            return regionMosaic(source: inputs.source, regions: inputs.faces)
+        }
+        return inputs.source
+    }
+
+    /// Privy: pixelate every per-subject NudeNet detection except
+    /// secondary regions the user explicitly spared — armpits,
+    /// breasts, belly, feet. Genitalia / anus / buttocks / face-
+    /// label detections still get mosaiced. Per-subject gate
+    /// applies so detections from below-gate subjects are dropped
+    /// the same way as the body / chest / groin modes.
+    private static func mosaicPrivy(inputs: FocusCompositeInputs) -> CIImage {
+        let keep = gateDetections(
+            inputs.nudityDetections,
+            bodies: inputs.bodies,
+            levels: inputs.nudityLevels,
+            gate: inputs.nudityGate
+        ).filter { det in
+            let upper = det.label.uppercased()
+            return !(upper.contains("ARMPITS")
+                  || upper.contains("BREAST")
+                  || upper.contains("BELLY")
+                  || upper.contains("FEET"))
+        }
+        guard !keep.isEmpty else { return inputs.source }
+        return regionMosaic(source: inputs.source, regions: keep.map(\.rect))
+    }
+
+    /// Pixelate every per-subject NudeNet detection box. Per-subject
+    /// gate is applied first so detections belonging to below-gate
+    /// subjects are skipped alongside the body / chest / groin modes.
+    private static func mosaicNudity(inputs: FocusCompositeInputs) -> CIImage {
+        let gated = gateDetections(
+            inputs.nudityDetections,
+            bodies: inputs.bodies,
+            levels: inputs.nudityLevels,
+            gate: inputs.nudityGate
+        )
+        guard !gated.isEmpty else { return inputs.source }
+        return regionMosaic(source: inputs.source, regions: gated.map(\.rect))
+    }
+
+    /// Eye black bar + genital mosaic. Covers anonymity at the head
+    /// and explicit anatomy at the crotch while leaving the rest of
+    /// the composition visible — useful for evidence / documentary
+    /// frames where the subject must remain unidentifiable AND
+    /// unexposed. Both paths respect the per-subject gate.
+    private static func mosaicJacket(inputs: FocusCompositeInputs,
+                                     gates: MosaicGates) -> CIImage {
+        var result = inputs.source
+        if !gates.eyes.isEmpty {
+            // 95 % opacity — Jacket is a softer-anonymity preset than
+            // Tabloid; the slightly translucent strip lets a hint of
+            // eye/face structure through for context while still
+            // breaking identifiability.
+            result = blackBarOverlay(source: result, bars: gates.eyes, alpha: 0.95)
+        }
+        let genitalDetections = gateDetections(
+            inputs.nudityDetections,
+            bodies: inputs.bodies,
+            levels: inputs.nudityLevels,
+            gate: inputs.nudityGate
+        ).filter { $0.label.uppercased().contains("GENITALIA_EXPOSED") }
+        if !genitalDetections.isEmpty {
+            result = regionMosaic(source: result, regions: genitalDetections.map(\.rect))
+        }
+        return result
     }
 
     // MARK: - Style pipelines
