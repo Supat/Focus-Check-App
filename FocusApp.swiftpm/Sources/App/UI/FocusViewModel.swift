@@ -356,269 +356,143 @@ final class FocusViewModel: ObservableObject {
         }
     }
 
-    /// Download the NSFW fallback model. Mirrors downloadDepthModel so the
-    /// UI layer can reuse the same install-state rendering.
-    func downloadNSFWModel() {
-        guard nsfwInstallTask == nil else { return }
-        nsfwInstall = .downloading(progress: 0)
+    /// Generic download driver shared by every model tier. Each
+    /// public `download<Model>Model()` is a thin wrapper that picks
+    /// the right archive, state property, task slot, and install
+    /// method to invoke. `onInstalled` runs on the MainActor right
+    /// before `state = .installed` for tiers that need extra
+    /// follow-up (depth flips `depthAvailable`; NSFW re-queries SCA).
+    ///
+    /// Failure semantics: re-downloads can fail (404 / network)
+    /// without touching the existing on-disk install. The installer
+    /// only wipes the destination after the new content has been
+    /// unpacked, so when the install file is still on disk after a
+    /// failure, treat it as `.installed` rather than `.failed` so
+    /// the UI doesn't surface a misleading error for a model that's
+    /// still working.
+    private func download(
+        archive: ModelArchive,
+        state stateKP: ReferenceWritableKeyPath<FocusViewModel, DepthInstallState>,
+        task taskKP: ReferenceWritableKeyPath<FocusViewModel, Task<Void, Never>?>,
+        install: @Sendable @escaping (FocusAnalyzer, @Sendable @escaping (Double) -> Void) async throws -> Void,
+        onInstalled: (@MainActor @Sendable (FocusViewModel) -> Void)? = nil
+    ) {
+        guard self[keyPath: taskKP] == nil else { return }
+        self[keyPath: stateKP] = .downloading(progress: 0)
         let analyzer = self.analyzer
-        nsfwInstallTask = Task { [weak self] in
+        self[keyPath: taskKP] = Task { [weak self] in
             do {
-                try await analyzer.installNSFWModel { [weak self] p in
-                    Task { @MainActor [weak self] in
-                        self?.nsfwInstall = .downloading(progress: p)
+                try await install(analyzer) { [weak self] p in
+                    Task { @MainActor in
+                        self?[keyPath: stateKP] = .downloading(progress: p)
                     }
                 }
                 await MainActor.run { [weak self] in
-                    self?.nsfwInstall = .installed
-                    // Re-query SCA availability so the row reflects that
-                    // the NSFW fallback is now usable.
-                    self?.refreshSensitiveContentAvailability()
+                    guard let self else { return }
+                    onInstalled?(self)
+                    self[keyPath: stateKP] = .installed
                 }
             } catch {
-                // Re-downloads can fail (404, network) without touching
-                // the existing on-disk install — the installer wipes
-                // the destination only after the new content has been
-                // unpacked. Preserve `.installed` when the file's
-                // still there so the UI doesn't surface a misleading
-                // failure for a model that's actually working.
-                let stillInstalled = ModelArchive.nsfw.isInstalled()
+                let stillInstalled = archive.isInstalled()
                 await MainActor.run { [weak self] in
-                    self?.nsfwInstall = stillInstalled
-                        ? .installed
-                        : .failed(error.localizedDescription)
-                }
-            }
-            await MainActor.run { [weak self] in self?.nsfwInstallTask = nil }
-        }
-    }
-
-    /// Download the FER+ emotion classifier. Same install-state pattern
-    /// as the other optional-model install rows.
-    func downloadEmotionModel() {
-        guard emotionInstallTask == nil else { return }
-        emotionInstall = .downloading(progress: 0)
-        let analyzer = self.analyzer
-        emotionInstallTask = Task { [weak self] in
-            do {
-                try await analyzer.installEmotionModel { [weak self] p in
-                    Task { @MainActor [weak self] in
-                        self?.emotionInstall = .downloading(progress: p)
+                    guard let self else { return }
+                    if stillInstalled {
+                        onInstalled?(self)
+                        self[keyPath: stateKP] = .installed
+                    } else {
+                        self[keyPath: stateKP] = .failed(error.localizedDescription)
                     }
                 }
-                await MainActor.run { [weak self] in
-                    self?.emotionInstall = .installed
-                }
-            } catch {
-                let stillInstalled = ModelArchive.emotion.isInstalled()
-                await MainActor.run { [weak self] in
-                    self?.emotionInstall = stillInstalled
-                        ? .installed
-                        : .failed(error.localizedDescription)
-                }
             }
-            await MainActor.run { [weak self] in self?.emotionInstallTask = nil }
-        }
-    }
-
-    /// Download the NIMA aesthetic-quality model. Same install-
-    /// state pattern as the other optional-model install rows.
-    func downloadAestheticModel() {
-        guard aestheticInstallTask == nil else { return }
-        aestheticInstall = .downloading(progress: 0)
-        let analyzer = self.analyzer
-        aestheticInstallTask = Task { [weak self] in
-            do {
-                try await analyzer.installAestheticModel { [weak self] p in
-                    Task { @MainActor [weak self] in
-                        self?.aestheticInstall = .downloading(progress: p)
-                    }
-                }
-                await MainActor.run { [weak self] in
-                    self?.aestheticInstall = .installed
-                }
-            } catch {
-                let stillInstalled = ModelArchive.aesthetic.isInstalled()
-                await MainActor.run { [weak self] in
-                    self?.aestheticInstall = stillInstalled
-                        ? .installed
-                        : .failed(error.localizedDescription)
-                }
+            await MainActor.run { [weak self] in
+                self?[keyPath: taskKP] = nil
             }
-            await MainActor.run { [weak self] in self?.aestheticInstallTask = nil }
-        }
-    }
-
-    /// Download the NIMA technical-quality model. Same install-
-    /// state pattern as the other optional-model install rows.
-    func downloadQualityModel() {
-        guard qualityInstallTask == nil else { return }
-        qualityInstall = .downloading(progress: 0)
-        let analyzer = self.analyzer
-        qualityInstallTask = Task { [weak self] in
-            do {
-                try await analyzer.installQualityModel { [weak self] p in
-                    Task { @MainActor [weak self] in
-                        self?.qualityInstall = .downloading(progress: p)
-                    }
-                }
-                await MainActor.run { [weak self] in
-                    self?.qualityInstall = .installed
-                }
-            } catch {
-                let stillInstalled = ModelArchive.quality.isInstalled()
-                await MainActor.run { [weak self] in
-                    self?.qualityInstall = stillInstalled
-                        ? .installed
-                        : .failed(error.localizedDescription)
-                }
-            }
-            await MainActor.run { [weak self] in self?.qualityInstallTask = nil }
-        }
-    }
-
-    /// Download the SSR-Net age model. Same install-state pattern
-    /// as the other optional-model install rows.
-    func downloadAgeModel() {
-        guard ageInstallTask == nil else { return }
-        ageInstall = .downloading(progress: 0)
-        let analyzer = self.analyzer
-        ageInstallTask = Task { [weak self] in
-            do {
-                try await analyzer.installAgeModel { [weak self] p in
-                    Task { @MainActor [weak self] in
-                        self?.ageInstall = .downloading(progress: p)
-                    }
-                }
-                await MainActor.run { [weak self] in
-                    self?.ageInstall = .installed
-                }
-            } catch {
-                let stillInstalled = ModelArchive.age.isInstalled()
-                await MainActor.run { [weak self] in
-                    self?.ageInstall = stillInstalled
-                        ? .installed
-                        : .failed(error.localizedDescription)
-                }
-            }
-            await MainActor.run { [weak self] in self?.ageInstallTask = nil }
-        }
-    }
-
-    /// Download the OpenGraphAU pain detector. Same install-state
-    /// pattern as the other optional-model install rows.
-    func downloadOpenGraphAUModel() {
-        guard openGraphAUInstallTask == nil else { return }
-        openGraphAUInstall = .downloading(progress: 0)
-        let analyzer = self.analyzer
-        openGraphAUInstallTask = Task { [weak self] in
-            do {
-                try await analyzer.installOpenGraphAUModel { [weak self] p in
-                    Task { @MainActor [weak self] in
-                        self?.openGraphAUInstall = .downloading(progress: p)
-                    }
-                }
-                await MainActor.run { [weak self] in
-                    self?.openGraphAUInstall = .installed
-                }
-            } catch {
-                let stillInstalled = ModelArchive.openGraphAU.isInstalled()
-                await MainActor.run { [weak self] in
-                    self?.openGraphAUInstall = stillInstalled
-                        ? .installed
-                        : .failed(error.localizedDescription)
-                }
-            }
-            await MainActor.run { [weak self] in self?.openGraphAUInstallTask = nil }
-        }
-    }
-
-    /// Download the CLIP bundle (image encoder + prompt embeddings).
-    /// Mirrors the other model-install flows so the UI can reuse the
-    /// same install-state row.
-    func downloadCLIPModel() {
-        guard clipInstallTask == nil else { return }
-        clipInstall = .downloading(progress: 0)
-        let analyzer = self.analyzer
-        clipInstallTask = Task { [weak self] in
-            do {
-                try await analyzer.installCLIPModel { [weak self] p in
-                    Task { @MainActor [weak self] in
-                        self?.clipInstall = .downloading(progress: p)
-                    }
-                }
-                await MainActor.run { [weak self] in
-                    self?.clipInstall = .installed
-                }
-            } catch {
-                let stillInstalled = ModelArchive.clip.isInstalled()
-                await MainActor.run { [weak self] in
-                    self?.clipInstall = stillInstalled
-                        ? .installed
-                        : .failed(error.localizedDescription)
-                }
-            }
-            await MainActor.run { [weak self] in self?.clipInstallTask = nil }
-        }
-    }
-
-    /// Download the NudeNet per-subject detector. Mirrors the NSFW / depth
-    /// download flow so the UI layer can reuse the same install-state row.
-    func downloadNudeNetModel() {
-        guard nudenetInstallTask == nil else { return }
-        nudenetInstall = .downloading(progress: 0)
-        let analyzer = self.analyzer
-        nudenetInstallTask = Task { [weak self] in
-            do {
-                try await analyzer.installNudeNetModel { [weak self] p in
-                    Task { @MainActor [weak self] in
-                        self?.nudenetInstall = .downloading(progress: p)
-                    }
-                }
-                await MainActor.run { [weak self] in
-                    self?.nudenetInstall = .installed
-                }
-            } catch {
-                let stillInstalled = ModelArchive.nudenet.isInstalled()
-                await MainActor.run { [weak self] in
-                    self?.nudenetInstall = stillInstalled
-                        ? .installed
-                        : .failed(error.localizedDescription)
-                }
-            }
-            await MainActor.run { [weak self] in self?.nudenetInstallTask = nil }
         }
     }
 
     func downloadDepthModel() {
-        guard installTask == nil else { return }
-        depthInstall = .downloading(progress: 0)
-        let analyzer = self.analyzer
-        installTask = Task { [weak self] in
-            do {
-                try await analyzer.installDepthModel { [weak self] p in
-                    // Progress callback may arrive on any thread — hop to main.
-                    Task { @MainActor [weak self] in
-                        self?.depthInstall = .downloading(progress: p)
-                    }
-                }
-                await MainActor.run { [weak self] in
-                    self?.depthAvailable = true
-                    self?.depthInstall = .installed
-                }
-            } catch {
-                let stillInstalled = ModelArchive.depthAnything.isInstalled()
-                await MainActor.run { [weak self] in
-                    if stillInstalled {
-                        self?.depthAvailable = true
-                        self?.depthInstall = .installed
-                    } else {
-                        self?.depthInstall = .failed(error.localizedDescription)
-                    }
-                }
-            }
-            await MainActor.run { [weak self] in self?.installTask = nil }
-        }
+        download(
+            archive: .depthAnything,
+            state: \.depthInstall,
+            task: \.installTask,
+            install: { try await $0.installDepthModel(progress: $1) },
+            onInstalled: { $0.depthAvailable = true }
+        )
+    }
+
+    func downloadNSFWModel() {
+        download(
+            archive: .nsfw,
+            state: \.nsfwInstall,
+            task: \.nsfwInstallTask,
+            install: { try await $0.installNSFWModel(progress: $1) },
+            // Re-query SCA so the row reflects that the NSFW
+            // fallback is now usable.
+            onInstalled: { $0.refreshSensitiveContentAvailability() }
+        )
+    }
+
+    func downloadNudeNetModel() {
+        download(
+            archive: .nudenet,
+            state: \.nudenetInstall,
+            task: \.nudenetInstallTask,
+            install: { try await $0.installNudeNetModel(progress: $1) }
+        )
+    }
+
+    func downloadCLIPModel() {
+        download(
+            archive: .clip,
+            state: \.clipInstall,
+            task: \.clipInstallTask,
+            install: { try await $0.installCLIPModel(progress: $1) }
+        )
+    }
+
+    func downloadEmotionModel() {
+        download(
+            archive: .emotion,
+            state: \.emotionInstall,
+            task: \.emotionInstallTask,
+            install: { try await $0.installEmotionModel(progress: $1) }
+        )
+    }
+
+    func downloadOpenGraphAUModel() {
+        download(
+            archive: .openGraphAU,
+            state: \.openGraphAUInstall,
+            task: \.openGraphAUInstallTask,
+            install: { try await $0.installOpenGraphAUModel(progress: $1) }
+        )
+    }
+
+    func downloadAgeModel() {
+        download(
+            archive: .age,
+            state: \.ageInstall,
+            task: \.ageInstallTask,
+            install: { try await $0.installAgeModel(progress: $1) }
+        )
+    }
+
+    func downloadQualityModel() {
+        download(
+            archive: .quality,
+            state: \.qualityInstall,
+            task: \.qualityInstallTask,
+            install: { try await $0.installQualityModel(progress: $1) }
+        )
+    }
+
+    func downloadAestheticModel() {
+        download(
+            archive: .aesthetic,
+            state: \.aestheticInstall,
+            task: \.aestheticInstallTask,
+            install: { try await $0.installAestheticModel(progress: $1) }
+        )
     }
 
     func load(url: URL, name: String) {
