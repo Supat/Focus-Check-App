@@ -151,8 +151,44 @@ final class FocusViewModel: ObservableObject {
         // Photos.app: the content under the finger stays under the
         // finger as the image scales. At the zoom-out endpoint
         // (scale=1) the renderer's fit() ignores anchor anyway, so
-        // the final frame is centered regardless.
-        animateZoom(toScale: targetScale, toAnchor: normalized)
+        // the final frame is centered regardless. Clamp first so a
+        // tap inside a letterbox region (or near an edge of a non-
+        // matching aspect source) doesn't pick a fixed point that
+        // leaves a black gap on the opposite side after the zoom.
+        let targetAnchor = clampedAnchor(normalized, forScale: targetScale)
+        animateZoom(toScale: targetScale, toAnchor: targetAnchor)
+    }
+
+    /// Clamp a normalized anchor (0..1, Y-top) to the range that
+    /// keeps the post-zoom image fully covering the drawable —
+    /// mirrors the `clampedPan` math in ContentView, just solved
+    /// for the anchor instead of the pan.
+    ///
+    /// For axis with no letterbox (fitted dimension == drawable
+    /// dimension), the valid range is the full [0, 1] — anchor is
+    /// unrestricted. For an axis with letterbox, the range
+    /// narrows as zoom approaches 1; if the post-zoom fitted
+    /// dimension is still smaller than the drawable, no anchor
+    /// can eliminate the gap so we pin to the centre.
+    ///
+    /// Skipped (returns the input unchanged) at scale ≤ 1.001
+    /// since the renderer's fit() ignores anchor below that
+    /// threshold.
+    private func clampedAnchor(_ normalized: CGPoint, forScale zoom: CGFloat) -> CGPoint {
+        guard zoom > 1.001,
+              let src = sourceImage,
+              lastDrawableSize.width > 0,
+              lastDrawableSize.height > 0
+        else { return normalized }
+        let fit = min(lastDrawableSize.width / src.extent.width,
+                      lastDrawableSize.height / src.extent.height)
+        let fittedW = src.extent.width * fit
+        let fittedH = src.extent.height * fit
+        let marginX = zoom * (1 - fittedW / lastDrawableSize.width) / (2 * (zoom - 1))
+        let marginY = zoom * (1 - fittedH / lastDrawableSize.height) / (2 * (zoom - 1))
+        let x = marginX >= 0.5 ? 0.5 : max(marginX, min(1 - marginX, normalized.x))
+        let y = marginY >= 0.5 ? 0.5 : max(marginY, min(1 - marginY, normalized.y))
+        return CGPoint(x: x, y: y)
     }
 
     /// Zoom factor that maps one source pixel onto one drawable
