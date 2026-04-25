@@ -36,28 +36,18 @@ struct ImageImporter: View {
                 Label("Import", systemImage: "square.and.arrow.down")
             }
         }
-        // Hidden shortcut hosts — Buttons inside `Menu { }` register
-        // their .keyboardShortcut modifiers only while the menu is
-        // open on iOS, which is why the inline approach never
-        // fired. Mirror the actions onto invisible Buttons that
-        // live in the view tree at all times so iPadOS / Mac pick
-        // them up globally and surface them in the ⌘-hold
-        // discoverability sheet.
-        .background {
-            Group {
-                Button("Open Photo Library") {
-                    showingPhotosPicker = true
-                }
-                .keyboardShortcut("o", modifiers: .command)
-                Button("Open File…") {
-                    showingFileImporter = true
-                }
-                .keyboardShortcut("o", modifiers: [.command, .shift])
-            }
-            .opacity(0)
-            .frame(width: 0, height: 0)
-            .accessibilityHidden(true)
-        }
+        // Pick up the keyboard shortcuts (⌘O / ⌘⇧O) that the
+        // app-level `.commands` block in FocusApp.swift posts.
+        // Buttons inside `Menu { }` and hidden Buttons in the
+        // view tree both fail to surface in iPadOS 26's menu bar;
+        // routing via NotificationCenter from a Scene-level
+        // CommandGroup is the path that does.
+        .onReceive(NotificationCenter.default.publisher(
+            for: .openPhotoLibrary
+        )) { _ in showingPhotosPicker = true }
+        .onReceive(NotificationCenter.default.publisher(
+            for: .openFileImporter
+        )) { _ in showingFileImporter = true }
         .sheet(isPresented: $showingPhotosPicker) {
             PHPickerSheet(
                 isPresented: $showingPhotosPicker,
