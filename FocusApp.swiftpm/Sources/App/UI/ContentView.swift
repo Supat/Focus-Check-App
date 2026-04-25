@@ -126,21 +126,23 @@ struct ContentView: View {
                                         }
                                 )
                                 // Press-and-hold on the image toggles the
-                                // overlay / badges. Use the explicit
+                                // overlay / badges. 3-second hold is
+                                // long enough that it can't fire
+                                // accidentally while the user is
+                                // examining the image (e.g. resting a
+                                // finger), but still short enough to
+                                // be deliberate. Uses an explicit
                                 // LongPressGesture with `.onChanged` so
-                                // the toggle fires at the 0.4 s
-                                // recognition mark — the convenience
+                                // the toggle fires at the recognition
+                                // mark while the finger is still down,
+                                // not when it's released —
                                 // `.onLongPressGesture(perform:)` waits
-                                // until the finger lifts because of
-                                // gesture arbitration with the drag-to-
-                                // pan recognizer above. `.onChanged`
-                                // sees the gesture's Bool value flip
-                                // from false → true at recognition,
-                                // which is exactly when we want the
-                                // toggle.
+                                // for finger-up due to gesture
+                                // arbitration with the drag-to-pan
+                                // recognizer above.
                                 .simultaneousGesture(
                                     LongPressGesture(
-                                        minimumDuration: 0.4,
+                                        minimumDuration: 3.0,
                                         maximumDistance: 20
                                     )
                                     .onChanged { value in
