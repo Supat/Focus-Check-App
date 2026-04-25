@@ -153,7 +153,7 @@ final class FocusRenderer {
                 source: source,
                 style: viewModel.style,
                 threshold: viewModel.threshold,
-                tint: CIColor(color: viewModel.overlayColor) ?? CIColor(red: 1, green: 0.90, blue: 0),
+                tint: CIColor(color: viewModel.overlayColor) ?? CIColor(red: 1, green: 0.95, blue: 0),
                 focalPlane: viewModel.focalPlane,
                 sharpness: viewModel.sharpnessOverlay,
                 depth: viewModel.depthOverlay,
@@ -334,14 +334,14 @@ final class FocusRenderer {
                 // the Privy / Nudity modes use.
                 var result = inputs.source
                 if !gatedEyes.isEmpty {
-                    // 90 % opacity — Jacket mode is a softer-anonymity
+                    // 95 % opacity — Jacket mode is a softer-anonymity
                     // preset than Tabloid; the slightly translucent
                     // strip lets a hint of eye/face structure through
                     // for context while still breaking identifiability.
                     result = blackBarOverlay(
                         source: result,
                         bars: gatedEyes,
-                        alpha: 0.90
+                        alpha: 0.95
                     )
                 }
                 let genitalDetections = Self.gateDetections(
@@ -666,7 +666,7 @@ final class FocusRenderer {
             (0.25, 0.229, 0.322, 0.545),
             (0.50, 0.127, 0.566, 0.551),
             (0.75, 0.369, 0.789, 0.383),
-            (1.00, 0.993, 0.906, 0.144)
+            (1.00, 0.993, 0.956, 0.144)
         ]
         let clamped = max(0, min(1, t))
         for i in 0..<(stops.count - 1) {
@@ -762,7 +762,7 @@ final class FocusRenderer {
                                         alpha: CGFloat = 1.0) -> CIImage {
         // Pre-multiplied black at the given opacity. Default 1.0
         // matches the original tabloid behavior; the Jacket mode
-        // overrides to 0.90 (slightly translucent) so the eye bar
+        // overrides to 0.95 (slightly translucent) so the eye bar
         // lets a hint of face structure through — softer anonymity
         // than the solid Tabloid bar.
         let barColor = CIColor(red: 0, green: 0, blue: 0, alpha: alpha)
