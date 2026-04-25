@@ -66,7 +66,16 @@ final class FocusRenderer {
     }
 
     func resize(to size: CGSize) {
-        // Intentionally cheap — no backing store to reallocate.
+        // Intentionally cheap on the renderer side — no backing
+        // store to reallocate. Push the drawable size onto the
+        // view model so toggleZoom() can compute a native (1:1
+        // source-to-drawable) zoom factor without round-tripping
+        // through GeometryReader / display-scale guesses.
+        // MTKViewDelegate callbacks land on the main thread, same
+        // run loop as the @MainActor view model.
+        MainActor.assumeIsolated {
+            viewModel.lastDrawableSize = size
+        }
     }
 
     // MARK: - Draw

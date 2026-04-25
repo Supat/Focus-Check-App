@@ -146,11 +146,28 @@ final class FocusViewModel: ObservableObject {
     /// through SwiftUI's transaction system, so we drive the animation manually.
     func toggleZoom(at normalized: CGPoint) {
         let zoomedIn = zoomScale > 1.001
-        let targetScale: CGFloat = zoomedIn ? 1.0 : 2.5
+        let targetScale: CGFloat = zoomedIn ? 1.0 : nativeZoomScale()
         let targetAnchor: CGPoint = zoomedIn
             ? CGPoint(x: 0.5, y: 0.5)
             : normalized
         animateZoom(toScale: targetScale, toAnchor: targetAnchor)
+    }
+
+    /// Zoom factor that maps one source pixel onto one drawable
+    /// pixel for the constraining axis — i.e. native pixel-perfect
+    /// view of the source. Floor at 1.5 so a sub-drawable thumbnail
+    /// doesn't compute to a zoom-out. Falls back to 2.5x (the
+    /// pre-native default) before the renderer has reported a
+    /// drawable size or while no image is loaded.
+    private func nativeZoomScale() -> CGFloat {
+        guard let src = sourceImage,
+              lastDrawableSize.width > 0,
+              lastDrawableSize.height > 0
+        else { return 2.5 }
+        let extent = src.extent
+        let sx = extent.width / lastDrawableSize.width
+        let sy = extent.height / lastDrawableSize.height
+        return max(1.5, max(sx, sy))
     }
 
     private func animateZoom(toScale target: CGFloat, toAnchor targetAnchor: CGPoint) {
@@ -302,6 +319,12 @@ final class FocusViewModel: ObservableObject {
     @Published var depthAvailable: Bool = false
 
     let analyzer: FocusAnalyzer
+    /// Latest MTKView drawable size in pixels, pushed by
+    /// `FocusRenderer.resize(to:)` whenever the view's drawable
+    /// dimensions change by more than a pixel. Plain var, not
+    /// @Published — `toggleZoom` is the only consumer and it
+    /// reads on demand, so observation would only churn invalidations.
+    var lastDrawableSize: CGSize = .zero
     private var currentTask: Task<Void, Never>?
     /// URL of the file we copied to temporary storage in
     /// `ImageImporter`. Tracked so we can delete the previous one
