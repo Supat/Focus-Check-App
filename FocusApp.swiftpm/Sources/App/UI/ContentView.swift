@@ -530,6 +530,10 @@ struct ContentView: View {
     ///                   assigned — also covers FEMALE_*, since
     ///                   the classifier doesn't refine female
     ///                   detections)
+    ///   1/4    grey     COVERED on a subject whose aggregated
+    ///                   NudityLevel is `.nude` — the genital
+    ///                   region is clothed but other regions
+    ///                   aren't, worth a low-grade signal
     ///   2/4    yellow   MALE_GENITALIA_FLACCID
     ///   3/4    orange   MALE_GENITALIA_AROUSAL
     ///   4/4    red      MALE_GENITALIA_ORGASM
@@ -550,7 +554,10 @@ struct ContentView: View {
             }
             ForEach(Array(warnings.enumerated()), id: \.offset) { _, det in
                 let r = viewRect(for: det.rect, source: extent, in: size)
-                let style = genitalWarningStyle(for: det.label)
+                let style = genitalWarningStyle(
+                    for: det.label,
+                    subjectLevel: subjectLevel(for: det)
+                )
                 HStack(spacing: 2) {
                     Image(systemName: "exclamationmark.octagon.fill")
                     Image(systemName: "cellularbars", variableValue: style.bars)
@@ -568,14 +575,48 @@ struct ContentView: View {
 
     /// Cellularbars `variableValue` (0–1) + foreground colour for
     /// the genital warning badge. Severity ladder is detection
-    /// label → fill fraction; everything that isn't an explicitly-
-    /// graded sub-class collapses to 0 bars / grey.
-    private func genitalWarningStyle(for label: String) -> (bars: Double, color: Color) {
+    /// label → fill fraction; the all-male classifier's exposed
+    /// sub-classes win over everything else. A COVERED detection
+    /// on a subject whose aggregated NudityLevel reached `.nude`
+    /// gets a low-grade 1/4-bar signal — the genital region is
+    /// clothed but other regions are exposed, which is worth
+    /// surfacing.
+    private func genitalWarningStyle(
+        for label: String,
+        subjectLevel: NudityLevel
+    ) -> (bars: Double, color: Color) {
         let upper = label.uppercased()
         if upper.contains("ORGASM")  { return (1.00, .red) }
         if upper.contains("AROUSAL") { return (0.75, .orange) }
         if upper.contains("FLACCID") { return (0.50, .yellow) }
+        if upper.contains("COVERED") && subjectLevel == .nude {
+            return (0.25, .gray)
+        }
         return (0.00, .gray)
+    }
+
+    /// Find the `NudityLevel` of the body that owns a given
+    /// detection, by max intersection area against the per-body
+    /// rectangles. Returns `.none` when no body overlaps (loose
+    /// detections in dead space) or when the per-body levels
+    /// haven't been populated yet (NudeNet model not installed).
+    private func subjectLevel(for det: NudityDetection) -> NudityLevel {
+        guard !viewModel.bodyRectangles.isEmpty,
+              viewModel.nudityLevels.count == viewModel.bodyRectangles.count
+        else { return .none }
+        var bestIdx: Int? = nil
+        var bestArea: CGFloat = 0
+        for (i, body) in viewModel.bodyRectangles.enumerated() {
+            let inter = body.intersection(det.rect)
+            guard !inter.isNull else { continue }
+            let area = inter.width * inter.height
+            if area > bestArea {
+                bestArea = area
+                bestIdx = i
+            }
+        }
+        if let idx = bestIdx { return viewModel.nudityLevels[idx] }
+        return .none
     }
 
     /// Floating per-subject warning badge placed above each body whose
