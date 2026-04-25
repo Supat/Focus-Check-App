@@ -206,6 +206,10 @@ struct ContentView: View {
             .overlay(alignment: .bottomLeading) {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 8) {
+                        nudeSubjectsBadge
+                        contextBadge
+                    }
+                    HStack(spacing: 8) {
                         qualityBadge
                         aestheticBadge
                     }
@@ -214,8 +218,6 @@ struct ContentView: View {
                         exposureBadge
                         provenanceBadge
                         motionBlurBadge
-                        nudeSubjectsBadge
-                        contextBadge
                     }
                 }
                 .padding([.leading, .bottom], 12)
