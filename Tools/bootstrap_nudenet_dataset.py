@@ -128,16 +128,35 @@ REVIEW_ONLY_CLASSES = {
 # disambiguate cases that a tight crop can't resolve.
 CROP_PADDING_FRAC = 0.20
 
-# Per-label confidence overrides. Empirically tuned against the
-# Outdoor library (cf. crop spot-checks of the score distribution):
-# at 0.50 NudeNet's MALE_GENITALIA_EXPOSED head produces a smooth
-# FP tail across the whole 0.5–0.7 band, so this class needs a
-# stricter 0.70 floor to actually catch real cases. The other
-# classes' 0.50 detections were a mix; 0.60 cleans up most of the
-# remaining noise without losing genuine subjects.
+# Per-label confidence overrides — match the on-device app's
+# NudityDetector profile now that the bootstrap also runs NudeNet
+# on tight per-body crops (see the YOLOv8n person-detection step
+# below). With per-body cropping in place the precision FPs that
+# used to require 0.60 / 0.70 floors have collapsed:
+#  - FACE_* still gets a 0.50 floor (NudeNet's face head is a
+#    noisy side-task even on tight crops).
+#  - MALE_GENITALIA_EXPOSED drops to 0.10 because NudeNet's
+#    training data skews female and male-genital logits come in
+#    systematically lower; per-body cropping makes those low
+#    detections trustworthy where the whole-image pass made them
+#    pure noise.
 CLASS_THRESHOLD_OVERRIDES: dict[str, float] = {
-    "MALE_GENITALIA_EXPOSED": 0.70,
+    "FACE_MALE":              0.50,
+    "FACE_FEMALE":            0.50,
+    "MALE_GENITALIA_EXPOSED": 0.10,
 }
+
+# Outward padding applied to each YOLOv8n person box before we
+# crop and run NudeNet on the result. Matches NudityDetector.swift's
+# `bodyCropPadding`. Wide enough to keep shoulders / a little
+# background for context; tight enough that the cropped frame is
+# dominated by the subject so NudeNet's input resolution is well
+# spent.
+BODY_CROP_PADDING_FRAC = 0.15
+
+# Class-agnostic NMS IoU threshold for merging detections from
+# overlapping body crops. Mirrors NudityDetector.swift.
+GLOBAL_NMS_IOU = 0.45
 
 # Annotation rubric written to the output directory as RUBRIC.md.
 # One paragraph per sub-class of the old MALE_GENITALIA_EXPOSED,
@@ -191,6 +210,33 @@ correct class becomes FLACCID again (post-resolution). When in
 doubt between AROUSAL and ORGASM on a still frame, prefer AROUSAL
 — ORGASM should be the rarer, unambiguous label.
 """
+
+
+def class_agnostic_nms(detections: list[dict], iou_threshold: float) -> list[dict]:
+    """Suppress overlapping detections from neighboring body crops.
+    Mirrors `NudityDetector.swift::classAgnosticNMS`. Operates on
+    NudeNet's xywh box format ([x_topleft, y_topleft, width, height])
+    in image-global pixel coords."""
+    sorted_dets = sorted(detections, key=lambda d: -float(d.get("score", 0)))
+    kept: list[dict] = []
+    for det in sorted_dets:
+        x1, y1, w, h = det["box"]
+        x2, y2 = x1 + w, y1 + h
+        suppressed = False
+        for k in kept:
+            kx1, ky1, kw, kh = k["box"]
+            kx2, ky2 = kx1 + kw, ky1 + kh
+            ix1 = max(x1, kx1); iy1 = max(y1, ky1)
+            ix2 = min(x2, kx2); iy2 = min(y2, ky2)
+            iw = max(0.0, ix2 - ix1); ih = max(0.0, iy2 - iy1)
+            inter = iw * ih
+            union = w * h + kw * kh - inter
+            if union > 0 and (inter / union) > iou_threshold:
+                suppressed = True
+                break
+        if not suppressed:
+            kept.append(det)
+    return kept
 
 
 def resolve_safely(path_str: str) -> Path:
@@ -311,12 +357,18 @@ def build_parser() -> argparse.ArgumentParser:
     label_group.add_argument("--inference-resolution", type=int, default=320,
                              help="NudeNet input size (320 bundled, 640 "
                                   "for the 640m variant).")
-    label_group.add_argument("--confidence", type=float, default=0.60,
+    label_group.add_argument("--confidence", type=float, default=0.40,
                              help="Default confidence floor for pre-labels. "
-                                  "Per-class overrides apply on top: "
-                                  "MALE_GENITALIA_EXPOSED is at 0.70 "
-                                  "(stricter, NudeNet's FP tail extends "
-                                  "into the 0.5–0.7 band on this class).")
+                                  "Per-class overrides apply on top: face "
+                                  "labels are stricter (0.50), "
+                                  "MALE_GENITALIA_EXPOSED is looser (0.10).")
+    label_group.add_argument("--person-detector",
+                             default="yolov8n.pt",
+                             help="Path / Ultralytics model name for the "
+                                  "person detector used to anchor body "
+                                  "crops before NudeNet runs. Default "
+                                  "yolov8n.pt auto-downloads on first use "
+                                  "(~6 MB).")
 
     run_group = p.add_argument_group("run control")
     run_group.add_argument("--dry-run", action="store_true",
@@ -416,8 +468,13 @@ def main() -> None:
     labels_dir.mkdir(parents=True, exist_ok=True)
     crops_dir.mkdir(parents=True, exist_ok=True)
 
-    # Initialize NudeNet if we're labeling.
+    # Initialize NudeNet + the YOLOv8n person detector if we're
+    # labeling. Per-body cropping (mirroring the on-device app's
+    # NudityDetector) gives NudeNet a much better effective
+    # resolution per subject and lets us discard hallucinations
+    # that don't land on a person.
     detector = None
+    person_detector = None
     if not args.skip_labeling:
         try:
             from nudenet import NudeDetector
@@ -430,6 +487,19 @@ def main() -> None:
             )
         except Exception as exc:
             sys.exit(f"ERROR: NudeNet init failed: {exc}")
+        try:
+            from ultralytics import YOLO
+        except ImportError:
+            sys.exit("ERROR: ultralytics not installed. Run: pip install ultralytics")
+        try:
+            # Auto-downloads to ~/.cache/ultralytics on first use.
+            person_detector = YOLO(args.person_detector)
+        except Exception as exc:
+            sys.exit(f"ERROR: YOLO person detector init failed: {exc}")
+        try:
+            import cv2  # noqa: F401  used for the BGR ndarray pipeline
+        except ImportError:
+            sys.exit("ERROR: opencv-python not installed. Run: pip install opencv-python")
 
     # Lazy imports after we know we're going to run.
     from PIL import Image
@@ -519,22 +589,88 @@ def main() -> None:
         if detector is None:
             continue
 
-        # Pre-label with NudeNet.
+        # Per-body cropping pipeline (mirrors the on-device app's
+        # NudityDetector.detect):
+        #   1. YOLOv8n detects person bounding boxes.
+        #   2. Pad each by BODY_CROP_PADDING_FRAC and crop the BGR
+        #      ndarray.
+        #   3. Run NudeNet on each crop. NudeNet's _read_image expects
+        #      either a path or a 4-channel ndarray (it does an
+        #      unconditional cvtColor RGBA2BGR), so we stack an alpha
+        #      channel via cv2.cvtColor(BGR2BGRA) before handing it
+        #      over.
+        #   4. Translate detection boxes from crop-local pixel coords
+        #      back to image-global coords.
+        #   5. Class-agnostic NMS across the union to dedupe overlaps
+        #      between adjacent body crops.
         try:
-            detections = detector.detect(str(exported))
+            import cv2 as _cv2
+            img_bgr = _cv2.imread(str(exported))
+            if img_bgr is None:
+                raise ValueError("cv2.imread returned None")
+            img_h, img_w = img_bgr.shape[:2]
         except Exception as exc:
-            print(f"  NudeNet failed on {exported.name}: {exc}",
+            print(f"  cv2 read failed on {exported.name}: {exc}",
                   file=sys.stderr)
             skipped_label += 1
             continue
 
         try:
-            with Image.open(exported) as im:
-                img_w, img_h = im.size
+            person_results = person_detector(
+                img_bgr, classes=[0], verbose=False
+            )
+            person_boxes = [
+                tuple(b) for b in
+                person_results[0].boxes.xyxy.cpu().numpy()
+            ]
         except Exception as exc:
-            print(f"  PIL failed on {exported.name}: {exc}", file=sys.stderr)
+            print(f"  YOLO person-det failed on {exported.name}: {exc}",
+                  file=sys.stderr)
             skipped_label += 1
             continue
+
+        # If YOLO finds no people, skip NudeNet entirely. The label
+        # file gets no entries — the reviewer can hand-annotate
+        # later if the photo really does contain a subject the
+        # detector missed.
+        detections: list[dict] = []
+        for x1, y1, x2, y2 in person_boxes:
+            bw = x2 - x1
+            bh = y2 - y1
+            pad_x = bw * BODY_CROP_PADDING_FRAC
+            pad_y = bh * BODY_CROP_PADDING_FRAC
+            cx1 = max(0, int(round(x1 - pad_x)))
+            cy1 = max(0, int(round(y1 - pad_y)))
+            cx2 = min(img_w, int(round(x2 + pad_x)))
+            cy2 = min(img_h, int(round(y2 + pad_y)))
+            if cx2 - cx1 < 32 or cy2 - cy1 < 32:
+                continue
+            body_crop = img_bgr[cy1:cy2, cx1:cx2]
+            try:
+                body_rgba = _cv2.cvtColor(body_crop, _cv2.COLOR_BGR2BGRA)
+                crop_dets = detector.detect(body_rgba)
+            except Exception as exc:
+                print(f"  NudeNet failed on body crop of {exported.name}: {exc}",
+                      file=sys.stderr)
+                continue
+            # Translate boxes from crop-local to image-global.
+            for d in crop_dets or []:
+                box = d.get("box", [])
+                if len(box) != 4:
+                    continue
+                x_tl, y_tl, w, h = map(float, box)
+                d["box"] = [cx1 + x_tl, cy1 + y_tl, w, h]
+                detections.append(d)
+
+        if not detections:
+            skipped_label += 1
+            # Fall through anyway so an empty label file is written —
+            # a no-detection photo is still part of the dataset
+            # (negative example for training).
+
+        # Cross-body NMS (a single subject straddling two adjacent
+        # crops can produce duplicate detections).
+        detections = class_agnostic_nms(detections, GLOBAL_NMS_IOU)
 
         # Open the source image once for both label math and crop
         # writing; closing is handled below after all detections are

@@ -16,11 +16,23 @@ fine-tuned checkpoint if enough reviewed training data exists.
 2. Exports the originals to a user-specified output directory,
    converting HEIC/RAW to JPEG by default so NudeNet and downstream
    annotation tools can read them.
-3. Runs NudeNet on each exported image and writes a YOLO-format
-   `.txt` sidecar with its bounding-box predictions.
-4. Emits a `data.yaml` and `classes.txt` wired for Ultralytics
+3. **Per-body NudeNet inference.** YOLOv8n first detects person
+   bounding boxes on the exported image. For each person, the
+   script crops a padded body region and runs NudeNet on the
+   crop — same architecture as the on-device app's
+   `NudityDetector`. This gives NudeNet much better effective
+   resolution per subject than running on the whole image and
+   discards any detection that doesn't land on a person; both
+   together collapse the false-positive rate compared to the
+   naïve whole-image pass.
+4. Translates detections back to image-global coords, runs class-
+   agnostic NMS across the union of body crops to dedupe overlaps,
+   then writes a YOLO-format `.txt` sidecar with the surviving
+   bounding-box predictions.
+5. Emits a `data.yaml` and `classes.txt` wired for Ultralytics
    YOLOv8 fine-tuning, plus a `README-review.md` with the human-
-   review checklist.
+   review checklist and a `RUBRIC.md` for the genital-state sub-
+   classes.
 
 The labels it writes are **candidate annotations from a biased
 model**. They are *not* the dataset. The dataset is what you have
@@ -54,7 +66,8 @@ the enumeration looks right before removing the flag.
 ## Install
 
 ```bash
-pip install osxphotos nudenet pillow pillow-heif tqdm
+pip install osxphotos nudenet pillow pillow-heif tqdm \
+            ultralytics opencv-python
 ```
 
 For the larger `640m` NudeNet variant (higher recall than the
@@ -63,6 +76,10 @@ bundled `320n`):
 ```bash
 curl -L -O https://github.com/notAI-tech/NudeNet/releases/download/v3.4-weights/640m.onnx
 ```
+
+The first labeling run also auto-downloads `yolov8n.pt`
+(~6 MB) into `~/.cache/ultralytics/` for the person-detection
+step; subsequent runs use the cached copy.
 
 ## Usage
 
