@@ -50,7 +50,7 @@ struct ContentView: View {
                     // Custom principal title: Explicit badge (when the
                     // classifier flagged the image) followed by the file
                     // name. Lives in the toolbar instead of an image
-                    // overlay so the tap-to-toggle compare gesture
+                    // overlay so the press-and-hold-to-toggle compare gesture
                     // doesn't hide it — the flag state should remain
                     // visible at all times.
                     ToolbarItem(placement: .principal) {
@@ -125,20 +125,19 @@ struct ContentView: View {
                                             panStart = viewModel.zoomPanOffset
                                         }
                                 )
-                                // Single tap on the image toggles the
-                                // overlay / badges so the user can briefly
-                                // see the original photo. SpatialTapGesture
-                                // with count=1 runs alongside the count=2
-                                // double-tap-to-zoom above; SwiftUI delays
-                                // delivery until it can rule out the higher-
-                                // count match, so a quick double tap still
-                                // triggers zoom only.
-                                .simultaneousGesture(
-                                    SpatialTapGesture(count: 1)
-                                        .onEnded { _ in
-                                            viewModel.overlayHidden.toggle()
-                                        }
-                                )
+                                // Press-and-hold on the image toggles the
+                                // overlay / badges. Each completed long-
+                                // press flips the state — a different
+                                // intent from the earlier "hidden only
+                                // while held" pattern, and from a single
+                                // tap (which conflicts with double-tap-to-
+                                // zoom and fires too easily mid-pan).
+                                .onLongPressGesture(
+                                    minimumDuration: 0.4,
+                                    maximumDistance: 20
+                                ) {
+                                    viewModel.overlayHidden.toggle()
+                                }
                             nudityLabelOverlay(in: geo.size)
                             nudeSubjectHeadBadges(in: geo.size)
                         }
@@ -300,7 +299,7 @@ struct ContentView: View {
     /// Navigation-bar principal item: the Explicit badge (when the
     /// classifier flagged the image) followed by the file name. Replaces
     /// the previous top-of-image overlay so the flag stays visible
-    /// during the tap-to-toggle compare and doesn't clutter the photo.
+    /// during the press-and-hold-to-toggle compare and doesn't clutter the photo.
     /// Colour keeps the original rule: red when NSFW confidence > 0.6,
     /// orange otherwise (or when SCA drove the verdict, which doesn't
     /// expose a confidence number).
@@ -329,7 +328,7 @@ struct ContentView: View {
     /// Debug-style overlay: draws one outlined rect + text label per
     /// NudeNet detection on top of the rendered photo. Hidden when the
     /// user toggles it off, when no detections exist, or during the
-    /// tap-to-toggle "compare with original" gesture so the original
+    /// press-and-hold-to-toggle "compare with original" gesture so the original
     /// photo is visible unadorned. The coordinate math mirrors
     /// `FocusRenderer.fit` so the boxes track the same aspect-fit +
     /// zoom transform the Metal view uses.
