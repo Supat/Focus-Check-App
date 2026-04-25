@@ -793,19 +793,24 @@ struct ContentView: View {
     }
 
     /// Compact pain readout rendered under the PAD stack for a
-    /// subject. Unipolar bar (0..4) with heat-coded fill — green,
-    /// yellow, orange, red by PSPI level — and a two-letter level
-    /// label on the right.
+    /// subject. Bandage prefix glyph + a gauge glyph whose
+    /// dial position and tint encode the PSPI level:
+    ///
+    ///   none      gauge.low     green
+    ///   mild      gauge.low     yellow
+    ///   moderate  gauge.medium  orange
+    ///   severe    gauge.high    red
+    ///
+    /// The continuous PSPI value (0..4) is intentionally
+    /// collapsed onto the four-step ladder — matches the way
+    /// `PainScore.Level` is displayed elsewhere.
     private func subjectPainBar(for pain: PainScore) -> some View {
-        let barWidth: CGFloat = 45
-        let barHeight: CGFloat = 4
-        let normalized = CGFloat(max(0, min(4, pain.pspi)) / 4)
-        let tint: Color = {
+        let (gaugeName, tint): (String, Color) = {
             switch pain.level {
-            case .none:     return .green
-            case .mild:     return .yellow
-            case .moderate: return .orange
-            case .severe:   return .red
+            case .none:     return ("gauge.low",    .green)
+            case .mild:     return ("gauge.low",    .yellow)
+            case .moderate: return ("gauge.medium", .orange)
+            case .severe:   return ("gauge.high",   .red)
             }
         }()
         return HStack(spacing: 6) {
@@ -813,15 +818,9 @@ struct ContentView: View {
                 .font(.system(size: 7, weight: .bold))
                 .foregroundStyle(.white.opacity(0.9))
                 .frame(width: 8, alignment: .leading)
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(Color.white.opacity(0.18))
-                    .frame(width: barWidth, height: barHeight)
-                Capsule()
-                    .fill(tint)
-                    .frame(width: normalized * barWidth, height: barHeight)
-            }
-            .frame(width: barWidth, height: barHeight)
+            Image(systemName: gaugeName)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(tint)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
