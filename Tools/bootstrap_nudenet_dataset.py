@@ -155,13 +155,17 @@ CLASS_THRESHOLD_OVERRIDES: dict[str, float] = {
     "MALE_GENITALIA_EXPOSED": 0.10,
 }
 
-# Outward padding applied to each YOLOv8n person box before we
-# crop and run NudeNet on the result. Matches NudityDetector.swift's
-# `bodyCropPadding`. Wide enough to keep shoulders / a little
-# background for context; tight enough that the cropped frame is
-# dominated by the subject so NudeNet's input resolution is well
-# spent.
-BODY_CROP_PADDING_FRAC = 0.15
+# Outward padding applied to each person box before we crop and
+# run NudeNet on the result. Empirically the previous 0.15 default
+# was producing a high background false-positive rate — NudeNet
+# happily fired on the rectangular padding band around the subject
+# (shadows, clothing folds, neighbouring people) and those boxes
+# survived because there was no on-body filter. Now we lean on the
+# segmentation-mask gate below instead: pad zero, crop tight, and
+# discard any detection whose centre falls outside the person
+# silhouette. Bump cautiously if a fine-tune shows recall loss on
+# extremities (feet, fingertips).
+BODY_CROP_PADDING_FRAC = 0.0
 
 # Class-agnostic NMS IoU threshold for merging detections from
 # overlapping body crops. Mirrors NudityDetector.swift.
@@ -289,19 +293,26 @@ adding here.
 
 
 class _VisionPersonDetector:
-    """Apple Vision body-rect + pose-keypoint detector, mirroring the
-    on-device `FocusAnalyzer.runVision` body-anchor logic. Combines
-    `VNDetectHumanRectanglesRequest` with `VNDetectHumanBodyPoseRequest`
-    so subjects the rect detector misses on unusual poses still get
-    caught via their joint cluster.
+    """Apple Vision body-rect + pose-keypoint + person-segmentation
+    detector, mirroring the on-device `FocusAnalyzer.runVision`
+    body-anchor logic. Combines `VNDetectHumanRectanglesRequest`
+    with `VNDetectHumanBodyPoseRequest` so subjects the rect
+    detector misses on unusual poses still get caught via their
+    joint cluster, and pairs both with a
+    `VNGeneratePersonSegmentationRequest` mask so the downstream
+    pipeline can throw out NudeNet detections that land on
+    background pixels rather than the person silhouette.
 
     Init raises ImportError when the runtime isn't macOS or
     `pyobjc-framework-Vision` isn't installed; callers fall back to
-    the YOLOv8n path.
+    the YOLOv8n path (no segmentation mask available there).
 
-    `detect_persons` returns pixel-coord top-down xyxy tuples (same
-    convention as cv2 / YOLOv8n's xyxy output) so the downstream
-    crop / NudeNet pipeline doesn't care which detector ran.
+    `detect_persons_with_mask` returns
+        (rects, mask)
+    where rects are pixel-coord top-down xyxy tuples (same
+    convention as cv2 / YOLOv8n's xyxy output) and mask is a uint8
+    ndarray at image resolution where pixels >= 128 are person.
+    Mask is None if Vision didn't produce a segmentation result.
     """
 
     # Joint-confidence floor for inclusion in a pose-derived rect.
@@ -322,12 +333,25 @@ class _VisionPersonDetector:
         # ImportError instead of a partial module.
         import Foundation  # noqa: F401
         import Vision      # noqa: F401
+        import CoreVideo   # noqa: F401
+        import CoreImage   # noqa: F401
+        import Quartz      # noqa: F401
         self._Foundation = Foundation
         self._Vision = Vision
+        self._CoreVideo = CoreVideo
+        self._CoreImage = CoreImage
+        self._Quartz = Quartz
         self._all_joints_key = Vision.VNHumanBodyPoseObservationJointsGroupNameAll
+        # Lazy CIContext for rendering segmentation buffers; reused
+        # across photos so we don't pay setup cost per image.
+        self._ci_context = CoreImage.CIContext.context()
 
-    def detect_persons(self, image_path: str,
-                       img_w: int, img_h: int) -> list[tuple[float, float, float, float]]:
+    def detect_persons_with_mask(self, image_path: str,
+                                 img_w: int, img_h: int):
+        """Run rect + pose + segmentation in a single Vision pass.
+        Returns (rects, mask) where mask may be None on segmentation
+        failure (caller falls back to a body-rect-containment gate).
+        """
         url = self._Foundation.NSURL.fileURLWithPath_(image_path)
         handler = self._Vision.VNImageRequestHandler.alloc() \
             .initWithURL_options_(url, None)
@@ -337,10 +361,24 @@ class _VisionPersonDetector:
         # on-device `bodyRects.upperBodyOnly = false`.
         rect_req.setUpperBodyOnly_(False)
         pose_req = self._Vision.VNDetectHumanBodyPoseRequest.alloc().init()
+        seg_req = self._Vision.VNGeneratePersonSegmentationRequest.alloc().init()
+        # `.balanced` is the speed/quality sweet spot — matches the
+        # on-device app's `personSeg.qualityLevel = .balanced`.
+        seg_req.setQualityLevel_(
+            self._Vision.VNGeneratePersonSegmentationRequestQualityLevelBalanced
+        )
+        # Single-component 8-bit so the mask comes back as a flat
+        # alpha image we can read byte-by-byte without unpacking
+        # a 32-bit float.
+        seg_req.setOutputPixelFormat_(
+            self._CoreVideo.kCVPixelFormatType_OneComponent8
+        )
 
-        ok, _err = handler.performRequests_error_([rect_req, pose_req], None)
+        ok, _err = handler.performRequests_error_(
+            [rect_req, pose_req, seg_req], None
+        )
         if not ok:
-            return []
+            return [], None
 
         rects: list[tuple[float, float, float, float]] = []
 
@@ -374,7 +412,56 @@ class _VisionPersonDetector:
             if not covered:
                 rects.append(pose_rect)
 
-        return rects
+        mask = self._extract_segmentation_mask(seg_req, img_w, img_h)
+        return rects, mask
+
+    def _extract_segmentation_mask(self, seg_req, img_w: int, img_h: int):
+        """Pull the segmentation observation's CVPixelBuffer through
+        a CIImage → CGImage round-trip so we can read its bytes,
+        then upsample with nearest-neighbour to the source image's
+        resolution. Returns a uint8 ndarray (h, w) or None if the
+        request didn't produce an observation."""
+        import numpy as np
+        import cv2
+        results = seg_req.results() or []
+        if not results:
+            return None
+        buf = results[0].pixelBuffer()
+        if buf is None:
+            return None
+
+        ci_image = self._CoreImage.CIImage.imageWithCVPixelBuffer_(buf)
+        if ci_image is None:
+            return None
+        extent = ci_image.extent()
+        src_w = int(extent.size.width)
+        src_h = int(extent.size.height)
+        if src_w <= 0 or src_h <= 0:
+            return None
+
+        cg = self._ci_context.createCGImage_fromRect_(ci_image, extent)
+        if cg is None:
+            return None
+        provider = self._Quartz.CGImageGetDataProvider(cg)
+        cf_data = self._Quartz.CGDataProviderCopyData(provider)
+        bpr = int(self._Quartz.CGImageGetBytesPerRow(cg))
+        raw = bytes(cf_data)
+        # OneComponent8: 1 byte per pixel; bpr can be padded past
+        # src_w on the row stride, slice down to the real width.
+        arr = np.frombuffer(raw, dtype=np.uint8)
+        if arr.size < src_h * bpr:
+            return None
+        arr = arr[: src_h * bpr].reshape(src_h, bpr)[:, :src_w].copy()
+
+        # `.balanced` segmentation comes out at sub-resolution
+        # (typically a few hundred pixels on the long side); upsample
+        # to source. Nearest-neighbour preserves the binary edge
+        # rather than feathering, which is what we want for a hard
+        # gate.
+        if (src_w, src_h) != (img_w, img_h):
+            arr = cv2.resize(arr, (img_w, img_h),
+                             interpolation=cv2.INTER_NEAREST)
+        return arr
 
     def _pose_observation_rect(self, obs, img_w: int, img_h: int):
         pts, err = obs.recognizedPointsForGroupKey_error_(
@@ -417,6 +504,38 @@ class _VisionPersonDetector:
         inter = iw * ih
         union = (ax2 - ax1) * (ay2 - ay1) + (bx2 - bx1) * (by2 - by1) - inter
         return (inter / union) if union > 0 else 0.0
+
+
+def _detection_on_person(det: dict, mask, person_boxes) -> bool:
+    """True when the detection's centre lies on a person pixel
+    (segmentation gate) or, when the mask is None, inside any
+    detected person rectangle (body-rect fallback). NudeNet's box
+    is xywh in image-global pixel coords."""
+    box = det.get("box")
+    if not box or len(box) != 4:
+        return False
+    x_tl, y_tl, w, h = (float(v) for v in box)
+    cx = x_tl + w / 2.0
+    cy = y_tl + h / 2.0
+    if mask is not None:
+        mh, mw = mask.shape[:2]
+        if mw <= 0 or mh <= 0:
+            return False
+        x = int(max(0, min(mw - 1, cx)))
+        y = int(max(0, min(mh - 1, cy)))
+        # OneComponent8 segmentation: alpha-style coverage. Half-
+        # threshold rejects the soft anti-aliased halo around the
+        # silhouette (typical for `.balanced` quality) which usually
+        # overlaps just a hair of background.
+        return mask[y, x] >= 128
+    # YOLO fallback: no segmentation; require centre inside at least
+    # one of the body rectangles. Looser than the mask gate but
+    # still kills detections that landed in the inter-body
+    # background.
+    for x1, y1, x2, y2 in person_boxes:
+        if x1 <= cx <= x2 and y1 <= cy <= y2:
+            return True
+    return False
 
 
 def class_agnostic_nms(detections: list[dict], iou_threshold: float) -> list[dict]:
@@ -816,9 +935,11 @@ def main() -> None:
 
         # Per-body cropping pipeline (mirrors the on-device app's
         # NudityDetector.detect):
-        #   1. YOLOv8n detects person bounding boxes.
-        #   2. Pad each by BODY_CROP_PADDING_FRAC and crop the BGR
-        #      ndarray.
+        #   1. Apple Vision (preferred) or YOLOv8n (fallback)
+        #      detects person bounding boxes; Vision additionally
+        #      produces a person-segmentation mask.
+        #   2. Pad each rect by BODY_CROP_PADDING_FRAC (default 0)
+        #      and crop the BGR ndarray.
         #   3. Run NudeNet on each crop. NudeNet's _read_image expects
         #      either a path or a 4-channel ndarray (it does an
         #      unconditional cvtColor RGBA2BGR), so we stack an alpha
@@ -826,7 +947,14 @@ def main() -> None:
         #      over.
         #   4. Translate detection boxes from crop-local pixel coords
         #      back to image-global coords.
-        #   5. Class-agnostic NMS across the union to dedupe overlaps
+        #   5. Background filter: drop any detection whose centre
+        #      falls outside the person silhouette (mask path) or
+        #      every body rectangle (YOLO fallback). NudeNet runs
+        #      over a rectangular crop but the body fills only part
+        #      of that rectangle; without this gate, detections
+        #      land on shadows / clothing folds / neighbouring
+        #      subjects in the background pixels of the rect.
+        #   6. Class-agnostic NMS across the union to dedupe overlaps
         #      between adjacent body crops.
         try:
             import cv2 as _cv2
@@ -842,8 +970,10 @@ def main() -> None:
 
         try:
             if person_detector_kind == "vision":
-                person_boxes = person_detector.detect_persons(
-                    str(exported), img_w, img_h
+                person_boxes, person_mask = (
+                    person_detector.detect_persons_with_mask(
+                        str(exported), img_w, img_h
+                    )
                 )
             else:
                 person_results = person_detector(
@@ -853,6 +983,10 @@ def main() -> None:
                     tuple(b) for b in
                     person_results[0].boxes.xyxy.cpu().numpy()
                 ]
+                # YOLOv8n path doesn't ship a segmentation mask; the
+                # downstream gate falls back to body-rect containment
+                # when person_mask is None.
+                person_mask = None
         except Exception as exc:
             print(f"  person-det failed on {exported.name}: {exc}",
                   file=sys.stderr)
@@ -891,6 +1025,18 @@ def main() -> None:
                 x_tl, y_tl, w, h = map(float, box)
                 d["box"] = [cx1 + x_tl, cy1 + y_tl, w, h]
                 detections.append(d)
+
+        # Background filter: NudeNet runs on a rectangular body crop
+        # but the body inside that rectangle doesn't fill it — the
+        # surrounding pixels are background, and NudeNet happily
+        # fires on them. Throw out any detection whose centre falls
+        # outside the person silhouette (segmentation mask path) or,
+        # on the YOLO fallback where no mask is available, outside
+        # every detected body rectangle.
+        detections = [
+            d for d in detections
+            if _detection_on_person(d, person_mask, person_boxes)
+        ]
 
         if not detections:
             skipped_label += 1
