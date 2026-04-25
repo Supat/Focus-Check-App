@@ -17,6 +17,12 @@ struct ContentView: View {
     /// gesture start so successive drags accumulate rather than snap
     /// back to zero. Re-seeded on zoom toggle.
     @State private var panStart: CGSize = .zero
+    /// In-flight timer that fires the badge-toggle if the user keeps
+    /// holding for the full duration. Cancelled when the touch ends
+    /// or moves out of range. SwiftUI's LongPressGesture callbacks
+    /// fire at touch-down (not at minimumDuration), so we measure
+    /// the hold duration ourselves.
+    @State private var badgeHoldTask: Task<Void, Never>?
 
     var body: some View {
         NavigationStack {
@@ -125,30 +131,37 @@ struct ContentView: View {
                                             panStart = viewModel.zoomPanOffset
                                         }
                                 )
-                                // Press-and-hold on the image toggles the
-                                // overlay / badges. 3-second hold is
-                                // long enough that it can't fire
-                                // accidentally while the user is
-                                // examining the image (e.g. resting a
-                                // finger), but still short enough to
-                                // be deliberate. Uses an explicit
-                                // LongPressGesture with `.onChanged` so
-                                // the toggle fires at the recognition
-                                // mark while the finger is still down,
-                                // not when it's released —
-                                // `.onLongPressGesture(perform:)` waits
-                                // for finger-up due to gesture
-                                // arbitration with the drag-to-pan
-                                // recognizer above.
+                                // Press-and-hold for 3 s on the image
+                                // toggles the overlay / badges. Apple's
+                                // LongPressGesture has neither a clean
+                                // "fire at minimumDuration while still
+                                // pressed" callback (its onChanged
+                                // fires at touch-down, its onEnded /
+                                // perform fire on release), nor a
+                                // public touch-began event. So we run
+                                // our own timer: a LongPressGesture
+                                // with minimumDuration=0 recognizes on
+                                // touch-down, kicks off a 3 s sleep,
+                                // and the toggle runs after the sleep
+                                // unless the gesture ended early.
                                 .simultaneousGesture(
                                     LongPressGesture(
-                                        minimumDuration: 3.0,
+                                        minimumDuration: 0,
                                         maximumDistance: 20
                                     )
                                     .onChanged { value in
-                                        if value {
-                                            viewModel.overlayHidden.toggle()
+                                        guard value, badgeHoldTask == nil else { return }
+                                        badgeHoldTask = Task { @MainActor in
+                                            try? await Task.sleep(for: .seconds(3))
+                                            if !Task.isCancelled {
+                                                viewModel.overlayHidden.toggle()
+                                            }
+                                            badgeHoldTask = nil
                                         }
+                                    }
+                                    .onEnded { _ in
+                                        badgeHoldTask?.cancel()
+                                        badgeHoldTask = nil
                                     }
                                 )
                             nudityLabelOverlay(in: geo.size)
