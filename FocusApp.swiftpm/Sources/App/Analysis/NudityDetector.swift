@@ -247,22 +247,26 @@ private final class NudityClassifier {
     private let inputSize: CGSize
 
     /// Default per-detection confidence floor — below this the
-    /// detection is dropped. Matches NudeNet's own Python default
-    /// (0.2) rather than YOLO's generic 0.25; higher values dropped
-    /// mid-confidence matches on obvious subjects.
-    private let defaultScoreThreshold: Float = 0.2
+    /// detection is dropped. Tighter than NudeNet's own 0.20
+    /// Python default; the bootstrap dataset run showed that 0.20
+    /// produces a wide false-positive band on this user's photo
+    /// distribution (especially face / armpit / belly hallucinations
+    /// on busy frames). 0.40 keeps the obvious subjects and drops
+    /// most of the borderline FPs.
+    private let defaultScoreThreshold: Float = 0.40
 
-    /// Per-label confidence floor. Most classes stay at the default
-    /// 0.2, but `MALE_GENITALIA_EXPOSED` drops to 0.10 because
-    /// NudeNet's training data skews toward female anatomy — male-
-    /// genital logits come in systematically lower (roughly half a
-    /// confidence band) even on clearly visible subjects. Lowering
-    /// the floor catches the missed cases; the NMS + attribution
-    /// logic downstream keeps the extra detections from snowballing
-    /// into false positives on unrelated subjects.
+    /// Per-label confidence floor overriding the default. NudeNet's
+    /// training behaviors:
+    ///  - the FACE_* branch is a noisy side-task — FPs cluster in
+    ///    the 0.20-0.40 confidence band on non-face content. Bumped
+    ///    to 0.50 to skip them.
+    ///  - MALE_GENITALIA_EXPOSED is systematically under-detected
+    ///    because training data skews female. Kept at 0.10 so
+    ///    legitimate-but-low-confidence detections still land.
     private func scoreThreshold(for label: String) -> Float {
         switch label {
         case "MALE_GENITALIA_EXPOSED": return 0.10
+        case "FACE_MALE", "FACE_FEMALE": return 0.50
         default: return defaultScoreThreshold
         }
     }

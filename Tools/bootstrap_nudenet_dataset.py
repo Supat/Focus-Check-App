@@ -128,6 +128,24 @@ REVIEW_ONLY_CLASSES = {
 # disambiguate cases that a tight crop can't resolve.
 CROP_PADDING_FRAC = 0.20
 
+# Per-label confidence floors. Two cross-cutting NudeNet behaviors
+# motivate the asymmetry:
+#   - the face branch is a noisy side-task — FACE_* labels at the
+#     0.20-0.40 confidence band are mostly hallucinations on
+#     non-face content. Bumped to 0.50.
+#   - MALE_GENITALIA_EXPOSED is systematically under-detected
+#     because of training-data skew — the band that most other
+#     classes are FPs in is exactly where genuine male-genital
+#     detections live. Stays at 0.10.
+# Everything else uses `--confidence` (default 0.40) — tighter than
+# NudeNet's own 0.20 default so the reviewer isn't drowning in
+# borderline FPs while the obvious detections still land.
+CLASS_THRESHOLD_OVERRIDES = {
+    "FACE_MALE":              0.50,
+    "FACE_FEMALE":            0.50,
+    "MALE_GENITALIA_EXPOSED": 0.10,
+}
+
 # Annotation rubric written to the output directory as RUBRIC.md.
 # One paragraph per sub-class of the old MALE_GENITALIA_EXPOSED,
 # with the hard edge cases called out so two reviewers would agree
@@ -300,8 +318,11 @@ def build_parser() -> argparse.ArgumentParser:
     label_group.add_argument("--inference-resolution", type=int, default=320,
                              help="NudeNet input size (320 bundled, 640 "
                                   "for the 640m variant).")
-    label_group.add_argument("--confidence", type=float, default=0.25,
-                             help="Minimum confidence for pre-labels.")
+    label_group.add_argument("--confidence", type=float, default=0.40,
+                             help="Default confidence floor for pre-labels. "
+                                  "Per-class overrides apply on top: face "
+                                  "labels are stricter (0.50), "
+                                  "MALE_GENITALIA_EXPOSED is looser (0.10).")
 
     run_group = p.add_argument_group("run control")
     run_group.add_argument("--dry-run", action="store_true",
@@ -540,11 +561,16 @@ def main() -> None:
         with open(tmp_path, "w") as out:
             for det_idx, det in enumerate(detections or []):
                 score = float(det.get("score", 0))
-                if score < args.confidence:
-                    continue
                 name = det.get("class", "")
                 class_id = LABEL_TO_ID.get(name)
                 if class_id is None:
+                    continue
+                # Per-label threshold: override wins when present;
+                # falls back to the user's --confidence default.
+                threshold = CLASS_THRESHOLD_OVERRIDES.get(
+                    name, args.confidence
+                )
+                if score < threshold:
                     continue
                 box = det.get("box", [])
                 if len(box) != 4:
