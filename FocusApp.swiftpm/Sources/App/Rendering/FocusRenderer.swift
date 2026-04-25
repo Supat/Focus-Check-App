@@ -93,6 +93,20 @@ final class FocusRenderer {
             width: view.drawableSize.width,
             height: view.drawableSize.height
         )
+        // Self-heal any drift between the size the view model
+        // last heard about (via Coordinator.drawableSizeWillChange,
+        // which is filtered for sub-pixel deltas) and the size the
+        // renderer is actually drawing into. Without this, an
+        // exit-full-screen change can leave zoom + anchor tuned to
+        // the prior drawable; the next frame draws into the new
+        // (smaller) drawable with the old transform and a black
+        // band shows up on whichever axis just shrank.
+        MainActor.assumeIsolated {
+            if drawableSize != viewModel.lastDrawableSize {
+                viewModel.lastDrawableSize = drawableSize
+                viewModel.reclampForDrawableChange()
+            }
+        }
         // MTKView.drawableSize is in pixels; DragGesture.translation (the
         // source of zoomPanOffset) is in points. Pass the ratio through
         // so the renderer can convert the pan into pixel space before
