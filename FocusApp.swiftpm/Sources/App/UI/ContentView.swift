@@ -321,19 +321,18 @@ struct ContentView: View {
     /// the photo carries no EXIF (e.g. screenshots, exported PNGs).
     @ViewBuilder
     private var megapixelsBadge: some View {
-        if let extent = viewModel.sourceImage?.extent,
+        if let source = viewModel.sourceImage,
            !viewModel.overlayHidden {
-            let mp = Int((extent.width * extent.height / 1_000_000).rounded())
-            if mp > 0 {
-                HStack(spacing: 6) {
-                    Image(systemName: "photo")
-                    Text("\(mp) MP")
-                        .font(.caption.monospacedDigit())
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .liquidBadgeBackground(in: Capsule())
+            let pixels = source.extent.width * source.extent.height
+            let mp = max(1, Int((pixels / 1_000_000).rounded()))
+            HStack(spacing: 6) {
+                Image(systemName: "photo")
+                Text("\(mp) MP")
+                    .font(.caption.monospacedDigit())
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .liquidBadgeBackground(in: Capsule())
         }
     }
 
