@@ -159,6 +159,54 @@ final class FocusViewModel: ObservableObject {
         animateZoom(toScale: targetScale, toAnchor: targetAnchor)
     }
 
+    /// Reconcile the current zoom + anchor against the renderer's
+    /// latest drawable size. Called from `FocusRenderer.resize` so
+    /// a layout change (full-screen toggle, Stage Manager resize,
+    /// rotation) doesn't leave a previously-fine zoom showing
+    /// black bands because the fit scale shifted under it.
+    ///
+    /// Two corrections applied in order:
+    ///   1. Bump zoom to the minimum that still covers the new
+    ///      drawable. The previous zoom may have been computed for
+    ///      a different aspect; if the new drawable's letterbox
+    ///      axis is wider relative, the post-zoom image can be
+    ///      fundamentally narrower than the drawable and no anchor
+    ///      eliminates the gap.
+    ///   2. Re-clamp anchor against the (possibly new) zoom — the
+    ///      valid range tightens when zoom drops or the letterbox
+    ///      grows.
+    /// Pan is zeroed since the previous offset was tuned to a
+    /// drawable that no longer applies.
+    ///
+    /// No-op while a zoom animation is in flight — the animation
+    /// loop owns those properties for its duration; a side-band
+    /// edit would fight the easing for a frame.
+    func reclampForDrawableChange() {
+        guard zoomAnimationTask == nil else { return }
+        guard zoomScale > 1.001 else { return }
+        let cover = coveringZoomScale()
+        if zoomScale < cover { zoomScale = cover }
+        zoomAnchor = clampedAnchor(zoomAnchor, forScale: zoomScale)
+        zoomPanOffset = .zero
+    }
+
+    /// Minimum zoom factor that keeps the fitted image covering
+    /// the drawable on both axes. The fit-binding axis already
+    /// covers exactly at zoom = 1, so cover comes from the other
+    /// axis's drawable / fitted ratio.
+    private func coveringZoomScale() -> CGFloat {
+        guard let src = sourceImage,
+              lastDrawableSize.width > 0,
+              lastDrawableSize.height > 0
+        else { return 1 }
+        let fit = min(lastDrawableSize.width / src.extent.width,
+                      lastDrawableSize.height / src.extent.height)
+        guard fit > 0 else { return 1 }
+        let coverX = lastDrawableSize.width / (src.extent.width * fit)
+        let coverY = lastDrawableSize.height / (src.extent.height * fit)
+        return max(coverX, coverY)
+    }
+
     /// Clamp a normalized anchor (0..1, Y-top) to the range that
     /// keeps the post-zoom image fully covering the drawable —
     /// mirrors the `clampedPan` math in ContentView, just solved

@@ -70,11 +70,15 @@ final class FocusRenderer {
         // store to reallocate. Push the drawable size onto the
         // view model so toggleZoom() can compute a native (1:1
         // source-to-drawable) zoom factor without round-tripping
-        // through GeometryReader / display-scale guesses.
+        // through GeometryReader / display-scale guesses, and
+        // reclamp any active zoom so a layout change doesn't
+        // leave the image with a black band on the side because
+        // the fit scale shifted under it.
         // MTKViewDelegate callbacks land on the main thread, same
         // run loop as the @MainActor view model.
         MainActor.assumeIsolated {
             viewModel.lastDrawableSize = size
+            viewModel.reclampForDrawableChange()
         }
     }
 
