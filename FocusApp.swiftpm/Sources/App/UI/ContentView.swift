@@ -519,27 +519,26 @@ struct ContentView: View {
         }
     }
 
-    /// Per-detection warning glyph placed above each NudeNet
-    /// genital-area detection whose label is *not* COVERED.
-    /// Colour encodes severity:
+    /// Per-detection warning badge placed above each NudeNet
+    /// genital-area detection. Pairs an `exclamationmark.octagon.fill`
+    /// with a `cellularbars` level indicator whose fill encodes
+    /// severity:
     ///
-    ///   • `FEMALE_GENITALIA_EXPOSED`               → grey
-    ///     (the all-male-corpus classifier doesn't refine this
-    ///     class; on a female subject it's a generic exposure
-    ///     warning without a state grading)
-    ///   • `MALE_GENITALIA_FLACCID`                 → yellow
-    ///   • `MALE_GENITALIA_AROUSAL`                 → orange
-    ///   • `MALE_GENITALIA_ORGASM`                  → red
-    ///   • `MALE_GENITALIA_EXPOSED` (raw NudeNet,
-    ///     classifier not installed / under-confident) → yellow
-    ///     (default to the lowest male severity until the
-    ///     classifier rewrites it).
+    ///   Bars   Colour   Label match
+    ///   ────   ──────   ──────────────────────────────────────
+    ///   0/4    grey     COVERED or raw EXPOSED (no sub-class
+    ///                   assigned — also covers FEMALE_*, since
+    ///                   the classifier doesn't refine female
+    ///                   detections)
+    ///   2/4    yellow   MALE_GENITALIA_FLACCID
+    ///   3/4    orange   MALE_GENITALIA_AROUSAL
+    ///   4/4    red      MALE_GENITALIA_ORGASM
     ///
     /// Independent of the Labels toggle — the badge always
-    /// surfaces when an explicitly-exposed genital detection is
-    /// present so the viewer can spot the flagged regions even
-    /// with the bounding-box overlay off. Suppressed by the
-    /// press-and-hold compare gesture via `overlayHidden`.
+    /// surfaces when a genital detection is present so the viewer
+    /// can spot the flagged regions and their severity even with
+    /// the bounding-box overlay off. Suppressed by the press-and-
+    /// hold compare gesture via `overlayHidden`.
     @ViewBuilder
     private func genitalWarningBadges(in size: CGSize) -> some View {
         if !viewModel.overlayHidden,
@@ -547,34 +546,36 @@ struct ContentView: View {
            let extent = viewModel.sourceImage?.extent,
            extent.width > 0, extent.height > 0 {
             let warnings = viewModel.nudityDetections.filter { det in
-                let upper = det.label.uppercased()
-                return upper.contains("GENITALIA") && !upper.contains("COVERED")
+                det.label.uppercased().contains("GENITALIA")
             }
             ForEach(Array(warnings.enumerated()), id: \.offset) { _, det in
                 let r = viewRect(for: det.rect, source: extent, in: size)
-                Image(systemName: "exclamationmark.warninglight.fill")
-                    .font(.title2)
-                    .foregroundStyle(genitalWarningTint(for: det.label))
-                    .padding(6)
-                    .background(.regularMaterial, in: Circle())
-                    .position(x: r.midX, y: max(12, r.minY - 18))
-                    .allowsHitTesting(false)
+                let style = genitalWarningStyle(for: det.label)
+                HStack(spacing: 2) {
+                    Image(systemName: "exclamationmark.octagon.fill")
+                    Image(systemName: "cellularbars", variableValue: style.bars)
+                }
+                .font(.caption2)
+                .foregroundStyle(style.color)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 2)
+                .background(.regularMaterial, in: Capsule())
+                .position(x: r.midX, y: max(8, r.minY - 12))
+                .allowsHitTesting(false)
             }
         }
     }
 
-    /// Colour for the `genitalWarningBadges` glyph based on the
-    /// NudeNet (or GenitalClassifier-overridden) label string.
-    /// Match order: female first, then male sub-classes ordered
-    /// by escalating severity, with a yellow fallback for the raw
-    /// MALE_GENITALIA_EXPOSED (un-graded) label.
-    private func genitalWarningTint(for label: String) -> Color {
+    /// Cellularbars `variableValue` (0–1) + foreground colour for
+    /// the genital warning badge. Severity ladder is detection
+    /// label → fill fraction; everything that isn't an explicitly-
+    /// graded sub-class collapses to 0 bars / grey.
+    private func genitalWarningStyle(for label: String) -> (bars: Double, color: Color) {
         let upper = label.uppercased()
-        if upper.contains("FEMALE")  { return .gray }
-        if upper.contains("ORGASM")  { return .red }
-        if upper.contains("AROUSAL") { return .orange }
-        if upper.contains("FLACCID") { return .yellow }
-        return .yellow
+        if upper.contains("ORGASM")  { return (1.00, .red) }
+        if upper.contains("AROUSAL") { return (0.75, .orange) }
+        if upper.contains("FLACCID") { return (0.50, .yellow) }
+        return (0.00, .gray)
     }
 
     /// Floating per-subject warning badge placed above each body whose
