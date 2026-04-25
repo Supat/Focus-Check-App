@@ -86,6 +86,11 @@ from pathlib import Path
 # predict the sub-classes; the review step is where boxes with
 # class_id=14 get reclassified into 18 / 19 / 20 per RUBRIC.md.
 # Any class-14 boxes remaining at training time should be dropped.
+#
+# Index 21 fills a gap in the upstream NudeNet schema: there is no
+# native MALE_GENITALIA_COVERED class, so clothed male groin regions
+# typically get pre-labelled as `FEMALE_GENITALIA_COVERED` (class 0)
+# on all-male corpora. The review step relabels those to class 21.
 NUDENET_LABELS = [
     "FEMALE_GENITALIA_COVERED",       # 0
     "FACE_FEMALE",                    # 1
@@ -109,6 +114,8 @@ NUDENET_LABELS = [
     "MALE_GENITALIA_FLACCID",         # 18
     "MALE_GENITALIA_AROUSAL",         # 19
     "MALE_GENITALIA_ORGASM",          # 20
+    # Review-added gap-fill (no NudeNet equivalent):
+    "MALE_GENITALIA_COVERED",         # 21
 ]
 LABEL_TO_ID = {name: i for i, name in enumerate(NUDENET_LABELS)}
 
@@ -120,6 +127,7 @@ REVIEW_ONLY_CLASSES = {
     "MALE_GENITALIA_FLACCID",
     "MALE_GENITALIA_AROUSAL",
     "MALE_GENITALIA_ORGASM",
+    "MALE_GENITALIA_COVERED",
 }
 
 # Pixel padding applied around each detection's box when writing
@@ -160,15 +168,27 @@ BODY_CROP_PADDING_FRAC = 0.15
 GLOBAL_NMS_IOU = 0.45
 
 # Annotation rubric written to the output directory as RUBRIC.md.
-# One paragraph per sub-class of the old MALE_GENITALIA_EXPOSED,
-# with the hard edge cases called out so two reviewers would agree
-# on the same photo most of the time.
-RUBRIC_CONTENT = """# Annotation rubric for MALE_GENITALIA sub-classes
+# Two review tasks: reclassifying MALE_GENITALIA_EXPOSED (class 14)
+# into 18 / 19 / 20, and adding new MALE_GENITALIA_COVERED (class 21)
+# boxes that NudeNet can't predict natively. Hard edge cases called
+# out so two reviewers would agree on the same photo most of the
+# time.
+RUBRIC_CONTENT = """# Annotation rubric for MALE_GENITALIA classes
 
-Every pre-label with class_id 14 (`MALE_GENITALIA_EXPOSED`) must be
-reclassified into one of the three labels below during review.
-Labels that can't confidently be committed should be **deleted**
-— noisy training labels do more damage than fewer clean ones.
+This rubric covers two review tasks:
+
+1. **Reclassify** every pre-label with class_id 14
+   (`MALE_GENITALIA_EXPOSED`) into one of the three sub-classes
+   below — 18 / 19 / 20. Labels that can't confidently be committed
+   should be **deleted**; noisy training labels do more damage than
+   fewer clean ones. Any class-14 boxes remaining at training time
+   will be dropped.
+2. **Relabel or add** boxes for `MALE_GENITALIA_COVERED` (class 21).
+   NudeNet has no native covered-male class, so on an all-male
+   corpus, clothed male groin regions are typically pre-labelled as
+   `FEMALE_GENITALIA_COVERED` (class 0). Every existing class-0 box
+   on a male subject is a reclassification candidate; missing boxes
+   on clothed male subjects need to be added during review.
 
 ## 18. MALE_GENITALIA_FLACCID
 
@@ -210,6 +230,61 @@ been wiped, absorbed, or dried and the erection subsides, the
 correct class becomes FLACCID again (post-resolution). When in
 doubt between AROUSAL and ORGASM on a still frame, prefer AROUSAL
 — ORGASM should be the rarer, unambiguous label.
+
+## 21. MALE_GENITALIA_COVERED
+
+Use for the anterior pelvic pouch (penis + scrotum region) when
+fully covered by an opaque garment such that no genital skin or
+tissue is visible. The garment may be underwear, briefs, boxers,
+boxer-briefs, jockstraps with full pouch, swim trunks, board
+shorts, Speedos / square-cut briefs, jammers, athletic supporters
+with cup, pants, jeans, shorts, kilts, sarongs, towels wrapped at
+the waist, loincloths, mawashi-style coverings, or diapers — the
+criterion is opacity, not garment style. Anatomical outline
+("bulge") through the fabric is permitted; visible tissue is not.
+
+Edge cases that remain COVERED: tight white or wet fabric showing
+only an anatomical outline (visible-line equivalent); semi-
+translucent fabric where skin tone registers through but no
+distinct anatomical contour or tissue resolves; rigidity ("tenting")
+visible through the garment so long as the tissue itself is not.
+
+Edge cases that move to MALE_GENITALIA_EXPOSED (one of 18 / 19 /
+20): any visible portion of penis, scrotum, or pubic skin (slip-
+out at a leg opening, gap between shifted waistband and skin,
+sheer fabric where penis or scrotum colour and shape are
+individually distinguishable beyond a generic bulge — both contour
+and skin tone readable).
+
+Do NOT label at all (skip the box):
+- Pelvic region viewed from rear (use BUTTOCKS_COVERED if the
+  gluteal contour is the visible feature) or in profile / cross-
+  legged occlusion such that anatomy would not be visible
+  regardless of clothing.
+- Generic pelvic / lap area where no specific genital region is
+  identifiable.
+- Hand, object, or other body part transiently covering an
+  otherwise-exposed region — ambiguous; prefer the underlying
+  state if visible at the edges, otherwise skip.
+
+Box placement: tight to the genital pouch only.
+- Top: the lowest waistband edge of the covering garment.
+- Sides: inguinal folds (where thigh meets pelvis); do not include
+  thigh.
+- Bottom: lowest point of the pouch / inseam crotch seam; do not
+  extend down the legs.
+- Avoid including belt, navel, or upper thighs.
+
+Minimum size: skip when the box would be smaller than ~16×16 px in
+image coords. Skip strongly motion-blurred frames where the
+covered/exposed distinction is ambiguous to the human reviewer.
+
+Common pre-label drift on this dataset: NudeNet has no native
+`MALE_GENITALIA_COVERED` class, so clothed male groin regions are
+typically flagged as `FEMALE_GENITALIA_COVERED` (class 0). On any
+all-male subset, every existing class-0 pre-label is a candidate
+for reclassification to 21; missed clothed-groin regions also need
+adding here.
 """
 
 
