@@ -74,13 +74,35 @@ struct MetalView: UIViewRepresentable {
 
     func updateUIView(_ uiView: MTKView, context: Context) {
         // Renderer observes the view model directly. Loop runs at 60 fps via `isPaused = false`.
-        if uiView.isPaused != isPaused {
-            uiView.isPaused = isPaused
-            // Freeze the drawable while paused so Core Animation
-            // can scale the existing bitmap during the parent's
-            // layout animation. Re-enabling triggers
-            // drawableSizeWillChange + a fresh draw at the new size.
-            uiView.autoResizeDrawable = !isPaused
+        guard uiView.isPaused != isPaused else { return }
+        if isPaused {
+            // Going into the transition: freeze the drawable so
+            // Core Animation can scale the existing bitmap with
+            // .resizeAspect while the parent's layout animation
+            // grows / shrinks the layer bounds.
+            uiView.autoResizeDrawable = false
+            uiView.isPaused = true
+        } else {
+            // Coming out: the layer has already animated to its
+            // final bounds, but autoResizeDrawable was off the
+            // whole time so MTKView never noticed. Re-enabling
+            // alone won't sync — it only kicks in on the next
+            // bounds change. Force the drawable to the current
+            // bounds so the Coordinator's drawableSizeWillChange
+            // fires and the next 60 fps draw fills the new size
+            // correctly. Without this the .resizeAspect letterbox
+            // from the transition stays painted on screen.
+            uiView.autoResizeDrawable = true
+            let scale = uiView.layer.contentsScale
+            let target = CGSize(
+                width: uiView.bounds.width * scale,
+                height: uiView.bounds.height * scale
+            )
+            if target.width > 0 && target.height > 0,
+               target != uiView.drawableSize {
+                uiView.drawableSize = target
+            }
+            uiView.isPaused = false
         }
     }
 }
