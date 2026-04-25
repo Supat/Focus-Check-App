@@ -334,7 +334,15 @@ final class FocusRenderer {
                 // the Privy / Nudity modes use.
                 var result = inputs.source
                 if !gatedEyes.isEmpty {
-                    result = blackBarOverlay(source: result, bars: gatedEyes)
+                    // 75 % transparent (alpha 0.25) — Jacket mode is
+                    // a softer-anonymity preset than Tabloid; the
+                    // tinted strip lets enough face structure through
+                    // for context while still breaking identifiability.
+                    result = blackBarOverlay(
+                        source: result,
+                        bars: gatedEyes,
+                        alpha: 0.25
+                    )
                 }
                 let genitalDetections = Self.gateDetections(
                     inputs.nudityDetections,
@@ -749,10 +757,18 @@ final class FocusRenderer {
 
     // MARK: - Mosaic primitives
 
-    private static func blackBarOverlay(source: CIImage, bars: [EyeBar]) -> CIImage {
+    private static func blackBarOverlay(source: CIImage,
+                                        bars: [EyeBar],
+                                        alpha: CGFloat = 1.0) -> CIImage {
+        // Pre-multiplied black at the given opacity. Default 1.0
+        // matches the original tabloid behavior; the Jacket mode
+        // overrides to 0.25 (75 % transparent) so the eye bar is
+        // a tinted strip rather than a full block — preserves more
+        // of the original face composition while still anonymizing.
+        let barColor = CIColor(red: 0, green: 0, blue: 0, alpha: alpha)
         var result = source
         for bar in bars {
-            let axisAligned = CIImage(color: CIColor.black).cropped(
+            let axisAligned = CIImage(color: barColor).cropped(
                 to: CGRect(origin: .zero, size: bar.size)
             )
             let transform = CGAffineTransform(
