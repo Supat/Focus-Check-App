@@ -131,7 +131,7 @@ struct ContentView: View {
                                             panStart = viewModel.zoomPanOffset
                                         }
                                 )
-                                // Press-and-hold for 1.5 s on the image
+                                // Press-and-hold for 1.0 s on the image
                                 // toggles the overlay / badges. Use a
                                 // zero-distance DragGesture as a
                                 // touch-began signal — its onChanged
@@ -147,7 +147,7 @@ struct ContentView: View {
                                         .onChanged { value in
                                             if badgeHoldTask == nil {
                                                 badgeHoldTask = Task { @MainActor in
-                                                    try? await Task.sleep(for: .milliseconds(1500))
+                                                    try? await Task.sleep(for: .milliseconds(1000))
                                                     if !Task.isCancelled {
                                                         viewModel.overlayHidden.toggle()
                                                     }
