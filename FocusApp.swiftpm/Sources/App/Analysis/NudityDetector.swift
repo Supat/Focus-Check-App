@@ -246,17 +246,28 @@ private final class NudityClassifier {
     private let confidenceName: String
     private let inputSize: CGSize
 
-    /// Per-detection confidence floor — applied uniformly to every
-    /// NudeNet class. Tighter than NudeNet's own 0.20 default; the
-    /// bootstrap dataset run showed 0.20 floods the reviewer with
-    /// FPs (face / armpit / belly hallucinations on busy frames).
-    /// 0.50 is a deliberately conservative baseline pending an
-    /// empirical per-class confidence-distribution measurement on
-    /// this user's photos.
-    private let defaultScoreThreshold: Float = 0.50
+    /// Default per-detection confidence floor — below this the
+    /// detection is dropped. Tighter than NudeNet's own 0.20
+    /// Python default; 0.20 produces a wide false-positive band
+    /// on busy frames (especially face / armpit / belly
+    /// hallucinations). 0.40 keeps the obvious subjects and drops
+    /// most of the borderline FPs.
+    private let defaultScoreThreshold: Float = 0.40
 
+    /// Per-label confidence floor overriding the default. NudeNet's
+    /// training behaviors:
+    ///  - the FACE_* branch is a noisy side-task — FPs cluster in
+    ///    the 0.20-0.40 confidence band on non-face content. Bumped
+    ///    to 0.50 to skip them.
+    ///  - MALE_GENITALIA_EXPOSED is systematically under-detected
+    ///    because training data skews female. Kept at 0.10 so
+    ///    legitimate-but-low-confidence detections still land.
     private func scoreThreshold(for label: String) -> Float {
-        defaultScoreThreshold
+        switch label {
+        case "MALE_GENITALIA_EXPOSED": return 0.10
+        case "FACE_MALE", "FACE_FEMALE": return 0.50
+        default: return defaultScoreThreshold
+        }
     }
 
     /// Class labels in confidence-column order. NudeNet v3's default
