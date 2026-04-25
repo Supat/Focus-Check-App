@@ -582,14 +582,15 @@ struct ContentView: View {
     }
 
     /// Compact warning chip surfaced inside `nudeSubjectHeadBadges`
-    /// — `brain.filled.head.profile` (head silhouette with a
-    /// filled-brain interior) + cellularbars whose fill encodes
-    /// severity. See `genitalWarning(forBodyAt:)` for the ladder.
+    /// — `waveform.path.ecg` (ECG-style heart-rate trace, reads
+    /// as physiological arousal) + cellularbars whose fill
+    /// encodes severity. See `genitalWarning(forBodyAt:)` for the
+    /// ladder.
     private func genitalWarningChip(
         bars: Double, color: Color
     ) -> some View {
         HStack(spacing: 2) {
-            Image(systemName: "brain.filled.head.profile")
+            Image(systemName: "waveform.path.ecg")
             Image(systemName: "cellularbars", variableValue: bars)
         }
         .font(.caption2)
