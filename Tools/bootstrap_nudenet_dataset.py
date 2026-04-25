@@ -128,15 +128,16 @@ REVIEW_ONLY_CLASSES = {
 # disambiguate cases that a tight crop can't resolve.
 CROP_PADDING_FRAC = 0.20
 
-# Per-label confidence overrides. Empty by default — every class
-# uses the global `--confidence` floor (0.50). Earlier iterations
-# tuned this asymmetrically for FACE_* (raised) and
-# MALE_GENITALIA_EXPOSED (lowered), but we don't have empirical
-# evidence to back the per-class adjustments on this user's photo
-# distribution, so a uniform 0.50 is the honest baseline. Repopulate
-# once the dataset's confidence-band distribution per class has been
-# measured.
-CLASS_THRESHOLD_OVERRIDES: dict[str, float] = {}
+# Per-label confidence overrides. Empirically tuned against the
+# Outdoor library (cf. crop spot-checks of the score distribution):
+# at 0.50 NudeNet's MALE_GENITALIA_EXPOSED head produces a smooth
+# FP tail across the whole 0.5–0.7 band, so this class needs a
+# stricter 0.70 floor to actually catch real cases. The other
+# classes' 0.50 detections were a mix; 0.60 cleans up most of the
+# remaining noise without losing genuine subjects.
+CLASS_THRESHOLD_OVERRIDES: dict[str, float] = {
+    "MALE_GENITALIA_EXPOSED": 0.70,
+}
 
 # Annotation rubric written to the output directory as RUBRIC.md.
 # One paragraph per sub-class of the old MALE_GENITALIA_EXPOSED,
@@ -310,11 +311,12 @@ def build_parser() -> argparse.ArgumentParser:
     label_group.add_argument("--inference-resolution", type=int, default=320,
                              help="NudeNet input size (320 bundled, 640 "
                                   "for the 640m variant).")
-    label_group.add_argument("--confidence", type=float, default=0.50,
-                             help="Confidence floor for pre-labels. "
-                                  "Applied uniformly to every NudeNet class "
-                                  "unless CLASS_THRESHOLD_OVERRIDES is "
-                                  "populated (currently empty).")
+    label_group.add_argument("--confidence", type=float, default=0.60,
+                             help="Default confidence floor for pre-labels. "
+                                  "Per-class overrides apply on top: "
+                                  "MALE_GENITALIA_EXPOSED is at 0.70 "
+                                  "(stricter, NudeNet's FP tail extends "
+                                  "into the 0.5–0.7 band on this class).")
 
     run_group = p.add_argument_group("run control")
     run_group.add_argument("--dry-run", action="store_true",
