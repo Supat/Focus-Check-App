@@ -128,23 +128,15 @@ REVIEW_ONLY_CLASSES = {
 # disambiguate cases that a tight crop can't resolve.
 CROP_PADDING_FRAC = 0.20
 
-# Per-label confidence floors. Two cross-cutting NudeNet behaviors
-# motivate the asymmetry:
-#   - the face branch is a noisy side-task — FACE_* labels at the
-#     0.20-0.40 confidence band are mostly hallucinations on
-#     non-face content. Bumped to 0.50.
-#   - MALE_GENITALIA_EXPOSED is systematically under-detected
-#     because of training-data skew — the band that most other
-#     classes are FPs in is exactly where genuine male-genital
-#     detections live. Stays at 0.10.
-# Everything else uses `--confidence` (default 0.40) — tighter than
-# NudeNet's own 0.20 default so the reviewer isn't drowning in
-# borderline FPs while the obvious detections still land.
-CLASS_THRESHOLD_OVERRIDES = {
-    "FACE_MALE":              0.50,
-    "FACE_FEMALE":            0.50,
-    "MALE_GENITALIA_EXPOSED": 0.10,
-}
+# Per-label confidence overrides. Empty by default — every class
+# uses the global `--confidence` floor (0.50). Earlier iterations
+# tuned this asymmetrically for FACE_* (raised) and
+# MALE_GENITALIA_EXPOSED (lowered), but we don't have empirical
+# evidence to back the per-class adjustments on this user's photo
+# distribution, so a uniform 0.50 is the honest baseline. Repopulate
+# once the dataset's confidence-band distribution per class has been
+# measured.
+CLASS_THRESHOLD_OVERRIDES: dict[str, float] = {}
 
 # Annotation rubric written to the output directory as RUBRIC.md.
 # One paragraph per sub-class of the old MALE_GENITALIA_EXPOSED,
@@ -318,11 +310,11 @@ def build_parser() -> argparse.ArgumentParser:
     label_group.add_argument("--inference-resolution", type=int, default=320,
                              help="NudeNet input size (320 bundled, 640 "
                                   "for the 640m variant).")
-    label_group.add_argument("--confidence", type=float, default=0.40,
-                             help="Default confidence floor for pre-labels. "
-                                  "Per-class overrides apply on top: face "
-                                  "labels are stricter (0.50), "
-                                  "MALE_GENITALIA_EXPOSED is looser (0.10).")
+    label_group.add_argument("--confidence", type=float, default=0.50,
+                             help="Confidence floor for pre-labels. "
+                                  "Applied uniformly to every NudeNet class "
+                                  "unless CLASS_THRESHOLD_OVERRIDES is "
+                                  "populated (currently empty).")
 
     run_group = p.add_argument_group("run control")
     run_group.add_argument("--dry-run", action="store_true",
