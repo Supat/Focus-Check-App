@@ -116,7 +116,7 @@ struct OverlayControls: View {
         // narrow (portrait iPad, Stage Manager, split view). ViewThatFits
         // picks the first variant whose intrinsic width fits the available
         // horizontal space.
-        if viewModel.nudenetInstall == .installed {
+        if viewModel.installs.nudenet == .installed {
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 8) {
                     Spacer()
@@ -273,7 +273,7 @@ struct OverlayControls: View {
     }
 
     private var depthInstallRow: some View {
-        installRow(state: viewModel.depthInstall,
+        installRow(state: viewModel.installs.depth,
                    label: "Depth model (~50 MB) not installed.",
                    action: viewModel.downloadDepthModel)
     }
@@ -287,50 +287,50 @@ struct OverlayControls: View {
         let sca = viewModel.sensitiveContentAvailability
         let scaActive = sca == .simpleInterventions || sca == .descriptiveInterventions
         if !scaActive {
-            installRow(state: viewModel.nsfwInstall,
+            installRow(state: viewModel.installs.nsfw,
                        label: "NSFW fallback model not installed.",
                        action: viewModel.downloadNSFWModel)
         }
     }
 
     private var nudenetInstallRow: some View {
-        installRow(state: viewModel.nudenetInstall,
+        installRow(state: viewModel.installs.nudenet,
                    label: "Per-subject detector (NudeNet) not installed.",
                    action: viewModel.downloadNudeNetModel)
     }
 
     private var clipInstallRow: some View {
-        installRow(state: viewModel.clipInstall,
+        installRow(state: viewModel.installs.clip,
                    label: "Context scorer (CLIP) not installed.",
                    action: viewModel.downloadCLIPModel)
     }
 
     private var emotionInstallRow: some View {
-        installRow(state: viewModel.emotionInstall,
+        installRow(state: viewModel.installs.emotion,
                    label: "Emotion classifier (FER+) not installed.",
                    action: viewModel.downloadEmotionModel)
     }
 
     private var painInstallRow: some View {
-        installRow(state: viewModel.openGraphAUInstall,
+        installRow(state: viewModel.installs.openGraphAU,
                    label: "Pain detector (OpenGraphAU) not installed.",
                    action: viewModel.downloadOpenGraphAUModel)
     }
 
     private var ageInstallRow: some View {
-        installRow(state: viewModel.ageInstall,
+        installRow(state: viewModel.installs.age,
                    label: "Age estimator not installed.",
                    action: viewModel.downloadAgeModel)
     }
 
     private var qualityInstallRow: some View {
-        installRow(state: viewModel.qualityInstall,
+        installRow(state: viewModel.installs.quality,
                    label: "Quality judge (NIMA) not installed.",
                    action: viewModel.downloadQualityModel)
     }
 
     private var aestheticInstallRow: some View {
-        installRow(state: viewModel.aestheticInstall,
+        installRow(state: viewModel.installs.aesthetic,
                    label: "Aesthetic judge (NIMA) not installed.",
                    action: viewModel.downloadAestheticModel)
     }

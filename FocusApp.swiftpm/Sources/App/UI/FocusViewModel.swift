@@ -53,6 +53,38 @@ enum DepthInstallState: Equatable {
     case failed(String)
 }
 
+/// Aggregate of every optional Core ML tier's install state. One
+/// case per archive that ships under `ModelArchive`. Bundled as a
+/// struct so the view model isn't paging eighteen flat published
+/// properties (state + download-task per tier); SwiftUI consumers
+/// reach in via `viewModel.installs.<tier>`.
+struct InstallStates: Equatable {
+    var depth: DepthInstallState = .notInstalled
+    var nsfw: DepthInstallState = .notInstalled
+    var nudenet: DepthInstallState = .notInstalled
+    var clip: DepthInstallState = .notInstalled
+    var emotion: DepthInstallState = .notInstalled
+    var openGraphAU: DepthInstallState = .notInstalled
+    var age: DepthInstallState = .notInstalled
+    var quality: DepthInstallState = .notInstalled
+    var aesthetic: DepthInstallState = .notInstalled
+}
+
+/// Slot per archive for the in-flight download Task. Kept private +
+/// off `@Published` because task lifecycle isn't user-visible state
+/// — only the install enum is.
+struct InstallTasks {
+    var depth: Task<Void, Never>?
+    var nsfw: Task<Void, Never>?
+    var nudenet: Task<Void, Never>?
+    var clip: Task<Void, Never>?
+    var emotion: Task<Void, Never>?
+    var openGraphAU: Task<Void, Never>?
+    var age: Task<Void, Never>?
+    var quality: Task<Void, Never>?
+    var aesthetic: Task<Void, Never>?
+}
+
 /// Snapshot of where the analysis pipeline is. Reported from
 /// `FocusAnalyzer.analyze`'s progress callback and mirrored into
 /// the view model so the main content view can render a determinate
@@ -254,26 +286,12 @@ final class FocusViewModel: ObservableObject {
     /// wants covered.
     @Published var forceCensor: Bool = false
     @Published var sensitiveContentAvailability: SensitiveContentAvailability = .frameworkMissing
-    /// Install state for the NSFW fallback model. Reuses DepthInstallState —
-    /// the shape (notInstalled / downloading / installed / failed) is generic.
-    @Published var nsfwInstall: DepthInstallState = .notInstalled
-    /// Install state for the NudeNet per-subject detector.
-    @Published var nudenetInstall: DepthInstallState = .notInstalled
-    /// Install state for the CLIP image encoder + prompt-embeddings bundle.
-    @Published var clipInstall: DepthInstallState = .notInstalled
-    /// Install state for the FER+ facial-emotion classifier.
-    @Published var emotionInstall: DepthInstallState = .notInstalled
-    /// Install state for the OpenGraphAU facial Action Unit detector
-    /// (pain / PSPI proxy). Same state shape as the other optional
-    /// model tiers.
-    @Published var openGraphAUInstall: DepthInstallState = .notInstalled
-    /// Install state for the SSR-Net age estimator. Same state
-    /// shape as the other optional model tiers.
-    @Published var ageInstall: DepthInstallState = .notInstalled
-    /// Install state for the NIMA technical-quality model.
-    @Published var qualityInstall: DepthInstallState = .notInstalled
-    /// Install state for the NIMA aesthetic-quality model.
-    @Published var aestheticInstall: DepthInstallState = .notInstalled
+    /// All nine optional Core ML tier install states bundled into one
+    /// struct so the view model isn't dragging eighteen flat
+    /// properties (state + download-task per tier). The shape
+    /// (notInstalled / downloading / installed / failed) is generic;
+    /// each tier reuses `DepthInstallState`.
+    @Published var installs = InstallStates()
     @Published var isAnalyzing: Bool = false
     /// Fractional progress + current-stage label from the analysis
     /// pipeline. nil while idle. The bar is fixed-weight per stage
@@ -282,7 +300,6 @@ final class FocusViewModel: ObservableObject {
     @Published var analysisProgress: AnalysisProgress?
     @Published var errorMessage: String?
     @Published var depthAvailable: Bool = false
-    @Published var depthInstall: DepthInstallState = .notInstalled
 
     let analyzer: FocusAnalyzer
     private var currentTask: Task<Void, Never>?
@@ -293,15 +310,11 @@ final class FocusViewModel: ObservableObject {
     /// reclaims it, and the app's working set / disk footprint
     /// grows linearly with imports per session.
     private var previousLoadedURL: URL?
-    private var installTask: Task<Void, Never>?
-    private var nsfwInstallTask: Task<Void, Never>?
-    private var nudenetInstallTask: Task<Void, Never>?
-    private var clipInstallTask: Task<Void, Never>?
-    private var emotionInstallTask: Task<Void, Never>?
-    private var openGraphAUInstallTask: Task<Void, Never>?
-    private var ageInstallTask: Task<Void, Never>?
-    private var qualityInstallTask: Task<Void, Never>?
-    private var aestheticInstallTask: Task<Void, Never>?
+    /// Active download task slots, parallel to `installs`. Kept off
+    /// `@Published` so spurious "task started / finished"
+    /// invalidations don't churn SwiftUI views that only care about
+    /// the user-visible install state.
+    private var installTasks = InstallTasks()
 
     init() {
         self.analyzer = FocusAnalyzer()
@@ -322,15 +335,17 @@ final class FocusViewModel: ObservableObject {
         let qualityInstalled = ModelArchive.quality.isInstalled()
         let aestheticInstalled = ModelArchive.aesthetic.isInstalled()
         self.depthAvailable = depthInstalled
-        self.depthInstall = depthInstalled ? .installed : .notInstalled
-        self.nsfwInstall = nsfwInstalled ? .installed : .notInstalled
-        self.nudenetInstall = nudenetInstalled ? .installed : .notInstalled
-        self.clipInstall = clipInstalled ? .installed : .notInstalled
-        self.emotionInstall = emotionInstalled ? .installed : .notInstalled
-        self.openGraphAUInstall = openGraphAUInstalled ? .installed : .notInstalled
-        self.ageInstall = ageInstalled ? .installed : .notInstalled
-        self.qualityInstall = qualityInstalled ? .installed : .notInstalled
-        self.aestheticInstall = aestheticInstalled ? .installed : .notInstalled
+        self.installs = InstallStates(
+            depth: depthInstalled ? .installed : .notInstalled,
+            nsfw: nsfwInstalled ? .installed : .notInstalled,
+            nudenet: nudenetInstalled ? .installed : .notInstalled,
+            clip: clipInstalled ? .installed : .notInstalled,
+            emotion: emotionInstalled ? .installed : .notInstalled,
+            openGraphAU: openGraphAUInstalled ? .installed : .notInstalled,
+            age: ageInstalled ? .installed : .notInstalled,
+            quality: qualityInstalled ? .installed : .notInstalled,
+            aesthetic: aestheticInstalled ? .installed : .notInstalled
+        )
 
         let analyzer = self.analyzer
         // Pre-compile installed Core ML models in the background after
@@ -413,8 +428,8 @@ final class FocusViewModel: ObservableObject {
     func downloadDepthModel() {
         download(
             archive: .depthAnything,
-            state: \.depthInstall,
-            task: \.installTask,
+            state: \.installs.depth,
+            task: \.installTasks.depth,
             install: { try await $0.installDepthModel(progress: $1) },
             onInstalled: { $0.depthAvailable = true }
         )
@@ -423,8 +438,8 @@ final class FocusViewModel: ObservableObject {
     func downloadNSFWModel() {
         download(
             archive: .nsfw,
-            state: \.nsfwInstall,
-            task: \.nsfwInstallTask,
+            state: \.installs.nsfw,
+            task: \.installTasks.nsfw,
             install: { try await $0.installNSFWModel(progress: $1) },
             // Re-query SCA so the row reflects that the NSFW
             // fallback is now usable.
@@ -435,8 +450,8 @@ final class FocusViewModel: ObservableObject {
     func downloadNudeNetModel() {
         download(
             archive: .nudenet,
-            state: \.nudenetInstall,
-            task: \.nudenetInstallTask,
+            state: \.installs.nudenet,
+            task: \.installTasks.nudenet,
             install: { try await $0.installNudeNetModel(progress: $1) }
         )
     }
@@ -444,8 +459,8 @@ final class FocusViewModel: ObservableObject {
     func downloadCLIPModel() {
         download(
             archive: .clip,
-            state: \.clipInstall,
-            task: \.clipInstallTask,
+            state: \.installs.clip,
+            task: \.installTasks.clip,
             install: { try await $0.installCLIPModel(progress: $1) }
         )
     }
@@ -453,8 +468,8 @@ final class FocusViewModel: ObservableObject {
     func downloadEmotionModel() {
         download(
             archive: .emotion,
-            state: \.emotionInstall,
-            task: \.emotionInstallTask,
+            state: \.installs.emotion,
+            task: \.installTasks.emotion,
             install: { try await $0.installEmotionModel(progress: $1) }
         )
     }
@@ -462,8 +477,8 @@ final class FocusViewModel: ObservableObject {
     func downloadOpenGraphAUModel() {
         download(
             archive: .openGraphAU,
-            state: \.openGraphAUInstall,
-            task: \.openGraphAUInstallTask,
+            state: \.installs.openGraphAU,
+            task: \.installTasks.openGraphAU,
             install: { try await $0.installOpenGraphAUModel(progress: $1) }
         )
     }
@@ -471,8 +486,8 @@ final class FocusViewModel: ObservableObject {
     func downloadAgeModel() {
         download(
             archive: .age,
-            state: \.ageInstall,
-            task: \.ageInstallTask,
+            state: \.installs.age,
+            task: \.installTasks.age,
             install: { try await $0.installAgeModel(progress: $1) }
         )
     }
@@ -480,8 +495,8 @@ final class FocusViewModel: ObservableObject {
     func downloadQualityModel() {
         download(
             archive: .quality,
-            state: \.qualityInstall,
-            task: \.qualityInstallTask,
+            state: \.installs.quality,
+            task: \.installTasks.quality,
             install: { try await $0.installQualityModel(progress: $1) }
         )
     }
@@ -489,8 +504,8 @@ final class FocusViewModel: ObservableObject {
     func downloadAestheticModel() {
         download(
             archive: .aesthetic,
-            state: \.aestheticInstall,
-            task: \.aestheticInstallTask,
+            state: \.installs.aesthetic,
+            task: \.installTasks.aesthetic,
             install: { try await $0.installAestheticModel(progress: $1) }
         )
     }
