@@ -313,26 +313,36 @@ struct ContentView: View {
                 if mp >= 8 { return Color(red: 0.80, green: 0.82, blue: 0.88) }
                 return nil
             }()
-            let badge = HStack(spacing: 6) {
+            HStack(spacing: 6) {
                 Image(systemName: "photo")
                 Text("\(mp) MP")
                     .font(.caption.monospacedDigit())
             }
+            // Shadow applied *before* the capsule background so it
+            // forms around the icon + text alpha shapes (the
+            // "content") rather than around the capsule's outer
+            // edge. phaseAnimator cycles a breathing opacity on
+            // the shadow so the glow pulses without any @State or
+            // animation plumbing on our side.
+            .modifier(MegapixelGlow(color: glow))
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .liquidBadgeBackground(in: Capsule())
+        }
+    }
 
-            if let glow {
-                // phaseAnimator cycles a breathing opacity on the
-                // shadow so the edge glow pulses without any
-                // @State or animation plumbing on our side.
-                badge.phaseAnimator([0.35, 0.9]) { content, phase in
-                    content.shadow(color: glow.opacity(phase), radius: 9)
+    private struct MegapixelGlow: ViewModifier {
+        let color: Color?
+        @ViewBuilder
+        func body(content: Content) -> some View {
+            if let color {
+                content.phaseAnimator([0.35, 0.95]) { c, phase in
+                    c.shadow(color: color.opacity(phase), radius: 6)
                 } animation: { _ in
                     .easeInOut(duration: 1.2)
                 }
             } else {
-                badge
+                content
             }
         }
     }
