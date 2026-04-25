@@ -566,7 +566,7 @@ struct ContentView: View {
                 .foregroundStyle(style.color)
                 .padding(.horizontal, 4)
                 .padding(.vertical, 2)
-                .background(.regularMaterial, in: Capsule())
+                .liquidBadgeBackground(in: Capsule())
                 .position(x: r.midX, y: max(8, r.minY - 12))
                 .allowsHitTesting(false)
             }
