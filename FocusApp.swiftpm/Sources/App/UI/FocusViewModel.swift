@@ -1,5 +1,6 @@
 import SwiftUI
 import CoreImage
+import CoreMedia
 import Metal
 import Combine
 import UniformTypeIdentifiers
@@ -467,6 +468,12 @@ final class FocusViewModel: ObservableObject {
     /// laggier overlays on fast motion. 2 Hz is the sweet spot for
     /// iPad Pro at the current per-frame cost.
     private let videoAnalysisInterval: Duration = .milliseconds(500)
+    /// Two-snapshot ring driving smooth interpolation between
+    /// analysis pulses. The analysis loop calls `consume` with each
+    /// fresh result; the per-video-frame sink calls `snapshot(at:)`
+    /// with the playhead time and copies the interpolated arrays
+    /// onto the @Published rectangles the renderer reads.
+    private var videoSmoother = VideoSmoother()
     /// Active download task slots, parallel to `installs`. Kept off
     /// `@Published` so spurious "task started / finished"
     /// invalidations don't churn SwiftUI views that only care about
@@ -894,21 +901,25 @@ final class FocusViewModel: ObservableObject {
         videoSource = nil
         videoAnalysisTask?.cancel()
         videoAnalysisTask = nil
+        videoSmoother.reset()
 
         Task { @MainActor [weak self] in
             do {
                 let source = try await VideoFrameSource(url: url)
                 guard let self else { return }
                 source.start()
-                // Bridge live frames → sourceImage so the existing
-                // renderer pipeline picks each one up. assign(to:&)
-                // is MainActor-safe here; the source already
-                // publishes from the main run loop.
+                // Bridge live frames → sourceImage AND drive the
+                // per-frame interpolation tick. `currentImage` updates
+                // happen on the main run loop alongside `currentTime`,
+                // so each new image gives us a fresh playhead reading
+                // to feed the smoother.
                 self.videoSourceCancellable = source.$currentImage
                     .compactMap { $0 }
                     .receive(on: DispatchQueue.main)
                     .sink { [weak self] image in
-                        self?.sourceImage = image
+                        guard let self else { return }
+                        self.sourceImage = image
+                        self.applySmoothedSnapshot(at: source.currentTime)
                     }
                 self.videoSource = source
                 self.videoAnalysisTask = self.startVideoAnalysisLoop(
@@ -921,6 +932,24 @@ final class FocusViewModel: ObservableObject {
                 self?.errorMessage = error.localizedDescription
             }
         }
+    }
+
+    /// Pull the smoother's interpolated output for `time` and copy
+    /// the rect arrays onto the @Published state the renderer reads.
+    /// Fires per video frame from the source's currentImage sink.
+    /// Discrete signals (personMask, nudityLevels, etc.) take the
+    /// curr snapshot's value — they don't smooth between samples.
+    private func applySmoothedSnapshot(at time: CMTime) {
+        guard let snap = videoSmoother.snapshot(at: time) else { return }
+        faceRectangles = snap.faceRectangles
+        bodyRectangles = snap.bodyRectangles
+        groinRectangles = snap.groinRectangles
+        chestRectangles = snap.chestRectangles
+        eyeBars = snap.eyeBars
+        personMask = snap.personMask
+        nudityLevels = snap.nudityLevels
+        nudityGenders = snap.nudityGenders
+        nudityDetections = snap.nudityDetections
     }
 
     /// Periodic analyzer pump. Each iteration takes the latest decoded
@@ -947,17 +976,28 @@ final class FocusViewModel: ObservableObject {
                     try? await Task.sleep(for: interval)
                     continue
                 }
+                // Capture the time as of frame decode, NOT after the
+                // analyzer returns — by the time analysis completes
+                // ~400ms later, playback has advanced. The smoother
+                // keys interpolation off the captured-frame time so
+                // displayed overlays line up with the right samples.
+                let captureTime = source.currentTime
                 let result = await analyzer.analyzeVideoFrame(image: image)
                 guard let self, !Task.isCancelled else { return }
-                self.faceRectangles = result.faceRectangles
-                self.bodyRectangles = result.bodyRectangles
-                self.groinRectangles = result.groinRectangles
-                self.chestRectangles = result.chestRectangles
-                self.eyeBars = result.eyeBars
-                self.personMask = result.personMask
-                self.nudityLevels = result.nudityLevels
-                self.nudityGenders = result.nudityGenders
-                self.nudityDetections = result.nudityDetections
+                let snap = VideoSnapshot(
+                    time: captureTime,
+                    faceRectangles: result.faceRectangles,
+                    bodyRectangles: result.bodyRectangles,
+                    groinRectangles: result.groinRectangles,
+                    chestRectangles: result.chestRectangles,
+                    eyeBars: result.eyeBars,
+                    personMask: result.personMask,
+                    nudityLevels: result.nudityLevels,
+                    nudityGenders: result.nudityGenders,
+                    nudityDetections: result.nudityDetections
+                )
+                self.videoSmoother.consume(snap)
+                self.applySmoothedSnapshot(at: source.currentTime)
                 try? await Task.sleep(for: interval)
             }
         }
@@ -997,6 +1037,7 @@ final class FocusViewModel: ObservableObject {
         videoSource = nil
         videoAnalysisTask?.cancel()
         videoAnalysisTask = nil
+        videoSmoother.reset()
         // Drop the loaded image first so the CIImage releases its
         // hold on the backing temp file, then delete the file.
         sourceImage = nil
