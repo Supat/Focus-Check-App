@@ -23,6 +23,9 @@ struct ContentView: View {
     /// fire at touch-down (not at minimumDuration), so we measure
     /// the hold duration ourselves.
     @State private var badgeHoldTask: Task<Void, Never>?
+    /// Toggles the Model Manager sheet. Bound to the toolbar
+    /// button that opens the per-model install / uninstall list.
+    @State private var showingModelManager = false
 
     var body: some View {
         NavigationStack {
@@ -32,6 +35,17 @@ struct ContentView: View {
                 .navigationBarTitleDisplayMode(.inline)
                 #endif
                 .toolbar {
+                    // Model Manager sits on the leading side and
+                    // is always visible — including the first-run
+                    // empty state, so a fresh user can install
+                    // models before loading a photo.
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button {
+                            showingModelManager = true
+                        } label: {
+                            Label("Model Manager", systemImage: "archivebox")
+                        }
+                    }
                     if viewModel.sourceImage != nil {
                         ToolbarItem(placement: .topBarLeading) {
                             Button(role: .destructive) {
@@ -81,6 +95,9 @@ struct ContentView: View {
                 #endif
                 .sheet(item: $exportedImage) { item in
                     ShareSheet(url: item.url)
+                }
+                .sheet(isPresented: $showingModelManager) {
+                    ModelManagerView(viewModel: viewModel)
                 }
                 .overlay(alignment: .top) {
                     if let error = viewModel.errorMessage {

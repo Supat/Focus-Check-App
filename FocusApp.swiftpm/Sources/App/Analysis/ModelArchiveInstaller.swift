@@ -23,11 +23,48 @@ struct ModelArchive: Sendable {
     let directoryName: String
     let sourceURL: URL
     let kind: Kind
+    /// Human-readable name for the Model Manager UI. Distinct from
+    /// `directoryName` because the install-dir is mostly an internal
+    /// detail (versioned, sometimes obscure) while the displayName is
+    /// what shows up in the user-facing list.
+    let displayName: String
+    /// Release-tag-derived version label (e.g. "v4", "v1") — read by
+    /// the Model Manager so users can see at a glance which weights
+    /// they have installed. Computed from `sourceURL` if not set.
+    let version: String
 
-    init(directoryName: String, sourceURL: URL, kind: Kind = .mlmodelc) {
+    init(directoryName: String,
+         sourceURL: URL,
+         kind: Kind = .mlmodelc,
+         displayName: String,
+         version: String? = nil) {
         self.directoryName = directoryName
         self.sourceURL = sourceURL
         self.kind = kind
+        self.displayName = displayName
+        // Default: parse the version off the URL's release-tag
+        // segment (".../releases/download/<tag>/..."). The tag form
+        // is e.g. "depth-model-v1" or "genital-classifier-v4"; we
+        // grab the last hyphenated suffix.
+        self.version = version ?? Self.versionFromURL(sourceURL)
+    }
+
+    private static func versionFromURL(_ url: URL) -> String {
+        // Path components include the release tag two segments before
+        // the asset filename, e.g.:
+        //   /Supat/Focus-Check-App/releases/download/<tag>/<asset>.zip
+        let parts = url.pathComponents
+        guard parts.count >= 2,
+              let tagIdx = parts.firstIndex(of: "download"),
+              tagIdx + 1 < parts.count
+        else { return "?" }
+        let tag = parts[tagIdx + 1]
+        // Strip everything up to and including the last hyphen — keep
+        // just the version suffix (e.g. "v4").
+        if let lastDash = tag.lastIndex(of: "-") {
+            return String(tag[tag.index(after: lastDash)...])
+        }
+        return tag
     }
 
     /// Depth Anything v2 Small (F16) — Apple's Core ML release. Fetched
@@ -37,7 +74,8 @@ struct ModelArchive: Sendable {
         directoryName: "DepthAnythingV2SmallF16.mlmodelc",
         sourceURL: URL(string:
             "https://github.com/Supat/Focus-Check-App/releases/download/depth-model-v1/DepthAnythingV2SmallF16.mlmodelc.zip"
-        )!
+        )!,
+        displayName: "Depth Anything v2 Small"
     )
 
     /// lovoo/NSFWDetector — CreateML-trained binary SFW/NSFW classifier.
@@ -47,7 +85,8 @@ struct ModelArchive: Sendable {
         directoryName: "NSFW.mlmodelc",
         sourceURL: URL(string:
             "https://github.com/Supat/Focus-Check-App/releases/download/nsfw-model-v1/NSFW.mlmodelc.zip"
-        )!
+        )!,
+        displayName: "NSFW Detector (lovoo)"
     )
 
     /// NudeNet v3 detector — YOLO-style object detector with 18 labels for
@@ -68,7 +107,8 @@ struct ModelArchive: Sendable {
         directoryName: "NudeNet-v2.mlmodelc",
         sourceURL: URL(string:
             "https://github.com/Supat/Focus-Check-App/releases/download/nudenet-model-v2/NudeNet.mlmodelc.zip"
-        )!
+        )!,
+        displayName: "NudeNet 640m"
     )
 
     /// CLIP image encoder + pre-computed text-prompt embeddings for
@@ -91,7 +131,8 @@ struct ModelArchive: Sendable {
         sourceURL: URL(string:
             "https://github.com/Supat/Focus-Check-App/releases/download/clip-model-v8/CLIP.zip"
         )!,
-        kind: .bundle
+        kind: .bundle,
+        displayName: "CLIP ViT-B/32 + Prompts"
     )
 
     /// EmoNet (Toisoul et al. 2021) — ResNet-50-based face emotion
@@ -115,7 +156,8 @@ struct ModelArchive: Sendable {
         directoryName: "EmoNet-v5.mlmodelc",
         sourceURL: URL(string:
             "https://github.com/Supat/Focus-Check-App/releases/download/emotion-model-v5/EmoNet.mlmodelc.zip"
-        )!
+        )!,
+        displayName: "EmoNet (per-face emotion)"
     )
 
     /// OpenGraphAU (Luo et al. 2022, `lingjivoo/OpenGraphAU`) Stage-2
@@ -141,7 +183,8 @@ struct ModelArchive: Sendable {
         directoryName: "OpenGraphAU-v1.mlmodelc",
         sourceURL: URL(string:
             "https://github.com/Supat/Focus-Check-App/releases/download/pain-model-v1/OpenGraphAU.mlmodelc.zip"
-        )!
+        )!,
+        displayName: "OpenGraphAU + PSPI Pain"
     )
 
     /// shamangary/SSR-Net (IJCAI'18) — compact age-only regression
@@ -166,7 +209,8 @@ struct ModelArchive: Sendable {
         directoryName: "SSRNet-v1.mlmodelc",
         sourceURL: URL(string:
             "https://github.com/Supat/Focus-Check-App/releases/download/age-model-v3/SSRNet.mlmodelc.zip"
-        )!
+        )!,
+        displayName: "SSR-Net Age Estimator"
     )
 
     /// idealo/image-quality-assessment NIMA (Neural Image
@@ -188,7 +232,8 @@ struct ModelArchive: Sendable {
         directoryName: "NIMA-v1.mlmodelc",
         sourceURL: URL(string:
             "https://github.com/Supat/Focus-Check-App/releases/download/quality-model-v1/NIMA.mlmodelc.zip"
-        )!
+        )!,
+        displayName: "NIMA Technical Quality"
     )
 
     /// NIMA aesthetic-quality variant — same architecture as
@@ -206,7 +251,8 @@ struct ModelArchive: Sendable {
         directoryName: "NIMA-Aesthetic-v1.mlmodelc",
         sourceURL: URL(string:
             "https://github.com/Supat/Focus-Check-App/releases/download/aesthetic-model-v1/NIMA-Aesthetic.mlmodelc.zip"
-        )!
+        )!,
+        displayName: "NIMA Aesthetic Quality"
     )
 
     /// Downstream classifier that re-labels NudeNet's genital-region
@@ -252,8 +298,24 @@ struct ModelArchive: Sendable {
         directoryName: "GenitalClassifier-v4.mlmodelc",
         sourceURL: URL(string:
             "https://github.com/Supat/Focus-Check-App/releases/download/genital-classifier-v4/GenitalClassifier.mlmodelc.zip"
-        )!
+        )!,
+        displayName: "Genital Sub-class Classifier"
     )
+
+    /// Every optional model the app can install. Drives the Model
+    /// Manager UI; ordering controls how rows appear there.
+    static let all: [ModelArchive] = [
+        .depthAnything,
+        .nsfw,
+        .nudenet,
+        .clip,
+        .emotion,
+        .openGraphAU,
+        .age,
+        .quality,
+        .aesthetic,
+        .genitalClassifier,
+    ]
 
     /// Persistent install path: `Application Support/<directoryName>`.
     /// Application Support is user-data, not purged on low-disk like Caches.
@@ -271,6 +333,24 @@ struct ModelArchive: Sendable {
     func isInstalled() -> Bool {
         guard let url = try? installedURL() else { return false }
         return FileManager.default.fileExists(atPath: url.path)
+    }
+
+    /// Remove the unpacked install directory from disk. Idempotent
+    /// — does nothing when the directory isn't there. Surfaces
+    /// errors so the caller can update the UI's install state on
+    /// success vs failure.
+    ///
+    /// **Caveat**: any in-memory `MLModel` instance loaded from
+    /// this directory keeps working until the next app launch
+    /// (Core ML reads the file once at construction). Reinstalling
+    /// after uninstall does *not* swap the in-memory weights —
+    /// the next launch picks up the fresh file. Document this in
+    /// the Model Manager UI.
+    func uninstall() throws {
+        let url = try installedURL()
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: url.path) else { return }
+        try fm.removeItem(at: url)
     }
 }
 

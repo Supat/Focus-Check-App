@@ -73,6 +73,18 @@ struct InstallStates: Equatable {
     var genitalClassifier: DepthInstallState = .notInstalled
 }
 
+/// One row in the Model Manager UI — pairs an archive with its
+/// install-state key-path and the install / uninstall triggers.
+/// `id` is the archive's `directoryName`, which is unique per
+/// versioned model release.
+struct ModelEntry: Identifiable {
+    let archive: ModelArchive
+    let state: KeyPath<FocusViewModel, DepthInstallState>
+    let install: () -> Void
+    let uninstall: () -> Void
+    var id: String { archive.directoryName }
+}
+
 /// Slot per archive for the in-flight download Task. Kept private +
 /// off `@Published` because task lifecycle isn't user-visible state
 /// — only the install enum is.
@@ -642,6 +654,117 @@ final class FocusViewModel: ObservableObject {
             task: \.installTasks.genitalClassifier,
             install: { try await $0.installGenitalClassifierModel(progress: $1) }
         )
+    }
+
+    /// Generic uninstall driver. Cancels any in-flight download for
+    /// this archive, removes the unpacked directory from
+    /// Application Support, then resets the install-state
+    /// `@Published` enum to `.notInstalled` so the UI re-shows the
+    /// Download row. Mirror of the `download(archive:state:task:…)`
+    /// helper above.
+    private func uninstall(
+        archive: ModelArchive,
+        state stateKP: ReferenceWritableKeyPath<FocusViewModel, DepthInstallState>,
+        task taskKP: ReferenceWritableKeyPath<FocusViewModel, Task<Void, Never>?>
+    ) {
+        self[keyPath: taskKP]?.cancel()
+        self[keyPath: taskKP] = nil
+        do {
+            try archive.uninstall()
+            self[keyPath: stateKP] = .notInstalled
+        } catch {
+            self[keyPath: stateKP] = .failed(error.localizedDescription)
+        }
+        // Side-effect for tiers that flip a separate availability
+        // flag on install — depth's `depthAvailable` is the only
+        // one currently. Mirrors the `onInstalled` callback from
+        // the download helper.
+        if archive.directoryName == ModelArchive.depthAnything.directoryName {
+            depthAvailable = false
+        }
+    }
+
+    func uninstallDepthModel() {
+        uninstall(archive: .depthAnything, state: \.installs.depth, task: \.installTasks.depth)
+    }
+    func uninstallNSFWModel() {
+        uninstall(archive: .nsfw, state: \.installs.nsfw, task: \.installTasks.nsfw)
+        // NSFW availability rolls into `sensitiveContentAvailability`;
+        // re-query so the UI reflects the loss.
+        refreshSensitiveContentAvailability()
+    }
+    func uninstallNudeNetModel() {
+        uninstall(archive: .nudenet, state: \.installs.nudenet, task: \.installTasks.nudenet)
+    }
+    func uninstallCLIPModel() {
+        uninstall(archive: .clip, state: \.installs.clip, task: \.installTasks.clip)
+    }
+    func uninstallEmotionModel() {
+        uninstall(archive: .emotion, state: \.installs.emotion, task: \.installTasks.emotion)
+    }
+    func uninstallOpenGraphAUModel() {
+        uninstall(archive: .openGraphAU, state: \.installs.openGraphAU, task: \.installTasks.openGraphAU)
+    }
+    func uninstallAgeModel() {
+        uninstall(archive: .age, state: \.installs.age, task: \.installTasks.age)
+    }
+    func uninstallQualityModel() {
+        uninstall(archive: .quality, state: \.installs.quality, task: \.installTasks.quality)
+    }
+    func uninstallAestheticModel() {
+        uninstall(archive: .aesthetic, state: \.installs.aesthetic, task: \.installTasks.aesthetic)
+    }
+    func uninstallGenitalClassifierModel() {
+        uninstall(archive: .genitalClassifier, state: \.installs.genitalClassifier, task: \.installTasks.genitalClassifier)
+    }
+
+    /// Bundle every optional Core ML tier into a single sequence
+    /// the Model Manager UI iterates over. Each entry pairs the
+    /// archive with the install / uninstall trigger and a key-path
+    /// to the `@Published` state so the row binds reactively.
+    var modelEntries: [ModelEntry] {
+        [
+            ModelEntry(archive: .depthAnything,
+                       state: \.installs.depth,
+                       install: downloadDepthModel,
+                       uninstall: uninstallDepthModel),
+            ModelEntry(archive: .nsfw,
+                       state: \.installs.nsfw,
+                       install: downloadNSFWModel,
+                       uninstall: uninstallNSFWModel),
+            ModelEntry(archive: .nudenet,
+                       state: \.installs.nudenet,
+                       install: downloadNudeNetModel,
+                       uninstall: uninstallNudeNetModel),
+            ModelEntry(archive: .clip,
+                       state: \.installs.clip,
+                       install: downloadCLIPModel,
+                       uninstall: uninstallCLIPModel),
+            ModelEntry(archive: .emotion,
+                       state: \.installs.emotion,
+                       install: downloadEmotionModel,
+                       uninstall: uninstallEmotionModel),
+            ModelEntry(archive: .openGraphAU,
+                       state: \.installs.openGraphAU,
+                       install: downloadOpenGraphAUModel,
+                       uninstall: uninstallOpenGraphAUModel),
+            ModelEntry(archive: .age,
+                       state: \.installs.age,
+                       install: downloadAgeModel,
+                       uninstall: uninstallAgeModel),
+            ModelEntry(archive: .quality,
+                       state: \.installs.quality,
+                       install: downloadQualityModel,
+                       uninstall: uninstallQualityModel),
+            ModelEntry(archive: .aesthetic,
+                       state: \.installs.aesthetic,
+                       install: downloadAestheticModel,
+                       uninstall: uninstallAestheticModel),
+            ModelEntry(archive: .genitalClassifier,
+                       state: \.installs.genitalClassifier,
+                       install: downloadGenitalClassifierModel,
+                       uninstall: uninstallGenitalClassifierModel),
+        ]
     }
 
     func load(url: URL, name: String) {
