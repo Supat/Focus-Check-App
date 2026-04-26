@@ -3,7 +3,26 @@ import PhotosUI
 import UniformTypeIdentifiers
 
 /// Toolbar control offering both PhotosPicker (library) and fileImporter (Files / disk) entry points.
-struct ImageImporter: View {
+///
+/// **Stability contract:** the struct conforms to `Equatable` with a
+/// constant-true `==`, so callers using `.equatable()` skip body
+/// re-evaluation across parent rebuilds. This is what keeps the
+/// inner `Menu`'s @State (showingPhotosPicker, showingFileImporter)
+/// from getting reset by the per-frame ContentView rebuilds that
+/// run during video playback. The closures (`onPick`, `onPickCamera`,
+/// `onError`) capture their dependencies by reference at first
+/// render; downstream changes to the captured viewModel don't need
+/// new closure identities to be observed because viewModel is a
+/// reference type whose mutations are seen via the captures.
+struct ImageImporter: View, Equatable {
+    static func == (lhs: ImageImporter, rhs: ImageImporter) -> Bool {
+        // Closures aren't Equatable. Treat all instances as equal so
+        // `.equatable()` short-circuits SwiftUI's body re-eval — the
+        // captured viewModel reference inside the closures keeps
+        // working regardless of how often the parent rebuilds.
+        true
+    }
+
     /// Passes the URL, a human-readable display name, and a flag
     /// indicating whether the URL is a still-live security-scoped
     /// resource (true for video imports from `.fileImporter` that
@@ -22,32 +41,10 @@ struct ImageImporter: View {
 
     @State private var showingPhotosPicker = false
     @State private var showingFileImporter = false
-    @State private var showingImportOptions = false
     @State private var isLoading = false
 
     var body: some View {
-        // Plain Button + confirmationDialog instead of Menu — Menu's
-        // internal state machine has been observed to drop tap
-        // events when its parent rebuilds during video playback (the
-        // viewModel's @Published `sourceImage` updates rebuild
-        // ContentView, the toolbar gets a fresh ImageImporter
-        // closure capture, and the Menu's open/closed state can
-        // race with that). confirmationDialog is system-presented
-        // and survives parent rebuilds without re-rendering the
-        // Menu chrome each time.
-        Button {
-            showingImportOptions = true
-        } label: {
-            if isLoading {
-                ProgressView().controlSize(.small)
-            } else {
-                Label("Import", systemImage: "square.and.arrow.down")
-            }
-        }
-        .confirmationDialog(
-            "Import", isPresented: $showingImportOptions,
-            titleVisibility: .hidden
-        ) {
+        Menu {
             Button {
                 showingPhotosPicker = true
             } label: {
@@ -65,8 +62,12 @@ struct ImageImporter: View {
             } label: {
                 Label("Live Camera", systemImage: "camera")
             }
-
-            Button("Cancel", role: .cancel) { }
+        } label: {
+            if isLoading {
+                ProgressView().controlSize(.small)
+            } else {
+                Label("Import", systemImage: "square.and.arrow.down")
+            }
         }
         // Pick up the keyboard shortcuts (⌘O / ⌘⇧O) that the
         // app-level `.commands` block in FocusApp.swift posts.

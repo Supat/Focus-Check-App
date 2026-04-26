@@ -91,6 +91,13 @@ struct ContentView: View {
                             onPickCamera: { viewModel.loadCamera() },
                             onError: { message in viewModel.errorMessage = message }
                         )
+                        // .equatable() short-circuits body re-eval
+                        // across ContentView rebuilds (which fire on
+                        // every video-frame @Published update). The
+                        // Menu's internal @State (showingPhotosPicker,
+                        // showingFileImporter) survives those rebuilds
+                        // and stops dropping tap events during playback.
+                        .equatable()
                     }
                     // Custom principal title: Explicit badge (when the
                     // classifier flagged the image) followed by the file
