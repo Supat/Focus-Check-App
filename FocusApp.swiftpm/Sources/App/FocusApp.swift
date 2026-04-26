@@ -1,4 +1,5 @@
 import SwiftUI
+import AVFoundation
 
 /// Cross-view notifications for keyboard-shortcut commands. Posted
 /// by the Scene-level `.commands` block (which is what iPadOS 26's
@@ -14,6 +15,25 @@ extension Notification.Name {
 
 @main
 struct FocusApp: App {
+    init() {
+        // iOS defaults to `.soloAmbient`, which silences AVPlayer
+        // whenever the device's silent switch is on and ducks for
+        // other audio. For our use case (audio + video preview),
+        // `.playback` is the right category — plays through the
+        // silent switch, doesn't duck.
+        do {
+            try AVAudioSession.sharedInstance().setCategory(
+                .playback, mode: .default, options: []
+            )
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch {
+            // Non-fatal — the rest of the app still works, audio is
+            // just silenced. Swallow + log so a misconfigured device
+            // doesn't crash startup.
+            print("[AudioSession] failed to configure: \(error)")
+        }
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()
