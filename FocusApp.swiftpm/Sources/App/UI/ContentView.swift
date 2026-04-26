@@ -6,7 +6,12 @@ private struct ExportedImage: Identifiable {
 }
 
 struct ContentView: View {
-    @StateObject private var viewModel = FocusViewModel()
+    // Members the `extension ContentView` in HeadBadges.swift
+    // touches (`viewModel`, `subjectBoxFlash`, `viewRect`) are
+    // declared without `private` so they're internal-visible —
+    // Swift's `private` becomes fileprivate-equivalent and
+    // can't reach extensions in another file.
+    @StateObject var viewModel = FocusViewModel()
     @State private var exportedImage: ExportedImage?
     @State private var isExporting = false
     /// Hides the toolbar + bottom control panel so the image occupies
@@ -29,7 +34,7 @@ struct ContentView: View {
     /// Briefly flashes the green subject (body) rectangles on the
     /// Labels overlay whenever the toggle flips on. Goes back to
     /// false after `subjectBoxFlashTask` finishes its 1 s wait.
-    @State private var subjectBoxFlash: Bool = false
+    @State var subjectBoxFlash: Bool = false
     @State private var subjectBoxFlashTask: Task<Void, Never>?
 
     var body: some View {
@@ -524,9 +529,9 @@ struct ContentView: View {
     /// (Y-down) that reflects the same aspect-fit + zoom transform the
     /// Metal renderer applies. Must stay in sync with FocusRenderer.fit.
 
-    private func viewRect(for sourceRect: CGRect,
-                          source: CGRect,
-                          in viewSize: CGSize) -> CGRect {
+    func viewRect(for sourceRect: CGRect,
+                  source: CGRect,
+                  in viewSize: CGSize) -> CGRect {
         let scale = min(viewSize.width / source.width,
                         viewSize.height / source.height)
         let fittedW = source.width * scale
