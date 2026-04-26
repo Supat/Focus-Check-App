@@ -857,15 +857,18 @@ struct ContentView: View {
         guard count > 0 else { return [] }
 
         // Estimate size for the stack — typical head badge with
-        // warning chip + the occasional PAD row. Wider than tall
-        // because the head badge text (gender + age + emotion +
-        // level) is the widest element. The estimate is generous
-        // on purpose; under-estimating produces overlap that the
-        // viewer notices, over-estimating just gives a wider
-        // collision-avoidance margin.
-        let badgeSize = CGSize(width: 160, height: 80)
+        // warning chip + the occasional PAD row. Tightened from
+        // an earlier 160×80 because the over-wide footprint was
+        // making collision-detection pessimistic, kicking the
+        // chosen candidate out of the prime "above the face" slot
+        // and putting the badge visibly far from the head. 130×72
+        // is closer to the actual rendered size at typical content.
+        let badgeSize = CGSize(width: 130, height: 72)
         let halfW = badgeSize.width / 2
         let halfH = badgeSize.height / 2
+        // Gap between the badge edge and the anchor edge. Smaller
+        // = stack hovers closer to the face.
+        let gap: CGFloat = 2
 
         // View-rect copies of bodies + faces, computed once.
         let bodyViewRects = bodies.map {
@@ -917,13 +920,14 @@ struct ContentView: View {
 
         for i in order {
             let anchor = anchors[i]
+            let anchorCentre = CGPoint(x: anchor.midX, y: anchor.midY)
             // Face-adjacent candidate centres, before clamp.
-            // "above" first so it wins ties.
+            // "above" first so it wins ties when distances match.
             let raw: [CGPoint] = [
-                CGPoint(x: anchor.midX, y: anchor.minY - 4 - halfH),
-                CGPoint(x: anchor.midX, y: anchor.maxY + 4 + halfH),
-                CGPoint(x: anchor.minX - 4 - halfW, y: anchor.midY),
-                CGPoint(x: anchor.maxX + 4 + halfW, y: anchor.midY),
+                CGPoint(x: anchor.midX, y: anchor.minY - gap - halfH),
+                CGPoint(x: anchor.midX, y: anchor.maxY + gap + halfH),
+                CGPoint(x: anchor.minX - gap - halfW, y: anchor.midY),
+                CGPoint(x: anchor.maxX + gap + halfW, y: anchor.midY),
             ]
             // Clamp into viewport (priority 1).
             let candidates = raw.map { p in
@@ -934,11 +938,13 @@ struct ContentView: View {
             }
 
             // Score each candidate. Stack collisions trump face
-            // overlaps (priority 2 vs 3); preference order in
-            // `raw` breaks remaining ties.
+            // overlaps (priority 2 vs 3); distance from the
+            // anchor centre breaks remaining ties so the picker
+            // hugs the face when nothing forces it away.
             var bestIdx = 0
             var bestStackHits = Int.max
             var bestFaceHits = Int.max
+            var bestDistance: CGFloat = .greatestFiniteMagnitude
             for (idx, c) in candidates.enumerated() {
                 let r = CGRect(
                     x: c.x - halfW, y: c.y - halfH,
@@ -950,12 +956,18 @@ struct ContentView: View {
                 let faceHits = faceViewRects.reduce(0) {
                     $0 + (r.intersects($1) ? 1 : 0)
                 }
+                let dx = c.x - anchorCentre.x
+                let dy = c.y - anchorCentre.y
+                let distance = (dx * dx + dy * dy).squareRoot()
                 let better =
                     stackHits < bestStackHits ||
-                    (stackHits == bestStackHits && faceHits < bestFaceHits)
+                    (stackHits == bestStackHits && faceHits < bestFaceHits) ||
+                    (stackHits == bestStackHits && faceHits == bestFaceHits
+                        && distance < bestDistance)
                 if better {
                     bestStackHits = stackHits
                     bestFaceHits = faceHits
+                    bestDistance = distance
                     bestIdx = idx
                 }
             }
