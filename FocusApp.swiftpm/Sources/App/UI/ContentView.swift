@@ -600,6 +600,11 @@ struct ContentView: View {
     /// as physiological arousal) + cellularbars whose fill
     /// encodes severity. See `genitalWarning(forBodyAt:)` for the
     /// ladder.
+    ///
+    /// Background uses the same `Color.black.opacity(0.45)` tint
+    /// as `SubjectHeadBadge` so the chip's capsule reads as a
+    /// continuation of the head badge it sits beneath rather
+    /// than a lighter-coloured detached pill.
     private func genitalWarningChip(
         bars: Double, color: Color
     ) -> some View {
@@ -611,7 +616,7 @@ struct ContentView: View {
         .foregroundStyle(color)
         .padding(.horizontal, 4)
         .padding(.vertical, 2)
-        .liquidBadgeBackground(in: Capsule())
+        .liquidBadgeBackground(tint: Color.black.opacity(0.45), in: Capsule())
     }
 
     /// Floating per-subject warning badge placed above each body whose
