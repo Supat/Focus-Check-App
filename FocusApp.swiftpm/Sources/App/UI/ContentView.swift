@@ -828,21 +828,26 @@ struct ContentView: View {
     /// (Y-down) that reflects the same aspect-fit + zoom transform the
     /// Metal renderer applies. Must stay in sync with `FocusRenderer.fit`.
     /// Resolve a `.position` for each subject's head-badge stack
-    /// against three constraints, in priority order:
+    /// against four constraints, in priority order:
+    ///   0. The stack lives in the *area around the subject's
+    ///      face* — candidates are above / below / left / right
+    ///      of the matched face rect, not the whole body. Falls
+    ///      back to the body's top-region candidates only when
+    ///      no face was attributed to that body.
     ///   1. The stack must stay fully inside the viewport.
     ///   2. The stack must not overlap any other subject's stack.
     ///   3. The stack should not overlap any subject's face — but
     ///      face overlap is permitted when (1) and (2) leave no
     ///      face-clear option.
     ///
-    /// Per body, four candidate positions are evaluated (above,
-    /// below, top-left, top-right of the body rect), each clamped
-    /// into the viewport. The candidate with the fewest stack
-    /// collisions wins; ties on stack collisions break by fewer
-    /// face overlaps; further ties favour the "above" default so
-    /// the layout stays predictable when nothing conflicts.
-    /// Subjects are processed top-to-bottom by source-Y so the
-    /// uppermost body gets first pick of the prime "above" slot.
+    /// Per body, four face-relative candidate positions are
+    /// evaluated, each clamped into the viewport. The candidate
+    /// with the fewest stack collisions wins; ties on stack
+    /// collisions break by fewer face overlaps; further ties
+    /// favour "above" so the layout stays predictable when
+    /// nothing conflicts. Subjects are processed top-to-bottom by
+    /// face-Y so the uppermost subject claims the prime above-
+    /// the-face slot first.
     private func computeHeadBadgeLayout(
         extent: CGRect,
         viewSize: CGSize
@@ -870,24 +875,55 @@ struct ContentView: View {
             viewRect(for: $0, source: extent, in: viewSize)
         }
 
-        // Process top-to-bottom so the uppermost subject claims
-        // the prime above-the-body slot first.
+        // Match each body to its face (face whose source-extent
+        // centre is inside the body). Mirrors `predictionForBody`
+        // / `painForBody` / `ageForBody` so attribution stays
+        // consistent across the per-subject UI surfaces. Returns
+        // nil when no face matched — caller falls back to a
+        // body-relative anchor.
+        let faces = viewModel.faceRectangles
+        func faceViewRect(forBody bodyIndex: Int) -> CGRect? {
+            let body = bodies[bodyIndex]
+            for (i, face) in faces.enumerated() {
+                let centre = CGPoint(x: face.midX, y: face.midY)
+                if body.contains(centre) { return faceViewRects[i] }
+            }
+            return nil
+        }
+
+        // Anchor rect for each body: face when available, else
+        // body's top region (so the fallback still hovers near
+        // the head rather than the centre of the body box).
+        let anchors: [CGRect] = (0..<count).map { i in
+            if let f = faceViewRect(forBody: i) { return f }
+            let b = bodyViewRects[i]
+            // Top quartile of the body — a reasonable proxy for
+            // "where the head probably is" when face detection
+            // missed the subject.
+            return CGRect(
+                x: b.minX, y: b.minY,
+                width: b.width, height: max(b.height * 0.25, 40)
+            )
+        }
+
+        // Process top-to-bottom by anchor-Y so the uppermost
+        // subject claims the prime above-the-face slot first.
         let order = (0..<count).sorted {
-            bodyViewRects[$0].minY < bodyViewRects[$1].minY
+            anchors[$0].minY < anchors[$1].minY
         }
 
         var placed: [CGRect] = []
         var positions = Array(repeating: CGPoint.zero, count: count)
 
         for i in order {
-            let body = bodyViewRects[i]
-            // Candidate centres before clamp. "above" first so it
-            // wins ties.
+            let anchor = anchors[i]
+            // Face-adjacent candidate centres, before clamp.
+            // "above" first so it wins ties.
             let raw: [CGPoint] = [
-                CGPoint(x: body.midX, y: body.minY - 4 - halfH),
-                CGPoint(x: body.midX, y: body.maxY + 4 + halfH),
-                CGPoint(x: body.minX - 4 - halfW, y: body.minY + halfH),
-                CGPoint(x: body.maxX + 4 + halfW, y: body.minY + halfH),
+                CGPoint(x: anchor.midX, y: anchor.minY - 4 - halfH),
+                CGPoint(x: anchor.midX, y: anchor.maxY + 4 + halfH),
+                CGPoint(x: anchor.minX - 4 - halfW, y: anchor.midY),
+                CGPoint(x: anchor.maxX + 4 + halfW, y: anchor.midY),
             ]
             // Clamp into viewport (priority 1).
             let candidates = raw.map { p in
