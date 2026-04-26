@@ -621,6 +621,9 @@ struct ContentView: View {
            let extent = viewModel.sourceImage?.extent,
            extent.width > 0, extent.height > 0,
            viewModel.nudityLevels.count == viewModel.bodyRectangles.count {
+            let badgeLayout = computeHeadBadgeLayout(
+                extent: extent, viewSize: size
+            )
             ForEach(Array(viewModel.bodyRectangles.enumerated()), id: \.offset) { index, body in
                 let level = viewModel.nudityLevels[index]
                 let prediction = predictionForBody(body)
@@ -640,7 +643,6 @@ struct ContentView: View {
                 if level >= .covered || prediction != nil
                     || painForBody(body) != nil || age != nil
                     || warning != nil {
-                    let rect = viewRect(for: body, source: extent, in: size)
                     let pain = painForBody(body)
                     VStack(spacing: 4) {
                         SubjectHeadBadge(
@@ -673,25 +675,13 @@ struct ContentView: View {
                             }
                         }
                     }
-                    // Anchor the stack's centre near the body's top
-                    // edge so the head badge lands where it used to
-                    // and the optional warning chip + PAD capsule
-                    // hang below it. Clamp on three edges so a body
-                    // near the viewport perimeter doesn't push the
-                    // stack out of frame:
-                    //   - y clamps ≥ 60 pt — enough room above for
-                    //     a typical SubjectHeadBadge + warning chip
-                    //     (~60–80 pt tall) without crossing the
-                    //     status bar / nav-bar.
-                    //   - x clamps to ±halfWidth so a body near a
-                    //     side edge slides the stack inward instead
-                    //     of letting it extend past the photo
-                    //     bounds, where the parent .clipped() would
-                    //     truncate it.
-                    .position(
-                        x: max(80, min(size.width - 80, rect.midX)),
-                        y: max(60, rect.minY - 4)
-                    )
+                    // Position resolved by `computeHeadBadgeLayout` —
+                    // tries above-the-body first, falls back to
+                    // below / left / right when the default would
+                    // overlap another stack or push out of the
+                    // viewport. Face overlap is allowed only when
+                    // no in-frame, non-overlapping option exists.
+                    .position(badgeLayout[index])
                     .allowsHitTesting(false)
                 }
             }
@@ -837,6 +827,114 @@ struct ContentView: View {
     /// Map a source-extent CIImage rect (Y-up) into a SwiftUI view rect
     /// (Y-down) that reflects the same aspect-fit + zoom transform the
     /// Metal renderer applies. Must stay in sync with `FocusRenderer.fit`.
+    /// Resolve a `.position` for each subject's head-badge stack
+    /// against three constraints, in priority order:
+    ///   1. The stack must stay fully inside the viewport.
+    ///   2. The stack must not overlap any other subject's stack.
+    ///   3. The stack should not overlap any subject's face — but
+    ///      face overlap is permitted when (1) and (2) leave no
+    ///      face-clear option.
+    ///
+    /// Per body, four candidate positions are evaluated (above,
+    /// below, top-left, top-right of the body rect), each clamped
+    /// into the viewport. The candidate with the fewest stack
+    /// collisions wins; ties on stack collisions break by fewer
+    /// face overlaps; further ties favour the "above" default so
+    /// the layout stays predictable when nothing conflicts.
+    /// Subjects are processed top-to-bottom by source-Y so the
+    /// uppermost body gets first pick of the prime "above" slot.
+    private func computeHeadBadgeLayout(
+        extent: CGRect,
+        viewSize: CGSize
+    ) -> [CGPoint] {
+        let bodies = viewModel.bodyRectangles
+        let count = bodies.count
+        guard count > 0 else { return [] }
+
+        // Estimate size for the stack — typical head badge with
+        // warning chip + the occasional PAD row. Wider than tall
+        // because the head badge text (gender + age + emotion +
+        // level) is the widest element. The estimate is generous
+        // on purpose; under-estimating produces overlap that the
+        // viewer notices, over-estimating just gives a wider
+        // collision-avoidance margin.
+        let badgeSize = CGSize(width: 160, height: 80)
+        let halfW = badgeSize.width / 2
+        let halfH = badgeSize.height / 2
+
+        // View-rect copies of bodies + faces, computed once.
+        let bodyViewRects = bodies.map {
+            viewRect(for: $0, source: extent, in: viewSize)
+        }
+        let faceViewRects = viewModel.faceRectangles.map {
+            viewRect(for: $0, source: extent, in: viewSize)
+        }
+
+        // Process top-to-bottom so the uppermost subject claims
+        // the prime above-the-body slot first.
+        let order = (0..<count).sorted {
+            bodyViewRects[$0].minY < bodyViewRects[$1].minY
+        }
+
+        var placed: [CGRect] = []
+        var positions = Array(repeating: CGPoint.zero, count: count)
+
+        for i in order {
+            let body = bodyViewRects[i]
+            // Candidate centres before clamp. "above" first so it
+            // wins ties.
+            let raw: [CGPoint] = [
+                CGPoint(x: body.midX, y: body.minY - 4 - halfH),
+                CGPoint(x: body.midX, y: body.maxY + 4 + halfH),
+                CGPoint(x: body.minX - 4 - halfW, y: body.minY + halfH),
+                CGPoint(x: body.maxX + 4 + halfW, y: body.minY + halfH),
+            ]
+            // Clamp into viewport (priority 1).
+            let candidates = raw.map { p in
+                CGPoint(
+                    x: max(halfW + 4, min(viewSize.width - halfW - 4, p.x)),
+                    y: max(halfH + 8, min(viewSize.height - halfH - 8, p.y))
+                )
+            }
+
+            // Score each candidate. Stack collisions trump face
+            // overlaps (priority 2 vs 3); preference order in
+            // `raw` breaks remaining ties.
+            var bestIdx = 0
+            var bestStackHits = Int.max
+            var bestFaceHits = Int.max
+            for (idx, c) in candidates.enumerated() {
+                let r = CGRect(
+                    x: c.x - halfW, y: c.y - halfH,
+                    width: badgeSize.width, height: badgeSize.height
+                )
+                let stackHits = placed.reduce(0) {
+                    $0 + (r.intersects($1) ? 1 : 0)
+                }
+                let faceHits = faceViewRects.reduce(0) {
+                    $0 + (r.intersects($1) ? 1 : 0)
+                }
+                let better =
+                    stackHits < bestStackHits ||
+                    (stackHits == bestStackHits && faceHits < bestFaceHits)
+                if better {
+                    bestStackHits = stackHits
+                    bestFaceHits = faceHits
+                    bestIdx = idx
+                }
+            }
+
+            let chosen = candidates[bestIdx]
+            placed.append(CGRect(
+                x: chosen.x - halfW, y: chosen.y - halfH,
+                width: badgeSize.width, height: badgeSize.height
+            ))
+            positions[i] = chosen
+        }
+
+        return positions
+    }
+
     private func viewRect(for sourceRect: CGRect,
                           source: CGRect,
                           in viewSize: CGSize) -> CGRect {
