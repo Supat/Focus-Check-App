@@ -282,9 +282,19 @@ struct ContentView: View {
             if !isFullScreen {
                 Divider()
 
-                OverlayControls(viewModel: viewModel)
-                    .padding()
-                    .background(.bar)
+                // Video transport sits above OverlayControls and is
+                // visible only for video sources. Folded into the
+                // same `.bar` material so the two rows read as one
+                // bottom panel rather than a stacked pair.
+                VStack(spacing: 0) {
+                    if let videoSource = viewModel.videoSource {
+                        VideoTransportBar(source: videoSource)
+                        Divider()
+                    }
+                    OverlayControls(viewModel: viewModel)
+                        .padding()
+                }
+                .background(.bar)
             }
         }
         .overlay(alignment: .topTrailing) {
