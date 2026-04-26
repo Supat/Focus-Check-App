@@ -211,13 +211,21 @@ struct ModelArchive: Sendable {
 
     /// Downstream classifier that re-labels NudeNet's genital-region
     /// detections (`MALE_GENITALIA_EXPOSED`, `FEMALE_GENITALIA_COVERED`,
-    /// `FEMALE_GENITALIA_EXPOSED`) into a finer five-class schema:
+    /// `FEMALE_GENITALIA_EXPOSED`) into a finer eight-class schema:
     ///
-    ///   MALE_GENITALIA_COVERED
-    ///   MALE_GENITALIA_FLACCID
-    ///   MALE_GENITALIA_AROUSAL
-    ///   MALE_GENITALIA_ORGASM
-    ///   OTHER  (NudeNet false positive — drop the detection)
+    ///   MALE_GENITALIA_COVERED               (clothed, baseline)
+    ///   MALE_GENITALIA_COVERED_STIMULATION   (clothed but stimulated)
+    ///   MALE_GENITALIA_EXPOSED_LATENT        (exposed, resting)
+    ///   MALE_GENITALIA_EXPOSED_TUMESCENT     (exposed, partial engorgement)
+    ///   MALE_GENITALIA_EXPOSED_AROUSAL       (exposed, full erection)
+    ///   MALE_GENITALIA_EXPOSED_ORGASM        (exposed, ejaculation)
+    ///   MALE_GENITALIA_EXPOSED_DETUMESCENT   (exposed, post-orgasm subsiding)
+    ///   OTHER                                (NudeNet false positive — drop)
+    ///
+    /// v3 schema encodes COVERED / EXPOSED as a substring of every
+    /// label, which lets the rest of the app's mosaic gating fall
+    /// through `contains("COVERED")` / `contains("EXPOSED")` filters
+    /// without per-label special-casing.
     ///
     /// Trained via CreateML on crops harvested by
     /// `Tools/extract_genital_crops.py` (no shared code with the
@@ -230,14 +238,16 @@ struct ModelArchive: Sendable {
     /// research-only training data, do not bundle in signed App
     /// Store builds.
     ///
-    /// **Version**: `GenitalClassifier-v1` directory,
-    /// `genital-classifier-v1` tag. Bump the pair together when
-    /// the export pipeline changes (e.g. backbone swap, class set
-    /// edit, padding strategy change).
+    /// **Version**: `GenitalClassifier-v3` directory,
+    /// `genital-classifier-v3` tag (v2 had a flat per-state schema
+    /// that didn't survive contact with the COVERED/EXPOSED-prefix
+    /// mosaic filters; superseded by v3). Bump the pair together
+    /// when the export pipeline changes (e.g. backbone swap, class
+    /// set edit, padding strategy change).
     static let genitalClassifier = ModelArchive(
-        directoryName: "GenitalClassifier-v1.mlmodelc",
+        directoryName: "GenitalClassifier-v3.mlmodelc",
         sourceURL: URL(string:
-            "https://github.com/Supat/Focus-Check-App/releases/download/genital-classifier-v1/GenitalClassifier.mlmodelc.zip"
+            "https://github.com/Supat/Focus-Check-App/releases/download/genital-classifier-v3/GenitalClassifier.mlmodelc.zip"
         )!
     )
 

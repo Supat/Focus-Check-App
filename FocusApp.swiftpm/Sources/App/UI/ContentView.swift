@@ -520,20 +520,23 @@ struct ContentView: View {
 
     /// Highest-severity genital warning style for the body at
     /// `bodyIndex`, or nil when no genital detection is best-
-    /// attributed to that body. Severity ladder:
+    /// attributed to that body. Severity ladder maps the v3
+    /// GenitalClassifier sub-classes onto cellularbars's discrete
+    /// 4-bar scale:
     ///
     ///   Bars   Colour   Source label
     ///   ────   ──────   ──────────────────────────────────────
-    ///   0/4    grey     COVERED (subject not nude) or raw
-    ///                   EXPOSED (no sub-class assigned — also
-    ///                   covers FEMALE_*, since the classifier
-    ///                   doesn't refine female detections)
-    ///   1/4    grey     COVERED on a subject whose aggregated
-    ///                   NudityLevel is `.nude` (genitals clothed,
-    ///                   other regions aren't — low-grade signal)
-    ///   2/4    yellow   MALE_GENITALIA_FLACCID
-    ///   3/4    orange   MALE_GENITALIA_AROUSAL
-    ///   4/4    red      MALE_GENITALIA_ORGASM
+    ///   0/4    grey     COVERED (subject not nude), raw EXPOSED
+    ///                   (no sub-class), FEMALE_* (any state)
+    ///   1/4    grey     COVERED on a `.nude` subject (low-grade
+    ///                   signal: genitals clothed, other regions
+    ///                   aren't)
+    ///   1/4    yellow   EXPOSED_LATENT (resting)
+    ///   2/4    yellow   EXPOSED_TUMESCENT (rising) /
+    ///                   EXPOSED_DETUMESCENT (subsiding)
+    ///   3/4    orange   EXPOSED_AROUSAL OR
+    ///                   COVERED_STIMULATION  ← mapped to AROUSAL
+    ///   4/4    red      EXPOSED_ORGASM
     ///
     /// Body attribution mirrors NudityDetector.analyze() — max
     /// intersection area wins. When multiple genital detections
@@ -549,11 +552,22 @@ struct ContentView: View {
             ? viewModel.nudityLevels[bodyIndex]
             : .none
 
+        // Order matters — checks run highest-severity first so a
+        // single-keyword match short-circuits before the broader
+        // COVERED / EXPOSED rules. COVERED_STIMULATION is matched
+        // before plain COVERED so it gets the AROUSAL bump.
         func style(for label: String) -> (bars: Double, color: Color) {
             let upper = label.uppercased()
-            if upper.contains("ORGASM")  { return (1.00, .red) }
-            if upper.contains("AROUSAL") { return (0.75, .orange) }
-            if upper.contains("FLACCID") { return (0.50, .yellow) }
+            if upper.contains("ORGASM")             { return (1.00, .red) }
+            if upper.contains("COVERED_STIMULATION") { return (0.75, .orange) }
+            if upper.contains("AROUSAL")            { return (0.75, .orange) }
+            if upper.contains("TUMESCENT") {
+                // Catches both EXPOSED_TUMESCENT (rising) and
+                // EXPOSED_DETUMESCENT (subsiding) — symmetric
+                // about the AROUSAL peak.
+                return (0.50, .yellow)
+            }
+            if upper.contains("LATENT") { return (0.25, .yellow) }
             if upper.contains("COVERED") && subjectLevel == .nude {
                 return (0.25, .gray)
             }

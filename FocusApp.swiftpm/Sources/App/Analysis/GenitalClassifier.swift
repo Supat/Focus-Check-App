@@ -8,12 +8,22 @@ import CoreML
 /// classifier emits its top class as a literal string from that set).
 /// `OTHER` is the "drop this detection" verdict — NudeNet false
 /// positive or non-genital private-region anatomy.
+///
+/// v3 schema: every COVERED / EXPOSED label encodes the gating
+/// prefix as a substring so the mosaic dispatch's existing
+/// `contains("COVERED")` / `contains("EXPOSED")` filters work
+/// without per-label enumeration. The five EXPOSED variants form
+/// an anatomical state ladder; COVERED has a hybrid
+/// COVERED_STIMULATION variant for clothed-but-stimulated cases.
 enum GenitalSubClass: String, CaseIterable, Sendable, Hashable {
-    case covered = "MALE_GENITALIA_COVERED"
-    case flaccid = "MALE_GENITALIA_FLACCID"
-    case arousal = "MALE_GENITALIA_AROUSAL"
-    case orgasm  = "MALE_GENITALIA_ORGASM"
-    case other   = "OTHER"
+    case covered             = "MALE_GENITALIA_COVERED"
+    case coveredStimulation  = "MALE_GENITALIA_COVERED_STIMULATION"
+    case exposedLatent       = "MALE_GENITALIA_EXPOSED_LATENT"
+    case exposedTumescent    = "MALE_GENITALIA_EXPOSED_TUMESCENT"
+    case exposedArousal      = "MALE_GENITALIA_EXPOSED_AROUSAL"
+    case exposedOrgasm       = "MALE_GENITALIA_EXPOSED_ORGASM"
+    case exposedDetumescent  = "MALE_GENITALIA_EXPOSED_DETUMESCENT"
+    case other               = "OTHER"
 
     init?(rawLabel: String) {
         let trimmed = rawLabel.trimmingCharacters(in: .whitespacesAndNewlines)

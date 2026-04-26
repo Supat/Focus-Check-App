@@ -249,15 +249,22 @@ struct NudityDetector {
 
     /// Map a bag of detections attributed to one subject into a level.
     /// Rules:
-    /// - any of the GenitalClassifier's exposed sub-classes
-    ///   (FLACCID / AROUSAL / ORGASM) or genitalia / anus exposure
-    ///   from raw NudeNet → `.nude`
-    /// - MALE_GENITALIA_COVERED → `.covered` (treated like other
-    ///   COVERED labels)
+    /// - genitalia / anus exposure → `.nude` (covers all v3
+    ///   GenitalClassifier sub-classes whose labels contain
+    ///   `EXPOSED_*`, plus raw NudeNet `*_GENITALIA_EXPOSED` /
+    ///   `ANUS_EXPOSED`)
     /// - ≥ 2 exposed labels → `.nude`
     /// - 1 exposed label → `.partial`
-    /// - only covered labels → `.covered`
+    /// - only covered labels (incl. `MALE_GENITALIA_COVERED` and
+    ///   `MALE_GENITALIA_COVERED_STIMULATION`) → `.covered`
     /// - nothing → `.none`
+    ///
+    /// v3 GenitalClassifier labels embed COVERED / EXPOSED as a
+    /// substring of every label, so the contains-based rules
+    /// catch them without per-label enumeration. (The earlier
+    /// v1/v2 schemas used flat `MALE_GENITALIA_<state>` labels
+    /// that needed an explicit enumeration block; that's no
+    /// longer required.)
     private func aggregate(_ detections: [NudityDetection]) -> NudityLevel {
         guard !detections.isEmpty else { return .none }
 
@@ -267,21 +274,6 @@ struct NudityDetector {
 
         for det in detections {
             let upper = det.label.uppercased()
-            // GenitalClassifier sub-classes don't contain the
-            // EXPOSED / COVERED keywords; key them explicitly so
-            // FLACCID / AROUSAL / ORGASM count as exposed-genital
-            // and COVERED counts as covered.
-            if upper == "MALE_GENITALIA_FLACCID"
-                || upper == "MALE_GENITALIA_AROUSAL"
-                || upper == "MALE_GENITALIA_ORGASM" {
-                exposedCount += 1
-                hasCritical = true
-                continue
-            }
-            if upper == "MALE_GENITALIA_COVERED" {
-                hasCovered = true
-                continue
-            }
             if upper.contains("COVERED") {
                 hasCovered = true
             } else if upper.contains("EXPOSED") {
