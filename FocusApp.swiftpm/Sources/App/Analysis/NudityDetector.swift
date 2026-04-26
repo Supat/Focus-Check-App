@@ -134,16 +134,16 @@ struct NudityDetector {
         guard !bodies.isEmpty else {
             return NudityAnalysis(levels: [], genders: [], detections: [])
         }
-        // Run one detector pass per body rect instead of a single
-        // whole-image pass. When two subjects overlap, the whole-image
-        // letterbox leaves each one filling only a fraction of the
-        // model's 320² input, and the partially-occluded subject loses
-        // its already-reduced silhouette to low detector resolution.
-        // A per-body padded crop gives each subject the full detector
-        // canvas and recovers the occlusion misses at the cost of N
-        // inferences per image. Global NMS on the union drops
-        // duplicates that landed in the overlap region between two
-        // neighboring crops.
+        // Two-stage detection: one whole-image pass + one per-body
+        // padded-crop pass per Vision body rect. The whole-image pass
+        // is the recall floor — it catches subjects Vision missed and
+        // doesn't depend on body attribution. The per-body passes
+        // recover fine-grained detections that the global letterbox
+        // can't resolve (each subject filling only a fraction of the
+        // model's 320² input loses its already-reduced silhouette to
+        // low detector resolution). Global class-agnostic NMS at the
+        // end strips duplicates produced by the two stages firing on
+        // the same region.
         let rawDetections = classifier.detect(
             in: image,
             bodyCrops: bodies,
@@ -509,6 +509,19 @@ private final class NudityClassifier {
         guard !bodies.isEmpty else { return [] }
         let extent = image.extent
         var all: [NudityDetection] = []
+
+        // Whole-image fallback pass. The per-body crops below skip
+        // any subject Vision didn't detect — a hard recall floor when
+        // a body is truncated, far from camera, or obscured enough
+        // that the body detector misses it. Running one global pass
+        // first recovers those misses; the global NMS at the end
+        // de-duplicates against the per-body passes when both fire
+        // on the same subject. One extra ~100 ms inference per
+        // analyze, acceptable for one-shot.
+        let whole = letterbox(image: image, into: inputSize)
+        all.append(contentsOf:
+            runDetector(letterboxed: whole, ciContext: ciContext))
+
         for body in bodies {
             let padX = body.width * Self.bodyCropPadding
             let padY = body.height * Self.bodyCropPadding
