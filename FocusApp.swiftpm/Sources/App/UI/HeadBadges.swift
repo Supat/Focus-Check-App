@@ -278,10 +278,17 @@ extension ContentView {
     /// weaker than V/A — we still surface it because it's the third
     /// standard PAD axis and callers asked for the full triple.
     fileprivate func subjectPADBars(for pad: PADVector) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        // Video mode: show V/A only. The D axis is a softmax-projection
+        // off Mehrabian's anchor table (already weaker than V/A on
+        // photos) and reads as too noisy at video pulse rates.
+        // Image mode: full V/A/D triple.
+        let showDominance = viewModel.videoSource == nil
+        return VStack(alignment: .leading, spacing: 3) {
             padBar(label: "V", value: pad.pleasure)
             padBar(label: "A", value: pad.arousal)
-            padBar(label: "D", value: pad.dominance)
+            if showDominance {
+                padBar(label: "D", value: pad.dominance)
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)

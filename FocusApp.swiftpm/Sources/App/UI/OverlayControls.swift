@@ -160,17 +160,16 @@ struct OverlayControls: View {
     /// without detections to gate.
     @ViewBuilder
     private var perSubjectCluster: some View {
-        // PAD meter is photo-only — no EmoNet/PSPI tier runs in video
-        // mode, so the toggle has nothing to gate.
-        if !isVideo {
-            Label("PAD meter", systemImage: "chart.bar.xaxis")
-                .labelStyle(.iconOnly)
-                .font(.caption)
-            Toggle("", isOn: $viewModel.showPADMeter)
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.small)
-        }
+        // The toggle gates EmoNet's V/A bars (and D + Pain in image
+        // mode). EmoNet runs at 2 Hz in video mode too — cheap
+        // enough on ANE — but Pain / age are still photo-only.
+        Label("PAD meter", systemImage: "chart.bar.xaxis")
+            .labelStyle(.iconOnly)
+            .font(.caption)
+        Toggle("", isOn: $viewModel.showPADMeter)
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.small)
         Label("Per subject", systemImage: "person.crop.square.filled.and.at.rectangle")
             .labelStyle(.iconOnly)
             .font(.caption)

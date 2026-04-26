@@ -950,6 +950,7 @@ final class FocusViewModel: ObservableObject {
         nudityLevels = snap.nudityLevels
         nudityGenders = snap.nudityGenders
         nudityDetections = snap.nudityDetections
+        faceEmotions = snap.faceEmotions
     }
 
     /// Periodic analyzer pump. Each iteration takes the latest decoded
@@ -994,7 +995,8 @@ final class FocusViewModel: ObservableObject {
                     personMask: result.personMask,
                     nudityLevels: result.nudityLevels,
                     nudityGenders: result.nudityGenders,
-                    nudityDetections: result.nudityDetections
+                    nudityDetections: result.nudityDetections,
+                    faceEmotions: result.faceEmotions
                 )
                 self.videoSmoother.consume(snap)
                 self.applySmoothedSnapshot(at: source.currentTime)

@@ -17,6 +17,11 @@ struct VideoSnapshot: Sendable {
     var nudityLevels: [NudityLevel]
     var nudityGenders: [SubjectGender]
     var nudityDetections: [NudityDetection]
+    /// Per-face EmoNet predictions, indexed alongside
+    /// `faceRectangles`. Carried through interpolation as-is —
+    /// V/A change slowly enough on human timescales that snapping
+    /// at each 2 Hz pulse reads as live without a smoother.
+    var faceEmotions: [EmotionPrediction?]
 }
 
 /// Two-snapshot ring: holds the most recent analyzer pulse and the
@@ -271,7 +276,8 @@ struct VideoSmoother {
             personMask: curr.personMask,
             nudityLevels: curr.nudityLevels,
             nudityGenders: curr.nudityGenders,
-            nudityDetections: curr.nudityDetections
+            nudityDetections: curr.nudityDetections,
+            faceEmotions: curr.faceEmotions
         )
     }
 

@@ -265,10 +265,14 @@ actor FocusAnalyzer {
 
     /// Bundled output of the per-frame video analysis pass — only
     /// the signals the live mosaic + per-subject head badges need.
-    /// Photo-only tiers (sharpness, depth, ELA, motion blur, NIMA,
-    /// CLIP, EmoNet, PSPI, age, SCA) are skipped: they don't fit a
+    /// Most photo-only tiers (sharpness, depth, ELA, motion blur,
+    /// NIMA, CLIP, PSPI, age, SCA) are skipped: they don't fit a
     /// video-rate budget and the manual `forceCensor` toggle covers
-    /// the gate they used to drive.
+    /// the gate they used to drive. EmoNet is the exception — its
+    /// per-face inference is ~30–50ms on ANE, which fits inside the
+    /// 500ms budget alongside Vision + NudeNet, so we run it for
+    /// the per-subject V/A bars (the dominance projection is
+    /// stripped at the UI level since it's the noisier axis).
     struct VideoFrameAnalysis: Sendable {
         var faceRectangles: [CGRect]
         var bodyRectangles: [CGRect]
@@ -279,19 +283,26 @@ actor FocusAnalyzer {
         var nudityLevels: [NudityLevel]
         var nudityGenders: [SubjectGender]
         var nudityDetections: [NudityDetection]
+        var faceEmotions: [EmotionPrediction?]
     }
 
-    /// One full Vision + NudeNet + GenitalClassifier pass on a single
-    /// video frame. Cost is dominated by NudeNet's per-body × TTA
-    /// inference (~300–500ms on iPad Pro for typical frames). The
-    /// caller throttles cadence — typically 1–3 Hz — and stores
-    /// results keyed by playhead time so live composites can pick
-    /// the nearest sample.
+    /// One full Vision + NudeNet + GenitalClassifier (+ EmoNet if
+    /// installed) pass on a single video frame. Cost is dominated by
+    /// NudeNet's per-body × TTA inference (~300–500ms on iPad Pro);
+    /// EmoNet adds ~30–50ms per face. The caller throttles cadence —
+    /// typically 1–3 Hz — and stores results keyed by playhead time
+    /// so live composites can pick the nearest sample.
     func analyzeVideoFrame(image: CIImage) -> VideoFrameAnalysis {
         let vision = runVision(in: image)
         let nudity = nudityDetector.analyze(
             image: image,
             bodies: vision.bodies,
+            ciContext: ciContext
+        )
+        let emotions = emotionClassifier.classify(
+            faces: vision.faces,
+            rolls: vision.faceRolls,
+            in: image,
             ciContext: ciContext
         )
         return VideoFrameAnalysis(
@@ -303,7 +314,8 @@ actor FocusAnalyzer {
             personMask: vision.personMask,
             nudityLevels: nudity.levels,
             nudityGenders: nudity.genders,
-            nudityDetections: nudity.detections
+            nudityDetections: nudity.detections,
+            faceEmotions: emotions
         )
     }
 
