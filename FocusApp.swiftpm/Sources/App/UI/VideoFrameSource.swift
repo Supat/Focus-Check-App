@@ -143,6 +143,16 @@ final class VideoFrameSource: ObservableObject {
         if hasVideoTrack {
             guard displayLink == nil else { return }
             let link = CADisplayLink(target: self, selector: #selector(tick))
+            // Cap to 30 fps. M-series iPad ProMotion displays
+            // refresh at 120 Hz, but we don't need a new pixel
+            // buffer that often — most video is 30 fps natively
+            // and any extra ticks just thrash main-thread @Published
+            // updates (sourceImage + 10 smoother fields per tick),
+            // which has been observed to starve toolbar Menu state
+            // and freeze sheet presentation. 30 fps is the minimum
+            // of "matches typical source rate" and "keeps the UI
+            // responsive".
+            link.preferredFramesPerSecond = 30
             link.add(to: .main, forMode: .common)
             self.displayLink = link
         } else {
