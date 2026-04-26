@@ -508,6 +508,15 @@ struct ContentView: View {
            let extent = viewModel.sourceImage?.extent,
            extent.width > 0, extent.height > 0 {
             ZStack {
+                // Subject (body) rects in green, drawn first so the
+                // NudeNet detection rects layer on top.
+                ForEach(Array(viewModel.bodyRectangles.enumerated()), id: \.offset) { _, body in
+                    let r = viewRect(for: body, source: extent, in: size)
+                    Rectangle()
+                        .strokeBorder(.green, lineWidth: 2)
+                        .frame(width: r.width, height: r.height)
+                        .position(x: r.midX, y: r.midY)
+                }
                 ForEach(Array(viewModel.nudityDetections.enumerated()), id: \.offset) { _, det in
                     let r = viewRect(for: det.rect, source: extent, in: size)
                     // Orange for "*_EXPOSED" labels, yellow otherwise —
