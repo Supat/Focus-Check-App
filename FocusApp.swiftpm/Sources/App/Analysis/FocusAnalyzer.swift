@@ -122,16 +122,11 @@ actor FocusAnalyzer {
     private let ageEstimator = AgeEstimator()
     private let qualityAnalyzer = QualityAnalyzer()
     private let aestheticAnalyzer = AestheticAnalyzer()
-    private let depthInstaller = ModelArchiveInstaller(.depthAnything)
-    private let nsfwInstaller = ModelArchiveInstaller(.nsfw)
-    private let nudenetInstaller = ModelArchiveInstaller(.nudenet)
-    private let clipInstaller = ModelArchiveInstaller(.clip)
-    private let emotionInstaller = ModelArchiveInstaller(.emotion)
-    private let openGraphAUInstaller = ModelArchiveInstaller(.openGraphAU)
-    private let ageInstaller = ModelArchiveInstaller(.age)
-    private let qualityInstaller = ModelArchiveInstaller(.quality)
-    private let aestheticInstaller = ModelArchiveInstaller(.aesthetic)
-    private let genitalClassifierInstaller = ModelArchiveInstaller(.genitalClassifier)
+    /// One installer per archive in `ModelArchive.all`, keyed by
+    /// directoryName so callers can look one up given the archive.
+    /// `ModelArchive` isn't Hashable (no unique key besides
+    /// directoryName) so we use the string explicitly.
+    private let installers: [String: ModelArchiveInstaller]
 
     private var source: CIImage?
 
@@ -151,19 +146,22 @@ actor FocusAnalyzer {
         self.laplacian = LaplacianVariance(device: device, commandQueue: queue)
         self.motionBlur = MotionBlurDetector(ciContext: self.ciContext)
         self.errorLevelAnalyzer = ErrorLevelAnalyzer(ciContext: self.ciContext)
+        var installers: [String: ModelArchiveInstaller] = [:]
+        for archive in ModelArchive.all {
+            installers[archive.directoryName] = ModelArchiveInstaller(archive)
+        }
+        self.installers = installers
         // DepthEstimator and NudityClassifier eager-load their Core ML
         // models (50 MB+ each, ANE compile ~1–3 s). Skipping that at
         // init keeps app launch under Swift Playgrounds' 5-second
         // preview budget — both are loaded on first use instead.
     }
 
-    var isDepthAvailable: Bool { ModelArchive.depthAnything.isInstalled() }
-
     /// Lazy-loaded depth estimator. Nil until either (a) the caller has
     /// invoked an analysis mode that needs depth, or (b) the model
-    /// finishes downloading via `installDepthModel`. Returning nil here
-    /// when the model isn't present lets `.depth` / `.hybrid` modes
-    /// gracefully downgrade.
+    /// finishes downloading via `install(.depthAnything, …)`. Returning
+    /// nil here when the model isn't present lets `.depth` / `.hybrid`
+    /// modes gracefully downgrade.
     private func depthEstimator() -> DepthEstimator? {
         if let cached = _depthEstimator { return cached }
         guard let created = try? DepthEstimator() else { return nil }
@@ -172,14 +170,28 @@ actor FocusAnalyzer {
     }
     private var _depthEstimator: DepthEstimator?
 
-    /// Download + install the Depth Anything v2 `.mlmodelc` from the maintainer's
-    /// release URL, then refresh the estimator so Depth/Hybrid modes become usable.
-    /// Progress (0...1) is reported via the callback — may run on any thread.
-    func installDepthModel(progress: @Sendable @escaping (Double) -> Void) async throws {
-        try await depthInstaller.install(progress: progress)
-        // Eagerly load the freshly-installed model so the first analysis
-        // after download doesn't pay the compile cost on the user's tap.
-        _depthEstimator = try DepthEstimator()
+    /// Generic install entry point — fetches the archive's ZIP,
+    /// unpacks it into Application Support, and runs the per-archive
+    /// post-install hook. Progress (0...1) reports via the callback,
+    /// which may fire on any thread; callers dispatch to UI as needed.
+    /// Throws when the archive isn't in the installer table (caller
+    /// referenced a `ModelArchive` that's missing from
+    /// `ModelArchive.all`).
+    func install(
+        _ archive: ModelArchive,
+        progress: @Sendable @escaping (Double) -> Void
+    ) async throws {
+        guard let installer = installers[archive.directoryName] else {
+            throw AnalysisError.modelMissing
+        }
+        try await installer.install(progress: progress)
+        // Per-archive post-install hooks. Depth eagerly compiles the
+        // fresh `.mlmodelc` so the first analyze after install
+        // doesn't pay the ~1–3 s ANE compile cost on the user's tap.
+        // Other tiers lazy-load on first use.
+        if archive.directoryName == ModelArchive.depthAnything.directoryName {
+            _depthEstimator = try DepthEstimator()
+        }
     }
 
     /// Render the composite for `inputs` at source resolution via the
@@ -249,94 +261,6 @@ actor FocusAnalyzer {
     /// callers should query this each time they want to know the state.
     var sensitiveContentAvailability: SensitiveContentAvailability {
         sensitiveContent.availability
-    }
-
-    /// True when the NSFW fallback Core ML model is already installed.
-    var isNSFWModelInstalled: Bool { ModelArchive.nsfw.isInstalled() }
-
-    /// Download + install the NSFW fallback model, mirroring installDepthModel.
-    func installNSFWModel(progress: @Sendable @escaping (Double) -> Void) async throws {
-        try await nsfwInstaller.install(progress: progress)
-    }
-
-    /// True when the NudeNet per-subject detector is installed + loaded.
-    var isNudeNetInstalled: Bool { ModelArchive.nudenet.isInstalled() }
-
-    /// Download + install NudeNet, same pattern as depth / NSFW. The wrapper
-    /// initializes lazily on first `detect` call, so no explicit reload.
-    func installNudeNetModel(progress: @Sendable @escaping (Double) -> Void) async throws {
-        try await nudenetInstaller.install(progress: progress)
-    }
-
-    /// True when the CLIP bundle (image encoder + prompt embeddings) is
-    /// installed on disk.
-    var isCLIPInstalled: Bool { ModelArchive.clip.isInstalled() }
-
-    /// Download + install the CLIP image-encoder + prompt-embeddings
-    /// bundle. Uses the same runtime-download pattern as the other
-    /// models; see `ModelArchive.clip` for the expected ZIP layout.
-    func installCLIPModel(progress: @Sendable @escaping (Double) -> Void) async throws {
-        try await clipInstaller.install(progress: progress)
-    }
-
-    /// True when the FER+ emotion classifier is installed on disk.
-    var isEmotionInstalled: Bool { ModelArchive.emotion.isInstalled() }
-
-    /// Download + install the FER+ emotion classifier. Same pattern as
-    /// the other models — lazy MLModel load happens on first classify.
-    func installEmotionModel(progress: @Sendable @escaping (Double) -> Void) async throws {
-        try await emotionInstaller.install(progress: progress)
-    }
-
-    /// True when the OpenGraphAU pain detector is installed on disk.
-    var isOpenGraphAUInstalled: Bool { ModelArchive.openGraphAU.isInstalled() }
-
-    /// Download + install the OpenGraphAU multi-label AU classifier.
-    /// Paired with a Vision-derived AU43 proxy on the Swift side to
-    /// produce a PSPI pain estimate per face.
-    func installOpenGraphAUModel(progress: @Sendable @escaping (Double) -> Void) async throws {
-        try await openGraphAUInstaller.install(progress: progress)
-    }
-
-    /// True when the SSR-Net age estimator is installed on disk.
-    var isAgeInstalled: Bool { ModelArchive.age.isInstalled() }
-
-    /// Download + install the SSR-Net age model. Lazy MLModel load
-    /// happens on first predict; no explicit reload needed.
-    func installAgeModel(progress: @Sendable @escaping (Double) -> Void) async throws {
-        try await ageInstaller.install(progress: progress)
-    }
-
-    /// True when the NIMA quality analyzer is installed on disk.
-    var isQualityInstalled: Bool { ModelArchive.quality.isInstalled() }
-
-    /// Download + install NIMA. Lazy MLModel load happens on first
-    /// analyze; no explicit reload needed.
-    func installQualityModel(progress: @Sendable @escaping (Double) -> Void) async throws {
-        try await qualityInstaller.install(progress: progress)
-    }
-
-    /// True when the NIMA aesthetic analyzer is installed on disk.
-    var isAestheticInstalled: Bool { ModelArchive.aesthetic.isInstalled() }
-
-    /// Download + install the NIMA aesthetic variant.
-    func installAestheticModel(progress: @Sendable @escaping (Double) -> Void) async throws {
-        try await aestheticInstaller.install(progress: progress)
-    }
-
-    /// True when the genital-region sub-class classifier is installed
-    /// on disk.
-    var isGenitalClassifierInstalled: Bool {
-        ModelArchive.genitalClassifier.isInstalled()
-    }
-
-    /// Download + install the genital-region sub-class classifier.
-    /// Lazy MLModel load happens on the first reclassifiable
-    /// detection; no explicit reload needed.
-    func installGenitalClassifierModel(
-        progress: @Sendable @escaping (Double) -> Void
-    ) async throws {
-        try await genitalClassifierInstaller.install(progress: progress)
     }
 
     /// Eagerly compile the installed Core ML models so the first analyze

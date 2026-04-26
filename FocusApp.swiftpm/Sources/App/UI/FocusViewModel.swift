@@ -526,7 +526,6 @@ final class FocusViewModel: ObservableObject {
         archive: ModelArchive,
         state stateKP: ReferenceWritableKeyPath<FocusViewModel, DepthInstallState>,
         task taskKP: ReferenceWritableKeyPath<FocusViewModel, Task<Void, Never>?>,
-        install: @Sendable @escaping (FocusAnalyzer, @Sendable @escaping (Double) -> Void) async throws -> Void,
         onInstalled: (@MainActor @Sendable (FocusViewModel) -> Void)? = nil
     ) {
         guard self[keyPath: taskKP] == nil else { return }
@@ -534,7 +533,7 @@ final class FocusViewModel: ObservableObject {
         let analyzer = self.analyzer
         self[keyPath: taskKP] = Task { [weak self] in
             do {
-                try await install(analyzer) { [weak self] p in
+                try await analyzer.install(archive) { [weak self] p in
                     Task { @MainActor in
                         self?[keyPath: stateKP] = .downloading(progress: p)
                     }
@@ -567,7 +566,6 @@ final class FocusViewModel: ObservableObject {
             archive: .depthAnything,
             state: \.installs.depth,
             task: \.installTasks.depth,
-            install: { try await $0.installDepthModel(progress: $1) },
             onInstalled: { $0.depthAvailable = true }
         )
     }
@@ -577,7 +575,6 @@ final class FocusViewModel: ObservableObject {
             archive: .nsfw,
             state: \.installs.nsfw,
             task: \.installTasks.nsfw,
-            install: { try await $0.installNSFWModel(progress: $1) },
             // Re-query SCA so the row reflects that the NSFW
             // fallback is now usable.
             onInstalled: { $0.refreshSensitiveContentAvailability() }
@@ -585,75 +582,51 @@ final class FocusViewModel: ObservableObject {
     }
 
     func downloadNudeNetModel() {
-        download(
-            archive: .nudenet,
-            state: \.installs.nudenet,
-            task: \.installTasks.nudenet,
-            install: { try await $0.installNudeNetModel(progress: $1) }
-        )
+        download(archive: .nudenet,
+                 state: \.installs.nudenet,
+                 task: \.installTasks.nudenet)
     }
 
     func downloadCLIPModel() {
-        download(
-            archive: .clip,
-            state: \.installs.clip,
-            task: \.installTasks.clip,
-            install: { try await $0.installCLIPModel(progress: $1) }
-        )
+        download(archive: .clip,
+                 state: \.installs.clip,
+                 task: \.installTasks.clip)
     }
 
     func downloadEmotionModel() {
-        download(
-            archive: .emotion,
-            state: \.installs.emotion,
-            task: \.installTasks.emotion,
-            install: { try await $0.installEmotionModel(progress: $1) }
-        )
+        download(archive: .emotion,
+                 state: \.installs.emotion,
+                 task: \.installTasks.emotion)
     }
 
     func downloadOpenGraphAUModel() {
-        download(
-            archive: .openGraphAU,
-            state: \.installs.openGraphAU,
-            task: \.installTasks.openGraphAU,
-            install: { try await $0.installOpenGraphAUModel(progress: $1) }
-        )
+        download(archive: .openGraphAU,
+                 state: \.installs.openGraphAU,
+                 task: \.installTasks.openGraphAU)
     }
 
     func downloadAgeModel() {
-        download(
-            archive: .age,
-            state: \.installs.age,
-            task: \.installTasks.age,
-            install: { try await $0.installAgeModel(progress: $1) }
-        )
+        download(archive: .age,
+                 state: \.installs.age,
+                 task: \.installTasks.age)
     }
 
     func downloadQualityModel() {
-        download(
-            archive: .quality,
-            state: \.installs.quality,
-            task: \.installTasks.quality,
-            install: { try await $0.installQualityModel(progress: $1) }
-        )
+        download(archive: .quality,
+                 state: \.installs.quality,
+                 task: \.installTasks.quality)
     }
 
     func downloadAestheticModel() {
-        download(
-            archive: .aesthetic,
-            state: \.installs.aesthetic,
-            task: \.installTasks.aesthetic,
-            install: { try await $0.installAestheticModel(progress: $1) }
-        )
+        download(archive: .aesthetic,
+                 state: \.installs.aesthetic,
+                 task: \.installTasks.aesthetic)
     }
 
     func downloadGenitalClassifierModel() {
-        download(
-            archive: .genitalClassifier,
-            state: \.installs.genitalClassifier,
-            task: \.installTasks.genitalClassifier,
-            install: { try await $0.installGenitalClassifierModel(progress: $1) }
-        )
+        download(archive: .genitalClassifier,
+                 state: \.installs.genitalClassifier,
+                 task: \.installTasks.genitalClassifier)
     }
 
     /// Generic uninstall driver. Cancels any in-flight download for
