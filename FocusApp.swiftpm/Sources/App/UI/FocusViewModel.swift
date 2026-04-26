@@ -769,17 +769,15 @@ final class FocusViewModel: ObservableObject {
         ]
     }
 
-    func load(url: URL, name: String) {
-        print("[ViewModel] load url=\(url.path) name=\(name)")
-        // Video files route to a parallel pipeline — the analyzer is
-        // image-centric and per-frame analysis at video rates needs the
-        // TrackStore work that lands later. For now `loadVideo` just
-        // bridges the live frame stream into `sourceImage` so the
-        // existing renderer can display the video, with manual mosaic
-        // toggle and frozen overlays. Photo-only tiers (sharpness,
-        // depth, ELA, motion blur, NIMA, etc.) sit dormant.
+    func load(url: URL, name: String, isSecurityScoped: Bool = false) {
+        print("[ViewModel] load url=\(url.path) name=\(name) scoped=\(isSecurityScoped)")
+        // Video files route to a parallel pipeline. `isSecurityScoped`
+        // is true when the URL came from `.fileImporter` and the
+        // importer kept the security scope live so AVAsset can stream
+        // directly without a temp copy — VideoFrameSource takes
+        // ownership of the scope and releases it on teardown.
         if Self.isVideo(url: url) {
-            loadVideo(url: url, name: name)
+            loadVideo(url: url, name: name, isSecurityScoped: isSecurityScoped)
             return
         }
         currentTask?.cancel()
@@ -884,8 +882,8 @@ final class FocusViewModel: ObservableObject {
     /// task tree isn't kicked off — overlays stay empty until the
     /// TrackStore-backed video analysis loop is wired up later.
     /// Mosaic remains usable via the manual `forceCensor` toggle.
-    private func loadVideo(url: URL, name: String) {
-        print("[ViewModel] loadVideo url=\(url.path)")
+    private func loadVideo(url: URL, name: String, isSecurityScoped: Bool = false) {
+        print("[ViewModel] loadVideo url=\(url.path) scoped=\(isSecurityScoped)")
         currentTask?.cancel()
         currentTask = nil
         // Clear photo-only derived state so we don't leave stale
@@ -905,7 +903,10 @@ final class FocusViewModel: ObservableObject {
 
         Task { @MainActor [weak self] in
             do {
-                let source = try await VideoFrameSource(url: url)
+                let source = try await VideoFrameSource(
+                    url: url,
+                    isSecurityScoped: isSecurityScoped
+                )
                 guard let self else { return }
                 source.start()
                 // Bridge live frames → sourceImage AND drive the

@@ -48,35 +48,68 @@ final class VideoFrameSource: ObservableObject {
     private let player: AVPlayer
     private let output: AVPlayerItemVideoOutput
     private var displayLink: CADisplayLink?
+    /// True when this source took ownership of a security scope on
+    /// the URL (fileImporter video path that streams without a temp
+    /// copy). Released in `deinit` and on early throw paths.
+    private let didStartSecurityScope: Bool
+    private let scopedURL: URL
 
-    init(url: URL) async throws {
-        let asset = AVURLAsset(url: url)
+    /// `isSecurityScoped` should be true only when the caller has
+    /// already started the security scope on `url` (i.e. an
+    /// `.fileImporter` video that wants to stream directly). The
+    /// init takes ownership and releases the scope on deinit.
+    init(url: URL, isSecurityScoped: Bool = false) async throws {
+        // The caller already started the scope before handing the
+        // URL across; we just record that we're responsible for
+        // releasing it. If init throws below, we release explicitly
+        // since deinit doesn't run on partially-initialized objects.
+        self.scopedURL = url
+        self.didStartSecurityScope = isSecurityScoped
 
-        // Validate up front that the file actually has a video track
-        // — image / audio / text imports would silently fall through
-        // to a black playback otherwise.
-        let tracks = try await asset.loadTracks(withMediaType: .video)
-        guard !tracks.isEmpty else {
-            throw VideoFrameSourceError.noVideoTrack
+        do {
+            let asset = AVURLAsset(url: url)
+
+            // Validate up front that the file actually has a video
+            // track — image / audio / text imports would silently
+            // fall through to a black playback otherwise.
+            let tracks = try await asset.loadTracks(withMediaType: .video)
+            guard !tracks.isEmpty else {
+                throw VideoFrameSourceError.noVideoTrack
+            }
+            let durationCM = try await asset.load(.duration)
+
+            self.asset = asset
+            self.duration = CMTimeGetSeconds(durationCM)
+
+            let item = AVPlayerItem(asset: asset)
+            // BGRA8 is the Core Image / Metal-friendly default;
+            // IOSurface backing keeps the buffer eligible for
+            // zero-copy texture use when the renderer materializes
+            // via the shared CIContext.
+            let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
+                String(kCVPixelBufferPixelFormatTypeKey): kCVPixelFormatType_32BGRA,
+                String(kCVPixelBufferIOSurfacePropertiesKey): [:] as CFDictionary,
+            ])
+            item.add(output)
+
+            self.item = item
+            self.output = output
+            self.player = AVPlayer(playerItem: item)
+        } catch {
+            // Init throw path — Swift skips deinit since the object
+            // never finished initializing, so release the scope now
+            // or it leaks.
+            if isSecurityScoped {
+                url.stopAccessingSecurityScopedResource()
+            }
+            throw error
         }
-        let durationCM = try await asset.load(.duration)
+    }
 
-        self.asset = asset
-        self.duration = CMTimeGetSeconds(durationCM)
-
-        let item = AVPlayerItem(asset: asset)
-        // BGRA8 is the Core Image / Metal-friendly default; IOSurface
-        // backing keeps the buffer eligible for zero-copy texture use
-        // when the renderer materializes via the shared CIContext.
-        let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
-            String(kCVPixelBufferPixelFormatTypeKey): kCVPixelFormatType_32BGRA,
-            String(kCVPixelBufferIOSurfacePropertiesKey): [:] as CFDictionary,
-        ])
-        item.add(output)
-
-        self.item = item
-        self.output = output
-        self.player = AVPlayer(playerItem: item)
+    deinit {
+        if didStartSecurityScope {
+            scopedURL.stopAccessingSecurityScopedResource()
+        }
     }
 
     /// Begin sampling the output at the screen refresh rate. Idempotent

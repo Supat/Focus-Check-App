@@ -85,7 +85,9 @@ struct ContentView: View {
                     }
                     ToolbarItem(placement: .primaryAction) {
                         ImageImporter(
-                            onPick: { url, name in viewModel.load(url: url, name: name) },
+                            onPick: { url, name, isSecurityScoped in
+                                viewModel.load(url: url, name: name, isSecurityScoped: isSecurityScoped)
+                            },
                             onError: { message in viewModel.errorMessage = message }
                         )
                     }

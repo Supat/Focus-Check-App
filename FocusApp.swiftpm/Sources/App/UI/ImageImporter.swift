@@ -4,10 +4,13 @@ import UniformTypeIdentifiers
 
 /// Toolbar control offering both PhotosPicker (library) and fileImporter (Files / disk) entry points.
 struct ImageImporter: View {
-    /// Passes the local tmp URL and a human-readable display name (original
-    /// filename from `NSItemProvider.suggestedName` for library picks; the
-    /// original `url.lastPathComponent` for file imports).
-    let onPick: (URL, String) -> Void
+    /// Passes the URL, a human-readable display name, and a flag
+    /// indicating whether the URL is a still-live security-scoped
+    /// resource (true for video imports from `.fileImporter` that
+    /// stream directly without a temp copy). When true, the
+    /// downstream consumer is responsible for releasing the scope
+    /// when the resource is no longer needed.
+    let onPick: (URL, String, Bool) -> Void
     /// Surface failures back to the caller (view model) so the user sees
     /// why a pick didn't land instead of the picker silently doing nothing.
     let onError: (String) -> Void
@@ -52,8 +55,10 @@ struct ImageImporter: View {
             PHPickerSheet(
                 isPresented: $showingPhotosPicker,
                 onPick: { url, name in
+                    // PHPicker temp files are NSItemProvider-managed and
+                    // already in our sandbox — never security-scoped.
                     isLoading = false
-                    onPick(url, name)
+                    onPick(url, name, false)
                 },
                 onStart: { isLoading = true },
                 onError: { message in
@@ -78,6 +83,24 @@ struct ImageImporter: View {
 
     private func deliver(url: URL, fromScoped: Bool) {
         print("[Importer] deliver url=\(url.path) scoped=\(fromScoped)")
+
+        // Video files: skip the copy. AVAsset can stream directly
+        // from the security-scoped URL — keeping the scope open
+        // beats the disk-double cost of pulling a multi-GB file
+        // through `Data(contentsOf:)` + `data.write(to:)`. Hand the
+        // scope ownership to the downstream consumer so it survives
+        // the rest of the playback session.
+        if let type = UTType(filenameExtension: url.pathExtension),
+           type.conforms(to: .movie) || type.conforms(to: .video) {
+            let didStart = fromScoped && url.startAccessingSecurityScopedResource()
+            print("[Importer] video startAccessing=\(didStart) → onPick (no copy)")
+            onPick(url, url.lastPathComponent, didStart)
+            return
+        }
+
+        // Image path: read + write a temp copy so we don't depend on
+        // the original URL or the security scope outliving the picker
+        // sheet. Cheap on photos (≤ 100 MB), fine even for RAW.
         let didStart = fromScoped && url.startAccessingSecurityScopedResource()
         defer { if didStart { url.stopAccessingSecurityScopedResource() } }
         print("[Importer] startAccessing=\(didStart) file exists=\(FileManager.default.fileExists(atPath: url.path))")
@@ -90,7 +113,7 @@ struct ImageImporter: View {
                 .appendingPathExtension(ext)
             try data.write(to: tmp, options: .atomic)
             print("[Importer] read \(data.count) bytes → wrote \(tmp.lastPathComponent) → onPick")
-            onPick(tmp, url.lastPathComponent)
+            onPick(tmp, url.lastPathComponent, false)
         } catch {
             let message = "Couldn't read “\(url.lastPathComponent)”: \(error.localizedDescription)"
             print("[Importer] FAIL \(message)")
