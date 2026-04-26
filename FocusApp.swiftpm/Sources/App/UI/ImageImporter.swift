@@ -80,7 +80,7 @@ struct ImageImporter: View {
         }
         .fileImporter(
             isPresented: $showingFileImporter,
-            allowedContentTypes: [.image, .rawImage, .movie],
+            allowedContentTypes: [.image, .rawImage, .movie, .audio],
             allowsMultipleSelection: false
         ) { result in
             switch result {
@@ -95,14 +95,16 @@ struct ImageImporter: View {
     private func deliver(url: URL, fromScoped: Bool) {
         print("[Importer] deliver url=\(url.path) scoped=\(fromScoped)")
 
-        // Video files: skip the copy. AVAsset can stream directly
-        // from the security-scoped URL — keeping the scope open
-        // beats the disk-double cost of pulling a multi-GB file
-        // through `Data(contentsOf:)` + `data.write(to:)`. Hand the
-        // scope ownership to the downstream consumer so it survives
-        // the rest of the playback session.
+        // Video / audio files: skip the copy. AVAsset can stream
+        // directly from the security-scoped URL — keeping the scope
+        // open beats the disk-double cost of pulling a multi-GB
+        // file through `Data(contentsOf:)` + `data.write(to:)`. Hand
+        // the scope ownership to the downstream consumer so it
+        // survives the rest of the playback session.
         if let type = UTType(filenameExtension: url.pathExtension),
-           type.conforms(to: .movie) || type.conforms(to: .video) {
+           type.conforms(to: .movie)
+            || type.conforms(to: .video)
+            || type.conforms(to: .audio) {
             let didStart = fromScoped && url.startAccessingSecurityScopedResource()
             print("[Importer] video startAccessing=\(didStart) → onPick (no copy)")
             onPick(url, url.lastPathComponent, didStart)

@@ -9,6 +9,13 @@ import UIKit
 /// reads from `currentImage`; SwiftUI observes the same property to
 /// trigger MetalView redraws.
 ///
+/// Also handles audio-only assets (.m4a, .mp3, .wav, etc.) — when
+/// the loaded asset has no video track, no frame pump runs, but the
+/// AVPlayer still plays the audio out the speaker and transport
+/// (play / pause / scrub) keeps working. UI consumers branch on
+/// `hasVideoTrack` to switch between the rendered MetalView and the
+/// audio-only placeholder.
+///
 /// Pipeline:
 ///   AVAsset
 ///     → AVPlayer + AVPlayerItem
@@ -42,12 +49,21 @@ final class VideoFrameSource: ObservableObject {
     /// Total duration in seconds. Populated once the asset finishes
     /// loading its `.duration` property in `init`.
     let duration: TimeInterval
+    /// True when the loaded asset has at least one video track. False
+    /// for audio-only files — the player will still play audio but
+    /// `currentImage` stays nil and the display link no-ops.
+    let hasVideoTrack: Bool
 
     private let asset: AVURLAsset
     private let item: AVPlayerItem
     private let player: AVPlayer
-    private let output: AVPlayerItemVideoOutput
+    private let output: AVPlayerItemVideoOutput?
     private var displayLink: CADisplayLink?
+    /// Periodic AVPlayer time observer used in audio-only mode to
+    /// drive the transport bar's scrubber. Video assets get their
+    /// time tick for free in the display-link `tick()` since the
+    /// frame pump runs there.
+    private var audioTimeObserver: Any?
     /// True when this source took ownership of a security scope on
     /// the URL (fileImporter video path that streams without a temp
     /// copy). Released in `deinit` and on early throw paths.
@@ -69,31 +85,38 @@ final class VideoFrameSource: ObservableObject {
         do {
             let asset = AVURLAsset(url: url)
 
-            // Validate up front that the file actually has a video
-            // track — image / audio / text imports would silently
-            // fall through to a black playback otherwise.
-            let tracks = try await asset.loadTracks(withMediaType: .video)
-            guard !tracks.isEmpty else {
+            // Validate that the asset has at least one playable
+            // track — video OR audio. Reject only when both are
+            // missing. Audio-only files are valid; we'll skip the
+            // frame pump but keep AVPlayer + transport working.
+            let videoTracks = try await asset.loadTracks(withMediaType: .video)
+            let audioTracks = try await asset.loadTracks(withMediaType: .audio)
+            guard !videoTracks.isEmpty || !audioTracks.isEmpty else {
                 throw VideoFrameSourceError.noVideoTrack
             }
+            let hasVideo = !videoTracks.isEmpty
             let durationCM = try await asset.load(.duration)
 
             self.asset = asset
+            self.hasVideoTrack = hasVideo
             self.duration = CMTimeGetSeconds(durationCM)
 
             let item = AVPlayerItem(asset: asset)
-            // BGRA8 is the Core Image / Metal-friendly default;
-            // IOSurface backing keeps the buffer eligible for
-            // zero-copy texture use when the renderer materializes
-            // via the shared CIContext.
-            let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
-                String(kCVPixelBufferPixelFormatTypeKey): kCVPixelFormatType_32BGRA,
-                String(kCVPixelBufferIOSurfacePropertiesKey): [String: Any](),
-            ])
-            item.add(output)
+            // Only attach the video data output when there's
+            // actually a video track to sample. AVPlayer plays the
+            // audio out the speaker either way.
+            if hasVideo {
+                let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
+                    String(kCVPixelBufferPixelFormatTypeKey): kCVPixelFormatType_32BGRA,
+                    String(kCVPixelBufferIOSurfacePropertiesKey): [String: Any](),
+                ])
+                item.add(output)
+                self.output = output
+            } else {
+                self.output = nil
+            }
 
             self.item = item
-            self.output = output
             self.player = AVPlayer(playerItem: item)
         } catch {
             // Init throw path — Swift skips deinit since the object
@@ -112,20 +135,36 @@ final class VideoFrameSource: ObservableObject {
         }
     }
 
-    /// Begin sampling the output at the screen refresh rate. Idempotent
-    /// — calling twice in a row reuses the existing display link.
+    /// Begin time updates. For video assets this is a screen-refresh
+    /// display link sampling the frame pump; for audio-only it's a
+    /// 10 Hz periodic time observer that drives the transport bar's
+    /// scrubber. Idempotent.
     func start() {
-        guard displayLink == nil else { return }
-        let link = CADisplayLink(target: self, selector: #selector(tick))
-        link.add(to: .main, forMode: .common)
-        self.displayLink = link
+        if hasVideoTrack {
+            guard displayLink == nil else { return }
+            let link = CADisplayLink(target: self, selector: #selector(tick))
+            link.add(to: .main, forMode: .common)
+            self.displayLink = link
+        } else {
+            guard audioTimeObserver == nil else { return }
+            let interval = CMTime(seconds: 0.1, preferredTimescale: 600)
+            audioTimeObserver = player.addPeriodicTimeObserver(
+                forInterval: interval, queue: .main
+            ) { [weak self] time in
+                self?.currentTime = time
+            }
+        }
     }
 
-    /// Tear down the display link and pause AVPlayer. Safe to call
-    /// before `start()`.
+    /// Tear down the display link / time observer and pause AVPlayer.
+    /// Safe to call before `start()`.
     func stop() {
         displayLink?.invalidate()
         displayLink = nil
+        if let observer = audioTimeObserver {
+            player.removeTimeObserver(observer)
+            audioTimeObserver = nil
+        }
         player.pause()
         isPlaying = false
         currentImage = nil
@@ -162,8 +201,11 @@ final class VideoFrameSource: ObservableObject {
     /// has nothing new — common during seeks or when the player
     /// hasn't reached `.readyToPlay` yet.
     @objc private func tick() {
+        guard let output else { return }
         let hostTime = displayLink?.targetTimestamp ?? CACurrentMediaTime()
         let itemTime = output.itemTime(forHostTime: hostTime)
+        // Even for audio-only this could be reached if hasVideoTrack
+        // races, but the early `output` guard above handles it.
         guard output.hasNewPixelBuffer(forItemTime: itemTime),
               let pixelBuffer = output.copyPixelBuffer(
                 forItemTime: itemTime,

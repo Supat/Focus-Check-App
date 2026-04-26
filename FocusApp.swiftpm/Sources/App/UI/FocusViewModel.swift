@@ -787,7 +787,7 @@ final class FocusViewModel: ObservableObject {
         // importer kept the security scope live so AVAsset can stream
         // directly without a temp copy — VideoFrameSource takes
         // ownership of the scope and releases it on teardown.
-        if Self.isVideo(url: url) {
+        if Self.isAudioOrVideo(url: url) {
             loadVideo(url: url, name: name, isSecurityScoped: isSecurityScoped)
             return
         }
@@ -1079,12 +1079,16 @@ final class FocusViewModel: ObservableObject {
         }
     }
 
-    /// True when `url`'s extension or UTI declares it a movie. Used to
-    /// fork `load(url:name:)` between the image and video pipelines.
-    private static func isVideo(url: URL) -> Bool {
+    /// True when `url`'s extension or UTI declares it a movie or
+    /// audio file. Both route through `loadVideo`, which delegates
+    /// to `VideoFrameSource` — that class transparently handles the
+    /// audio-only case (no frame pump, AVPlayer still plays audio).
+    private static func isAudioOrVideo(url: URL) -> Bool {
         guard let type = UTType(filenameExtension: url.pathExtension)
         else { return false }
-        return type.conforms(to: .movie) || type.conforms(to: .video)
+        return type.conforms(to: .movie)
+            || type.conforms(to: .video)
+            || type.conforms(to: .audio)
     }
 
     /// Best-effort delete of the previous import's temp file. Called
