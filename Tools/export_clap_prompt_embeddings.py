@@ -40,6 +40,7 @@ PROMPTS = [
     "the sound of sexual intercourse",
     "two people having sex",
     "explicit sexual audio with vocalization",
+    "a person having an orgasm",
 
     # Physiological sounds (could plausibly overlap with explicit)
     "two people kissing",
