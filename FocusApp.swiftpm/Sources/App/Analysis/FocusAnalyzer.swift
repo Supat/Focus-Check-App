@@ -122,6 +122,7 @@ actor FocusAnalyzer {
     private let ageEstimator = AgeEstimator()
     private let qualityAnalyzer = QualityAnalyzer()
     private let aestheticAnalyzer = AestheticAnalyzer()
+    private let clapScorer = CLAPScorer()
     /// One installer per archive in `ModelArchive.all`, keyed by
     /// directoryName so callers can look one up given the archive.
     /// `ModelArchive` isn't Hashable (no unique key besides
@@ -332,6 +333,16 @@ actor FocusAnalyzer {
         _ = ageEstimator.warm()
         _ = qualityAnalyzer.warm()
         _ = aestheticAnalyzer.warm()
+        _ = clapScorer.warm()
+    }
+
+    /// One-shot CLAP audio context scoring for an imported audio /
+    /// video file. Reads the audio track, slices into 50%-overlap
+    /// 10 s windows, runs the encoder per window, and returns the
+    /// top `topK` prompt matches. Returns `[]` when the CLAP
+    /// archive isn't installed or the file has no audio track.
+    func scoreAudioContext(url: URL, topK: Int = 3) async -> [CLAPMatch] {
+        await clapScorer.score(audioURL: url, topK: topK)
     }
 
     /// Walk `Application Support/` and print every file + byte size.

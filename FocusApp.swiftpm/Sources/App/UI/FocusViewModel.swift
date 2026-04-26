@@ -389,6 +389,11 @@ final class FocusViewModel: ObservableObject {
     /// highest-similarity first. Empty when the CLIP bundle isn't
     /// installed.
     @Published var clipMatches: [CLIPMatch] = []
+    /// CLAP audio-context matches for the loaded audio / video file.
+    /// Populated by `scoreAudioContext` after import; stays empty
+    /// for image / camera sources, and for video files until /
+    /// unless we extend the scoring pipeline beyond audio-only.
+    @Published var audioMatches: [CLAPMatch] = []
     /// Per-face emotion predictions from FER+, indexed alongside
     /// `faceRectangles`. `nil` entries mean the classifier didn't
     /// meet its confidence floor for that face. Empty when the
@@ -485,6 +490,10 @@ final class FocusViewModel: ObservableObject {
     /// with the playhead time and copies the interpolated arrays
     /// onto the @Published rectangles the renderer reads.
     private var videoSmoother = VideoSmoother()
+    /// In-flight CLAP audio-context scoring task. Cancelled when a
+    /// new audio / video import lands or `clear()` runs so a stale
+    /// scoring task doesn't overwrite the new file's `audioMatches`.
+    private var audioContextTask: Task<Void, Never>?
     /// Active download task slots, parallel to `installs`. Kept off
     /// `@Published` so spurious "task started / finished"
     /// invalidations don't churn SwiftUI views that only care about
@@ -937,9 +946,27 @@ final class FocusViewModel: ObservableObject {
                 source.play()
                 self.cleanupPreviousImport()
                 self.previousLoadedURL = url
+                // Kick off CLAP audio-context scoring in the
+                // background. One-shot — populates `audioMatches`
+                // when done, no live updates during playback.
+                self.scoreAudioContext(url: url)
             } catch {
                 self?.errorMessage = error.localizedDescription
             }
+        }
+    }
+
+    /// Background task running the CLAP scorer over `url`'s audio
+    /// track. The result lands on `audioMatches` for the badge to
+    /// pick up. Cancelled and replaced across loadVideo / loadCamera
+    /// / clear via `audioContextTask`.
+    private func scoreAudioContext(url: URL) {
+        audioContextTask?.cancel()
+        audioContextTask = Task { @MainActor [weak self] in
+            guard let analyzer = self?.analyzer else { return }
+            let matches = await analyzer.scoreAudioContext(url: url)
+            guard let self, !Task.isCancelled else { return }
+            self.audioMatches = matches
         }
     }
 
@@ -1002,6 +1029,9 @@ final class FocusViewModel: ObservableObject {
         videoAnalysisTask?.cancel()
         videoAnalysisTask = nil
         videoSmoother.reset()
+        audioContextTask?.cancel()
+        audioContextTask = nil
+        audioMatches = []
     }
 
     /// Pull the smoother's interpolated output for `time` and copy
@@ -1148,6 +1178,7 @@ final class FocusViewModel: ObservableObject {
         nudityGenders = []
         nudityDetections = []
         clipMatches = []
+        audioMatches = []
         faceEmotions = []
         painScores = []
         ageEstimations = []
