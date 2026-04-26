@@ -74,6 +74,7 @@ struct InstallStates: Equatable {
     var quality: DepthInstallState = .notInstalled
     var aesthetic: DepthInstallState = .notInstalled
     var genitalClassifier: DepthInstallState = .notInstalled
+    var clapAudio: DepthInstallState = .notInstalled
 }
 
 /// One row in the Model Manager UI — pairs an archive with its
@@ -102,6 +103,7 @@ struct InstallTasks {
     var quality: Task<Void, Never>?
     var aesthetic: Task<Void, Never>?
     var genitalClassifier: Task<Void, Never>?
+    var clapAudio: Task<Void, Never>?
 }
 
 /// Snapshot of where the analysis pipeline is. Reported from
@@ -519,6 +521,7 @@ final class FocusViewModel: ObservableObject {
         let qualityInstalled = ModelArchive.quality.isInstalled()
         let aestheticInstalled = ModelArchive.aesthetic.isInstalled()
         let genitalClassifierInstalled = ModelArchive.genitalClassifier.isInstalled()
+        let clapAudioInstalled = ModelArchive.clapAudio.isInstalled()
         self.depthAvailable = depthInstalled
         self.installs = InstallStates(
             depth: depthInstalled ? .installed : .notInstalled,
@@ -530,7 +533,8 @@ final class FocusViewModel: ObservableObject {
             age: ageInstalled ? .installed : .notInstalled,
             quality: qualityInstalled ? .installed : .notInstalled,
             aesthetic: aestheticInstalled ? .installed : .notInstalled,
-            genitalClassifier: genitalClassifierInstalled ? .installed : .notInstalled
+            genitalClassifier: genitalClassifierInstalled ? .installed : .notInstalled,
+            clapAudio: clapAudioInstalled ? .installed : .notInstalled
         )
 
         let analyzer = self.analyzer
@@ -678,6 +682,12 @@ final class FocusViewModel: ObservableObject {
                  task: \.installTasks.genitalClassifier)
     }
 
+    func downloadCLAPAudioModel() {
+        download(archive: .clapAudio,
+                 state: \.installs.clapAudio,
+                 task: \.installTasks.clapAudio)
+    }
+
     /// Generic uninstall driver. Cancels any in-flight download for
     /// this archive, removes the unpacked directory from
     /// Application Support, then resets the install-state
@@ -739,6 +749,9 @@ final class FocusViewModel: ObservableObject {
     func uninstallGenitalClassifierModel() {
         uninstall(archive: .genitalClassifier, state: \.installs.genitalClassifier, task: \.installTasks.genitalClassifier)
     }
+    func uninstallCLAPAudioModel() {
+        uninstall(archive: .clapAudio, state: \.installs.clapAudio, task: \.installTasks.clapAudio)
+    }
 
     /// Bundle every optional Core ML tier into a single sequence
     /// the Model Manager UI iterates over. Each entry pairs the
@@ -786,6 +799,10 @@ final class FocusViewModel: ObservableObject {
                        state: \.installs.genitalClassifier,
                        install: downloadGenitalClassifierModel,
                        uninstall: uninstallGenitalClassifierModel),
+            ModelEntry(archive: .clapAudio,
+                       state: \.installs.clapAudio,
+                       install: downloadCLAPAudioModel,
+                       uninstall: uninstallCLAPAudioModel),
         ]
     }
 

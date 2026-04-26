@@ -99,6 +99,7 @@ struct OverlayControls: View {
                 qualityInstallRow
                 aestheticInstallRow
                 genitalClassifierInstallRow
+                clapAudioInstallRow
             }
         }
         #if os(iOS)
@@ -361,5 +362,11 @@ struct OverlayControls: View {
         installRow(state: viewModel.installs.genitalClassifier,
                    label: "Genital sub-class classifier not installed.",
                    action: viewModel.downloadGenitalClassifierModel)
+    }
+
+    private var clapAudioInstallRow: some View {
+        installRow(state: viewModel.installs.clapAudio,
+                   label: "CLAP audio context scorer not installed.",
+                   action: viewModel.downloadCLAPAudioModel)
     }
 }

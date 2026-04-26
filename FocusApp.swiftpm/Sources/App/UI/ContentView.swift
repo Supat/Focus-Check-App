@@ -140,7 +140,9 @@ struct ContentView: View {
                        !videoSource.hasVideoTrack {
                         AudioPlaybackPlaceholder(
                             source: videoSource,
-                            name: viewModel.sourceName
+                            name: viewModel.sourceName,
+                            audioMatches: viewModel.audioMatches,
+                            clapAvailable: viewModel.installs.clapAudio == .installed
                         )
                     } else {
                         placeholder

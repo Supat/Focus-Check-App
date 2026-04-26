@@ -13,6 +13,14 @@ import AVFoundation
 struct AudioPlaybackPlaceholder: View {
     @ObservedObject var source: VideoFrameSource
     let name: String?
+    /// Top CLAP audio-context matches for the loaded file, sorted
+    /// descending. Empty until scoring completes (or stays empty
+    /// when the CLAP archive isn't installed).
+    let audioMatches: [CLAPMatch]
+    /// True when the CLAP archive is installed — controls whether
+    /// the placeholder shows a "scoring…" indicator while waiting
+    /// for the result, or just hides the row entirely.
+    let clapAvailable: Bool
 
     /// Drives the breathing pulse on the glyph while playing.
     /// Stays at 1.0 when paused so the visual matches the audio.
@@ -56,9 +64,56 @@ struct AudioPlaybackPlaceholder: View {
                     .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 32)
+
+            audioContextSection
+                .padding(.horizontal, 32)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding()
+    }
+
+    /// CLAP audio-context readout. Three states:
+    ///   - archive not installed: hidden (the Model Manager is the
+    ///     prompt to install it, no need to nag from here).
+    ///   - installed but matches empty: "Analyzing audio…" indicator.
+    ///   - installed and matches present: top-3 prompt rows with
+    ///     similarity %.
+    @ViewBuilder
+    private var audioContextSection: some View {
+        if clapAvailable {
+            VStack(spacing: 6) {
+                Text("Audio Context")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
+                if audioMatches.isEmpty {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("Analyzing audio…")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    ForEach(audioMatches.prefix(3), id: \.self) { match in
+                        HStack(spacing: 12) {
+                            Text(match.prompt)
+                                .font(.caption)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Text("\(Int((match.similarity * 100).rounded()))%")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: 360)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(.ultraThinMaterial,
+                        in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
     }
 
     /// Format the current/total seconds as `m:ss / m:ss`. Used as a
