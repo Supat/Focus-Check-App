@@ -45,6 +45,10 @@ final class CameraFrameSource: NSObject, ObservableObject {
         label: "FocusApp.CameraFrameSource.samples"
     )
     private var didConfigure = false
+    /// Live device-orientation observer. Subscribed in `start()` so
+    /// rotating the iPad mid-session updates the capture connection's
+    /// rotation angle and the published frame stays upright.
+    private var orientationObserver: NSObjectProtocol?
 
     override init() {
         super.init()
@@ -88,12 +92,32 @@ final class CameraFrameSource: NSObject, ObservableObject {
                 }
             }
         }
+
+        // Begin tracking device orientation. iOS only emits
+        // `orientationDidChangeNotification` while
+        // `beginGeneratingDeviceOrientationNotifications` is active,
+        // so we explicitly start it here and balance with end in
+        // `stop()`. (The OS refcounts these calls.)
+        UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+        orientationObserver = NotificationCenter.default.addObserver(
+            forName: UIDevice.orientationDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.applyDeviceOrientation()
+        }
+        applyDeviceOrientation()
     }
 
     /// Stop the capture session. Drops the last published frame so
     /// the renderer doesn't continue showing a stale image after
     /// the source is torn down.
     func stop() {
+        if let observer = orientationObserver {
+            NotificationCenter.default.removeObserver(observer)
+            orientationObserver = nil
+        }
+        UIDevice.current.endGeneratingDeviceOrientationNotifications()
         sessionQueue.async {
             if self.session.isRunning {
                 self.session.stopRunning()
@@ -102,6 +126,42 @@ final class CameraFrameSource: NSObject, ObservableObject {
                 self.isRunning = false
                 self.currentImage = nil
             }
+        }
+    }
+
+    /// Push the current `UIDevice.orientation` onto the capture
+    /// connection's `videoRotationAngle`. Called on start, on every
+    /// `orientationDidChangeNotification`, and from
+    /// `configureIfNeeded` to seed the initial value.
+    /// Face-up / face-down / unknown orientations are ignored —
+    /// the previously-set angle stays in effect (so resting the
+    /// iPad flat doesn't rotate the picture).
+    private func applyDeviceOrientation() {
+        let orientation = UIDevice.current.orientation
+        guard let angle = Self.rotationAngle(for: orientation) else { return }
+        sessionQueue.async {
+            guard let connection = self.videoOutput.connection(with: .video)
+            else { return }
+            if connection.isVideoRotationAngleSupported(angle) {
+                connection.videoRotationAngle = angle
+            }
+        }
+    }
+
+    /// Map a UIDeviceOrientation to AVCaptureConnection's
+    /// `videoRotationAngle` convention (the rotation applied to the
+    /// captured frame so it appears upright in that device pose).
+    /// Returns nil for face-up / face-down / unknown — caller skips
+    /// the update on those.
+    private static func rotationAngle(
+        for orientation: UIDeviceOrientation
+    ) -> CGFloat? {
+        switch orientation {
+        case .portrait:           return 90
+        case .portraitUpsideDown: return 270
+        case .landscapeLeft:      return 0
+        case .landscapeRight:     return 180
+        default:                  return nil
         }
     }
 
@@ -150,17 +210,17 @@ final class CameraFrameSource: NSObject, ObservableObject {
         }
         session.addOutput(videoOutput)
 
-        // Force portrait orientation by default. The natural sensor
-        // orientation on iPad is landscape-right, so without this
-        // the captured CIImage would arrive sideways relative to a
-        // user holding the device upright. Smarter
-        // device-orientation tracking can come later.
+        // Seed the capture connection with whatever the current
+        // device orientation maps to (portrait fallback when the
+        // device is flat / unknown so the first frame isn't
+        // sideways). Live updates flow through
+        // `applyDeviceOrientation` on rotation events.
         if let connection = videoOutput.connection(with: .video) {
-            #if os(iOS)
-            if connection.isVideoOrientationSupported {
-                connection.videoOrientation = .portrait
+            let initialAngle =
+                Self.rotationAngle(for: UIDevice.current.orientation) ?? 90
+            if connection.isVideoRotationAngleSupported(initialAngle) {
+                connection.videoRotationAngle = initialAngle
             }
-            #endif
         }
 
         didConfigure = true
