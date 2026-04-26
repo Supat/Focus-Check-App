@@ -26,6 +26,11 @@ struct ContentView: View {
     /// Toggles the Model Manager sheet. Bound to the toolbar
     /// button that opens the per-model install / uninstall list.
     @State private var showingModelManager = false
+    /// Briefly flashes the green subject (body) rectangles on the
+    /// Labels overlay whenever the toggle flips on. Goes back to
+    /// false after `subjectBoxFlashTask` finishes its 1 s wait.
+    @State private var subjectBoxFlash: Bool = false
+    @State private var subjectBoxFlashTask: Task<Void, Never>?
 
     var body: some View {
         NavigationStack {
@@ -212,6 +217,23 @@ struct ContentView: View {
                             // from a stale prior-zoom pan.
                             if newScale <= 1.001 { panStart = .zero }
                             else { panStart = viewModel.zoomPanOffset }
+                        }
+                        .onChange(of: viewModel.showNudityLabels) { _, isOn in
+                            subjectBoxFlashTask?.cancel()
+                            guard isOn else {
+                                subjectBoxFlash = false
+                                return
+                            }
+                            withAnimation(.easeIn(duration: 0.1)) {
+                                subjectBoxFlash = true
+                            }
+                            subjectBoxFlashTask = Task { @MainActor in
+                                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                                guard !Task.isCancelled else { return }
+                                withAnimation(.easeOut(duration: 0.25)) {
+                                    subjectBoxFlash = false
+                                }
+                            }
                         }
                     }
                 }
@@ -508,14 +530,19 @@ struct ContentView: View {
            let extent = viewModel.sourceImage?.extent,
            extent.width > 0, extent.height > 0 {
             ZStack {
-                // Subject (body) rects in green, drawn first so the
-                // NudeNet detection rects layer on top.
-                ForEach(Array(viewModel.bodyRectangles.enumerated()), id: \.offset) { _, body in
-                    let r = viewRect(for: body, source: extent, in: size)
-                    Rectangle()
-                        .strokeBorder(.green, lineWidth: 2)
-                        .frame(width: r.width, height: r.height)
-                        .position(x: r.midX, y: r.midY)
+                // Subject (body) rects in green — only flashed for
+                // 1 s when the Labels toggle flips on, so they read
+                // as a momentary "here are the subjects I attributed
+                // detections to" cue rather than persistent clutter.
+                if subjectBoxFlash {
+                    ForEach(Array(viewModel.bodyRectangles.enumerated()), id: \.offset) { _, body in
+                        let r = viewRect(for: body, source: extent, in: size)
+                        Rectangle()
+                            .strokeBorder(.green, lineWidth: 2)
+                            .frame(width: r.width, height: r.height)
+                            .position(x: r.midX, y: r.midY)
+                    }
+                    .transition(.opacity)
                 }
                 ForEach(Array(viewModel.nudityDetections.enumerated()), id: \.offset) { _, det in
                     let r = viewRect(for: det.rect, source: extent, in: size)
