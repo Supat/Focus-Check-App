@@ -29,6 +29,7 @@ OUTPUT_PATH = "clip-prompts.json"
 # you'd want them to read. The set mixes nudity / context / safe-art /
 # medical / minor anchors so the top match works as a coarse label.
 PROMPTS = [
+    # Generic — held over from v8 as broad-context anchors.
     "a photograph of a nude person",
     "a photograph of two people having sex",
     "a photograph of a person in lingerie",
@@ -41,6 +42,33 @@ PROMPTS = [
     "a photograph of a landscape",
     "a photograph of food",
     "a portrait photograph",
+
+    # Solo male explicit (v9). Cover the main composition variants
+    # so a single prompt dominates instead of splitting the signal
+    # across one broad "sexual activity" prompt.
+    "a photograph of a nude man masturbating",
+    "a close-up photograph of a man stroking an erect penis",
+    "an explicit photograph of an erect male genitalia",
+    "a photograph of a man during sexual self-stimulation",
+
+    # Male-male explicit (v9). Cardinality cues ("two men", "multiple
+    # men") bias the embedding toward solo vs group classification on
+    # the prompt side; CLIP's own count discrimination is weak but
+    # the lexical difference is meaningful for ranking.
+    "a photograph of two men engaged in sexual intercourse",
+    "a photograph of two men engaging in oral sex",
+    "a photograph of two men engaged in anal sex",
+    "a photograph of multiple men in group sexual activity",
+
+    # Male-specific safe anchors (v9). The biggest false-positive
+    # risk for the explicit class is non-sexual male nudity — locker
+    # rooms, art studies, medical references. Anchoring those into
+    # the prompt set pulls them away from the explicit class instead
+    # of letting CLIP drift them in.
+    "a photograph of a clothed man",
+    "an artistic nude male figure study",
+    "a photograph of men in a sauna or locker room",
+    "a medical reference photograph of male anatomy",
 ]
 
 
@@ -50,7 +78,12 @@ def main() -> None:
 
     with torch.no_grad():
         inputs = tokenizer(PROMPTS, padding=True, return_tensors="pt")
-        features = model.get_text_features(**inputs)
+        # Newer `transformers` returns BaseModelOutputWithPooling
+        # from `get_text_features`; the projected text features
+        # live at `.pooler_output` (older versions returned the
+        # tensor directly). Handle both for forward compatibility.
+        out = model.get_text_features(**inputs)
+        features = out.pooler_output if hasattr(out, "pooler_output") else out
         features = features / features.norm(dim=-1, keepdim=True)
 
     payload = [

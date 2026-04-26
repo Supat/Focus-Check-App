@@ -121,15 +121,18 @@ struct ModelArchive: Sendable {
     ///     *matching* text encoder at conversion time.
     /// The installer uses `kind: .bundle` to keep both files together.
     ///
-    /// **Version**: `CLIP-v8` — bump the directory name + tag together
+    /// **Version**: `CLIP-v9` — bump the directory name + tag together
     /// when the prompt set or encoder variant changes so existing
     /// installs get orphaned and the Download button reappears for a
     /// clean re-pull. Older `CLIP-v*` / `CLIP/` directories stay on
-    /// disk until the user offloads the app.
+    /// disk until the user offloads the app. v9 keeps the v8 image
+    /// encoder weights and adds 12 male-specific prompts (4 solo
+    /// explicit + 4 male-male explicit + 4 male safe-contrast
+    /// anchors) on top of the original 12 generic prompts.
     static let clip = ModelArchive(
-        directoryName: "CLIP-v8",
+        directoryName: "CLIP-v9",
         sourceURL: URL(string:
-            "https://github.com/Supat/Focus-Check-App/releases/download/clip-model-v8/CLIP.zip"
+            "https://github.com/Supat/Focus-Check-App/releases/download/clip-model-v9/CLIP-v9.zip"
         )!,
         kind: .bundle,
         displayName: "CLIP ViT-B/32 + Prompts"
