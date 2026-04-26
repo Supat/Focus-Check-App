@@ -555,11 +555,16 @@ final class FocusRenderer {
                                      gates: MosaicGates) -> CIImage {
         var result = inputs.source
         if !gates.eyes.isEmpty {
-            // 95 % opacity — Jacket is a softer-anonymity preset than
+            // 0.98 alpha — Jacket is a softer-anonymity preset than
             // Tabloid; the slightly translucent strip lets a hint of
             // eye/face structure through for context while still
-            // breaking identifiability.
-            result = blackBarOverlay(source: result, bars: gates.eyes, alpha: 0.95)
+            // breaking identifiability. The compositor blends in
+            // linear extended-Display-P3, where a small alpha leak
+            // looks visually brighter after the display gamma than
+            // it would in sRGB-space compositing — 0.98 keeps the
+            // *perceived* opacity close to what an sRGB 0.95 overlay
+            // would look like in tools like Photoshop.
+            result = blackBarOverlay(source: result, bars: gates.eyes, alpha: 0.98)
         }
         let genitalDetections = gateDetections(
             inputs.nudityDetections,
