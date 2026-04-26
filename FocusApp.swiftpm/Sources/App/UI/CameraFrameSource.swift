@@ -141,7 +141,7 @@ final class CameraFrameSource: NSObject, ObservableObject {
             kCVPixelBufferPixelFormatTypeKey as String:
                 kCVPixelFormatType_32BGRA,
             kCVPixelBufferIOSurfacePropertiesKey as String:
-                [:] as CFDictionary,
+                [String: Any](),
         ]
         videoOutput.alwaysDiscardsLateVideoFrames = true
         videoOutput.setSampleBufferDelegate(self, queue: sampleQueue)

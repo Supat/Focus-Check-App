@@ -88,7 +88,7 @@ final class VideoFrameSource: ObservableObject {
             // via the shared CIContext.
             let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
                 String(kCVPixelBufferPixelFormatTypeKey): kCVPixelFormatType_32BGRA,
-                String(kCVPixelBufferIOSurfacePropertiesKey): [:] as CFDictionary,
+                String(kCVPixelBufferIOSurfacePropertiesKey): [String: Any](),
             ])
             item.add(output)
 

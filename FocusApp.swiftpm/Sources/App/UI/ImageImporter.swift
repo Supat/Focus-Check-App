@@ -11,14 +11,14 @@ struct ImageImporter: View {
     /// downstream consumer is responsible for releasing the scope
     /// when the resource is no longer needed.
     let onPick: (URL, String, Bool) -> Void
-    /// Surface failures back to the caller (view model) so the user sees
-    /// why a pick didn't land instead of the picker silently doing nothing.
-    let onError: (String) -> Void
     /// Switch the active source to the live back-camera feed.
     /// Doesn't go through `onPick` because the camera path doesn't
     /// produce a URL — the viewModel handles authorization and
     /// session lifetime directly.
     let onPickCamera: () -> Void
+    /// Surface failures back to the caller (view model) so the user sees
+    /// why a pick didn't land instead of the picker silently doing nothing.
+    let onError: (String) -> Void
 
     @State private var showingPhotosPicker = false
     @State private var showingFileImporter = false
