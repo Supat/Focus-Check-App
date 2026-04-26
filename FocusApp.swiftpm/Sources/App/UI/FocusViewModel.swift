@@ -341,6 +341,17 @@ final class FocusViewModel: ObservableObject {
     /// source is a still image or a video frame stream. Nil for still
     /// images. UI transport (play/pause/scrub) reads from this object.
     @Published var videoSource: VideoFrameSource?
+    /// Active live-camera frame pump. Same shape as `videoSource` —
+    /// `currentImage` flows into `sourceImage` and the analyzer loop
+    /// runs at 2 Hz against it — but driven by AVCaptureSession
+    /// instead of AVPlayer, so no transport / timeline. Nil for
+    /// still images and imported videos. Mutually exclusive with
+    /// `videoSource`: setting either one cancels the other.
+    @Published var cameraSource: CameraFrameSource?
+    /// True whenever a live source (video or camera) is driving the
+    /// renderer, so call sites that gate UI or analysis behavior
+    /// don't have to OR the two fields themselves.
+    var isLiveSource: Bool { videoSource != nil || cameraSource != nil }
     @Published var sharpnessOverlay: CIImage?
     @Published var depthOverlay: CIImage?
     @Published var focalPlane: Float?
@@ -454,14 +465,14 @@ final class FocusViewModel: ObservableObject {
     /// reclaims it, and the app's working set / disk footprint
     /// grows linearly with imports per session.
     private var previousLoadedURL: URL?
-    /// Combine bridge from `videoSource.currentImage` to
-    /// `sourceImage` — kept alive while the video source is active so
-    /// each decoded frame propagates to the renderer with no manual
-    /// republish.
+    /// Combine bridge from the active live source's `currentImage`
+    /// (video or camera) to `sourceImage` — kept alive while a live
+    /// source is active so each decoded frame propagates to the
+    /// renderer with no manual republish.
     private var videoSourceCancellable: AnyCancellable?
     /// Periodic Vision + NudeNet + GenitalClassifier loop running
-    /// against the live video frames. Cancels and replaces itself
-    /// across `loadVideo` calls; nilled in `clear()`.
+    /// against the active live source. Cancels and replaces itself
+    /// across `loadVideo` / `loadCamera` calls; nilled in `clear()`.
     private var videoAnalysisTask: Task<Void, Never>?
     /// Cadence of `videoAnalysisTask`. ~500ms = 2 Hz. Trade-off:
     /// shorter = fresher overlays + more thermal load; longer =
@@ -893,13 +904,7 @@ final class FocusViewModel: ObservableObject {
         sourceName = name
         errorMessage = nil
 
-        let prior = videoSource
-        prior?.stop()
-        videoSourceCancellable = nil
-        videoSource = nil
-        videoAnalysisTask?.cancel()
-        videoAnalysisTask = nil
-        videoSmoother.reset()
+        teardownLiveSources()
 
         Task { @MainActor [weak self] in
             do {
@@ -923,9 +928,12 @@ final class FocusViewModel: ObservableObject {
                         self.applySmoothedSnapshot(at: source.currentTime)
                     }
                 self.videoSource = source
-                self.videoAnalysisTask = self.startVideoAnalysisLoop(
-                    source: source
-                )
+                self.videoAnalysisTask = self.startLiveAnalysisLoop {
+                    [weak source] in
+                    guard let s = source, let img = s.currentImage
+                    else { return nil }
+                    return (img, s.currentTime)
+                }
                 source.play()
                 self.cleanupPreviousImport()
                 self.previousLoadedURL = url
@@ -933,6 +941,67 @@ final class FocusViewModel: ObservableObject {
                 self?.errorMessage = error.localizedDescription
             }
         }
+    }
+
+    /// Live-camera entry point. Mirrors `loadVideo` but driven by
+    /// AVCaptureSession instead of AVPlayer. Same renderer / smoother
+    /// / analyzer pipeline downstream — only the source class differs.
+    /// On permission denial or "no camera available", the error
+    /// surfaces via `errorMessage` and no source is set.
+    func loadCamera() {
+        print("[ViewModel] loadCamera")
+        currentTask?.cancel()
+        currentTask = nil
+        clearAnalysisState(keepError: true)
+        sourceName = "Live Camera"
+        errorMessage = nil
+
+        teardownLiveSources()
+
+        Task { @MainActor [weak self] in
+            do {
+                let source = CameraFrameSource()
+                try await source.start()
+                guard let self else {
+                    source.stop()
+                    return
+                }
+                self.videoSourceCancellable = source.$currentImage
+                    .compactMap { $0 }
+                    .receive(on: DispatchQueue.main)
+                    .sink { [weak self] image in
+                        guard let self else { return }
+                        self.sourceImage = image
+                        self.applySmoothedSnapshot(at: source.currentTime)
+                    }
+                self.cameraSource = source
+                self.videoAnalysisTask = self.startLiveAnalysisLoop {
+                    [weak source] in
+                    guard let s = source, let img = s.currentImage
+                    else { return nil }
+                    return (img, s.currentTime)
+                }
+                self.cleanupPreviousImport()
+                self.previousLoadedURL = nil
+            } catch {
+                self?.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    /// Stop and clear whichever live source (video or camera) was
+    /// active. Cancels the analysis loop and the Combine bridge,
+    /// resets the smoother. Shared by `loadVideo`, `loadCamera`,
+    /// and `clear`.
+    private func teardownLiveSources() {
+        videoSource?.stop()
+        videoSource = nil
+        cameraSource?.stop()
+        cameraSource = nil
+        videoSourceCancellable = nil
+        videoAnalysisTask?.cancel()
+        videoAnalysisTask = nil
+        videoSmoother.reset()
     }
 
     /// Pull the smoother's interpolated output for `time` and copy
@@ -967,14 +1036,14 @@ final class FocusViewModel: ObservableObject {
     /// first, the slower of the two is the bound and the queue
     /// degrades to "process the latest available frame" rather than
     /// piling up. Acceptable for a 2 Hz cadence.
-    private func startVideoAnalysisLoop(
-        source: VideoFrameSource
+    private func startLiveAnalysisLoop(
+        latestFrame: @escaping @MainActor () -> (CIImage, CMTime)?
     ) -> Task<Void, Never> {
         let analyzer = self.analyzer
         let interval = self.videoAnalysisInterval
         return Task { @MainActor [weak self] in
             while !Task.isCancelled {
-                guard let image = source.currentImage else {
+                guard let (image, captureTime) = latestFrame() else {
                     try? await Task.sleep(for: interval)
                     continue
                 }
@@ -983,7 +1052,6 @@ final class FocusViewModel: ObservableObject {
                 // ~400ms later, playback has advanced. The smoother
                 // keys interpolation off the captured-frame time so
                 // displayed overlays line up with the right samples.
-                let captureTime = source.currentTime
                 let result = await analyzer.analyzeVideoFrame(image: image)
                 guard let self, !Task.isCancelled else { return }
                 let snap = VideoSnapshot(
@@ -1000,7 +1068,12 @@ final class FocusViewModel: ObservableObject {
                     faceEmotions: result.faceEmotions
                 )
                 self.videoSmoother.consume(snap)
-                self.applySmoothedSnapshot(at: source.currentTime)
+                // Use the latest playhead/capture time, not
+                // captureTime: by now analysis took ~400ms so the
+                // current frame has moved. For camera, "now" and
+                // the captured time are essentially the same.
+                let nowTime = latestFrame()?.1 ?? captureTime
+                self.applySmoothedSnapshot(at: nowTime)
                 try? await Task.sleep(for: interval)
             }
         }
@@ -1035,12 +1108,7 @@ final class FocusViewModel: ObservableObject {
         currentTask = nil
         zoomAnimationTask?.cancel()
         zoomAnimationTask = nil
-        videoSource?.stop()
-        videoSourceCancellable = nil
-        videoSource = nil
-        videoAnalysisTask?.cancel()
-        videoAnalysisTask = nil
-        videoSmoother.reset()
+        teardownLiveSources()
         // Drop the loaded image first so the CIImage releases its
         // hold on the backing temp file, then delete the file.
         sourceImage = nil

@@ -282,7 +282,7 @@ extension ContentView {
         // off Mehrabian's anchor table (already weaker than V/A on
         // photos) and reads as too noisy at video pulse rates.
         // Image mode: full V/A/D triple.
-        let showDominance = viewModel.videoSource == nil
+        let showDominance = !viewModel.isLiveSource
         return VStack(alignment: .leading, spacing: 3) {
             padBar(label: "V", value: pad.pleasure)
             padBar(label: "A", value: pad.arousal)

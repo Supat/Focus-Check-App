@@ -88,6 +88,7 @@ struct ContentView: View {
                             onPick: { url, name, isSecurityScoped in
                                 viewModel.load(url: url, name: name, isSecurityScoped: isSecurityScoped)
                             },
+                            onPickCamera: { viewModel.loadCamera() },
                             onError: { message in viewModel.errorMessage = message }
                         )
                     }

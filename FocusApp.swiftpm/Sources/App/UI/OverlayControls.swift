@@ -10,12 +10,14 @@ struct OverlayControls: View {
     @State private var thresholdText: String = ""
     @FocusState private var thresholdFocused: Bool
 
-    /// Video sources skip every photo-only analysis tier (sharpness,
-    /// depth, ELA, NIMA, EmoNet, etc.) and gate the mosaic by the
-    /// manual `forceCensor` toggle instead of the SCA classifier, so
-    /// the corresponding rows collapse out of the controls panel for
-    /// video to keep the UI honest about what's actually wired up.
-    private var isVideo: Bool { viewModel.videoSource != nil }
+    /// Live sources (imported video and the back-camera feed) skip
+    /// every photo-only analysis tier (sharpness, depth, ELA,
+    /// NIMA, etc. — EmoNet runs but only V/A) and gate the mosaic
+    /// by the manual `forceCensor` toggle instead of the SCA
+    /// classifier, so the corresponding rows collapse out of the
+    /// controls panel for both modes to keep the UI honest about
+    /// what's actually wired up.
+    private var isVideo: Bool { viewModel.isLiveSource }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
