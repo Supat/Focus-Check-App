@@ -64,7 +64,7 @@ struct ImageImporter: View {
         }
         .fileImporter(
             isPresented: $showingFileImporter,
-            allowedContentTypes: [.image, .rawImage],
+            allowedContentTypes: [.image, .rawImage, .movie],
             allowsMultipleSelection: false
         ) { result in
             switch result {
@@ -113,7 +113,10 @@ private struct PHPickerSheet: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> PHPickerViewController {
         var config = PHPickerConfiguration()
         config.selectionLimit = 1
-        config.filter = .images
+        // Allow movies alongside images so the same picker covers
+        // both pipelines. Detection happens downstream — `FocusViewModel.load`
+        // forks based on UTType.
+        config.filter = .any(of: [.images, .videos])
         // `.current` preserves ProRAW / RAW / HEIC originals instead of rasterizing to JPEG.
         config.preferredAssetRepresentationMode = .current
         let picker = PHPickerViewController(configuration: config)
@@ -133,10 +136,15 @@ private struct PHPickerSheet: UIViewControllerRepresentable {
             guard let result = results.first else { return }
 
             // Prefer original-format UTIs so RAW stays RAW, HEIC stays HEIC.
+            // QuickTime / MPEG-4 first so videos don't fall through to a
+            // generic image UTI that PHPicker can't satisfy.
             let preferredUTIs = [
                 "public.camera-raw-image",
                 "com.adobe.raw-image",
                 UTType.heic.identifier,
+                UTType.quickTimeMovie.identifier,
+                UTType.mpeg4Movie.identifier,
+                UTType.movie.identifier,
                 UTType.image.identifier
             ]
             let registered = result.itemProvider.registeredTypeIdentifiers

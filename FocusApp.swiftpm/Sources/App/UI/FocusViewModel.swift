@@ -1,6 +1,8 @@
 import SwiftUI
 import CoreImage
 import Metal
+import Combine
+import UniformTypeIdentifiers
 
 enum OverlayStyle: String, CaseIterable, Identifiable {
     // `.off` rather than `.none` so we don't shadow Optional.none in call sites.
@@ -332,6 +334,12 @@ final class FocusViewModel: ObservableObject {
     // Source + derived state published for renderer consumption.
     @Published var sourceImage: CIImage?
     @Published var sourceName: String?
+    /// Active video frame pump when the loaded source is a movie.
+    /// Drives `sourceImage` via a Combine bridge — the renderer keeps
+    /// reading from `sourceImage` regardless of whether the underlying
+    /// source is a still image or a video frame stream. Nil for still
+    /// images. UI transport (play/pause/scrub) reads from this object.
+    @Published var videoSource: VideoFrameSource?
     @Published var sharpnessOverlay: CIImage?
     @Published var depthOverlay: CIImage?
     @Published var focalPlane: Float?
@@ -445,6 +453,11 @@ final class FocusViewModel: ObservableObject {
     /// reclaims it, and the app's working set / disk footprint
     /// grows linearly with imports per session.
     private var previousLoadedURL: URL?
+    /// Combine bridge from `videoSource.currentImage` to
+    /// `sourceImage` — kept alive while the video source is active so
+    /// each decoded frame propagates to the renderer with no manual
+    /// republish.
+    private var videoSourceCancellable: AnyCancellable?
     /// Active download task slots, parallel to `installs`. Kept off
     /// `@Published` so spurious "task started / finished"
     /// invalidations don't churn SwiftUI views that only care about
@@ -742,6 +755,17 @@ final class FocusViewModel: ObservableObject {
 
     func load(url: URL, name: String) {
         print("[ViewModel] load url=\(url.path) name=\(name)")
+        // Video files route to a parallel pipeline — the analyzer is
+        // image-centric and per-frame analysis at video rates needs the
+        // TrackStore work that lands later. For now `loadVideo` just
+        // bridges the live frame stream into `sourceImage` so the
+        // existing renderer can display the video, with manual mosaic
+        // toggle and frozen overlays. Photo-only tiers (sharpness,
+        // depth, ELA, motion blur, NIMA, etc.) sit dormant.
+        if Self.isVideo(url: url) {
+            loadVideo(url: url, name: name)
+            return
+        }
         currentTask?.cancel()
         isAnalyzing = true
         analysisProgress = AnalysisProgress(fraction: 0, label: "Loading image")
@@ -839,6 +863,60 @@ final class FocusViewModel: ObservableObject {
         }
     }
 
+    /// Reset all photo-pipeline derived state and hand the source
+    /// over to a `VideoFrameSource` instead. The image-analysis
+    /// task tree isn't kicked off — overlays stay empty until the
+    /// TrackStore-backed video analysis loop is wired up later.
+    /// Mosaic remains usable via the manual `forceCensor` toggle.
+    private func loadVideo(url: URL, name: String) {
+        print("[ViewModel] loadVideo url=\(url.path)")
+        currentTask?.cancel()
+        currentTask = nil
+        // Clear photo-only derived state so we don't leave stale
+        // sharpness / depth / ELA / Vision rectangles on screen
+        // while the new video source spins up.
+        clearAnalysisState(keepError: true)
+        sourceName = name
+        errorMessage = nil
+
+        let prior = videoSource
+        prior?.stop()
+        videoSourceCancellable = nil
+        videoSource = nil
+
+        Task { @MainActor [weak self] in
+            do {
+                let source = try await VideoFrameSource(url: url)
+                guard let self else { return }
+                source.start()
+                // Bridge live frames → sourceImage so the existing
+                // renderer pipeline picks each one up. assign(to:&)
+                // is MainActor-safe here; the source already
+                // publishes from the main run loop.
+                self.videoSourceCancellable = source.$currentImage
+                    .compactMap { $0 }
+                    .receive(on: DispatchQueue.main)
+                    .sink { [weak self] image in
+                        self?.sourceImage = image
+                    }
+                self.videoSource = source
+                source.play()
+                self.cleanupPreviousImport()
+                self.previousLoadedURL = url
+            } catch {
+                self?.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    /// True when `url`'s extension or UTI declares it a movie. Used to
+    /// fork `load(url:name:)` between the image and video pipelines.
+    private static func isVideo(url: URL) -> Bool {
+        guard let type = UTType(filenameExtension: url.pathExtension)
+        else { return false }
+        return type.conforms(to: .movie) || type.conforms(to: .video)
+    }
+
     /// Best-effort delete of the previous import's temp file. Called
     /// after a new sourceImage has replaced the old one (so the old
     /// CIImage's mmap on the file is released first). Errors are
@@ -860,11 +938,26 @@ final class FocusViewModel: ObservableObject {
         currentTask = nil
         zoomAnimationTask?.cancel()
         zoomAnimationTask = nil
+        videoSource?.stop()
+        videoSourceCancellable = nil
+        videoSource = nil
         // Drop the loaded image first so the CIImage releases its
         // hold on the backing temp file, then delete the file.
         sourceImage = nil
         cleanupPreviousImport()
         sourceName = nil
+        clearAnalysisState(keepError: false)
+        zoomScale = 1.0
+        zoomAnchor = CGPoint(x: 0.5, y: 0.5)
+        zoomPanOffset = .zero
+    }
+
+    /// Wipe every photo-pipeline derived signal (overlays, Vision /
+    /// NudeNet results, classifier verdicts, EXIF) so transitioning
+    /// to a video source doesn't leave a stale per-subject head badge
+    /// on screen. Shared with `clear()` — the only difference is
+    /// whether the user-visible error banner is wiped too.
+    private func clearAnalysisState(keepError: Bool) {
         sharpnessOverlay = nil
         depthOverlay = nil
         focalPlane = nil
@@ -888,13 +981,11 @@ final class FocusViewModel: ObservableObject {
         ageEstimations = []
         qualityScore = nil
         aestheticScore = nil
+        errorLevelOverlay = nil
         exposureInfo = nil
-        errorMessage = nil
+        if !keepError { errorMessage = nil }
         isAnalyzing = false
         analysisProgress = nil
-        zoomScale = 1.0
-        zoomAnchor = CGPoint(x: 0.5, y: 0.5)
-        zoomPanOffset = .zero
     }
 
     /// Render the current image + overlays at source resolution and write
