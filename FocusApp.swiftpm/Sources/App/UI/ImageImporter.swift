@@ -22,10 +22,32 @@ struct ImageImporter: View {
 
     @State private var showingPhotosPicker = false
     @State private var showingFileImporter = false
+    @State private var showingImportOptions = false
     @State private var isLoading = false
 
     var body: some View {
-        Menu {
+        // Plain Button + confirmationDialog instead of Menu — Menu's
+        // internal state machine has been observed to drop tap
+        // events when its parent rebuilds during video playback (the
+        // viewModel's @Published `sourceImage` updates rebuild
+        // ContentView, the toolbar gets a fresh ImageImporter
+        // closure capture, and the Menu's open/closed state can
+        // race with that). confirmationDialog is system-presented
+        // and survives parent rebuilds without re-rendering the
+        // Menu chrome each time.
+        Button {
+            showingImportOptions = true
+        } label: {
+            if isLoading {
+                ProgressView().controlSize(.small)
+            } else {
+                Label("Import", systemImage: "square.and.arrow.down")
+            }
+        }
+        .confirmationDialog(
+            "Import", isPresented: $showingImportOptions,
+            titleVisibility: .hidden
+        ) {
             Button {
                 showingPhotosPicker = true
             } label: {
@@ -43,12 +65,8 @@ struct ImageImporter: View {
             } label: {
                 Label("Live Camera", systemImage: "camera")
             }
-        } label: {
-            if isLoading {
-                ProgressView().controlSize(.small)
-            } else {
-                Label("Import", systemImage: "square.and.arrow.down")
-            }
+
+            Button("Cancel", role: .cancel) { }
         }
         // Pick up the keyboard shortcuts (⌘O / ⌘⇧O) that the
         // app-level `.commands` block in FocusApp.swift posts.
