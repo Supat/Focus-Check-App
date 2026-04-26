@@ -132,7 +132,19 @@ struct ContentView: View {
         VStack(spacing: 0) {
             ZStack {
                 if viewModel.sourceImage == nil {
-                    placeholder
+                    // Audio-only files load a VideoFrameSource that
+                    // never produces frames — use the audio
+                    // placeholder instead of the import prompt so
+                    // the user sees what's actually playing.
+                    if let videoSource = viewModel.videoSource,
+                       !videoSource.hasVideoTrack {
+                        AudioPlaybackPlaceholder(
+                            source: videoSource,
+                            name: viewModel.sourceName
+                        )
+                    } else {
+                        placeholder
+                    }
                 } else {
                     GeometryReader { geo in
                         ZStack {
