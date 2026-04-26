@@ -24,8 +24,17 @@ import UIKit
 ///
 /// Color: BGRA8 + sRGB tag matches `VideoFrameSource`. iOS hardware
 /// captures Rec.709 by default in this format; SDR throughout.
-@MainActor
-final class CameraFrameSource: NSObject, ObservableObject {
+///
+/// **Threading:** the class is *not* @MainActor — the AVCapture
+/// session lives on `sessionQueue` and orientation tracking flips
+/// rotation on the same queue, so making the class main-isolated
+/// would force a hop on every property access. Instead, every
+/// `@Published` setter explicitly dispatches to main via
+/// `DispatchQueue.main.async`, which is what SwiftUI observation
+/// requires. `@unchecked Sendable` reflects that the
+/// session-owned state is internally serialized via the dispatch
+/// queue.
+final class CameraFrameSource: NSObject, ObservableObject, @unchecked Sendable {
     /// Most recently captured frame, ready for the renderer. Nil
     /// before the first frame and after `stop()`.
     @Published private(set) var currentImage: CIImage?
