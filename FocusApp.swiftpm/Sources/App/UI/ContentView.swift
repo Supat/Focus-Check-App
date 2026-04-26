@@ -716,11 +716,22 @@ struct ContentView: View {
                     || painForBody(body) != nil || age != nil
                     || warning != nil {
                     let pain = painForBody(body)
+                    // When PAD/Pain is hidden and this body has an
+                    // orgasm-level genital detection (uniquely the
+                    // 1.00-bar case in `genitalWarning`), claim the
+                    // emoji slot so the orgasm signal still surfaces
+                    // somewhere on the badge.
+                    let overrideEmoji: String? =
+                        (!viewModel.showPADMeter
+                         && (warning?.bars ?? 0) >= 0.99)
+                            ? "😫"
+                            : nil
                     VStack(spacing: 4) {
                         SubjectHeadBadge(
                             level: level,
                             gender: gender,
                             emotion: emotion,
+                            overrideEmoji: overrideEmoji,
                             age: age
                         )
                         // Genital warning chip — sits directly under
@@ -1332,6 +1343,11 @@ private struct SubjectHeadBadge: View {
     /// shield/gender cluster. nil when the classifier wasn't run on
     /// this subject's face or fell under its confidence floor.
     let emotion: EmotionLabel?
+    /// Optional emoji that replaces `emotion.emoji` for this subject.
+    /// Used when an external signal (e.g. orgasm-level genital
+    /// detection with the PAD meter off) wants to commandeer the
+    /// emoji slot. When nil, falls through to the FER+ emoji.
+    let overrideEmoji: String?
     /// Optional age prediction from SSR-Net. When present, the age
     /// is appended after the glyph cluster and the gender glyph
     /// lights up regardless of nudity level (so clothed subjects
@@ -1345,11 +1361,15 @@ private struct SubjectHeadBadge: View {
                     .font(.caption)
                     .foregroundStyle(tint)
             }
-            if let emotion {
-                // Emoji sits between shield and gender so the colored
-                // nudity/gender glyphs stay adjacent to each other.
-                // Outside the coloured foreground so it keeps its
-                // native emoji colour rather than getting tinted.
+            // Emoji slot — override wins, otherwise FER+ emoji.
+            // Sits between shield and gender so the colored nudity /
+            // gender glyphs stay adjacent to each other. Outside the
+            // coloured foreground so it keeps its native emoji colour
+            // rather than getting tinted.
+            if let overrideEmoji {
+                Text(overrideEmoji)
+                    .font(.caption)
+            } else if let emotion {
                 Text(emotion.emoji)
                     .font(.caption)
             }
