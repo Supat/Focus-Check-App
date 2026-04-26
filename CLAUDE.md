@@ -406,6 +406,7 @@ struct ModelArchive {
 - `ModelArchive.age` → `age-model-v3` release tag (SSR-Net — per-face age only, **research-only training data** — do not ship in signed builds; gender falls back to NudeNet's FACE_* branch)
 - `ModelArchive.quality` → `quality-model-v1` release tag (idealo/NIMA MobileNet — whole-image technical-quality scalar, Apache-2.0 + TID2013 research-license — shipping in signed builds plausible but not vetted)
 - `ModelArchive.aesthetic` → `aesthetic-model-v1` release tag (idealo/NIMA MobileNet aesthetic variant — whole-image composition / mood scalar, Apache-2.0 + AVA research-license)
+- `ModelArchive.clapAudio` → `clap-audio-v1` release tag (LAION-CLAP HTSAT-tiny audio encoder + matching text-encoder prompt embeddings, **research-only license** — bundle archive, audio-only one-shot scoring on imported files)
 
 Maintainer workflow (one-time, requires a Mac):
 
@@ -480,6 +481,33 @@ ditto -c -k --sequesterRsrc --keepParent \
       /tmp/NIMA-Aesthetic.mlmodelc NIMA-Aesthetic.mlmodelc.zip
 zip -d NIMA-Aesthetic.mlmodelc.zip '__MACOSX/*' 2>/dev/null || true
 gh release upload aesthetic-model-v1 NIMA-Aesthetic.mlmodelc.zip
+
+# CLAP audio context (LAION-CLAP HTSAT-tiny). Two-stage like CLIP:
+# export the audio encoder, run the text encoder once over the
+# prompt set, ZIP both into the same archive.
+#
+# 1. Pull LAION-CLAP HTSAT-tiny weights:
+#    https://huggingface.co/lukewys/laion_clap (630k-fusion-best.pt)
+# 2. Export the audio encoder to Core ML. The audio branch takes a
+#    1-D waveform input at 48 kHz; window length is 10s = 480 000
+#    samples for HTSAT-tiny. Reference export:
+python3 export_clap_audio_encoder.py \
+        --checkpoint 630k-fusion-best.pt \
+        --output     CLAPAudioEncoder.mlpackage
+# 3. Run the matching text encoder over the prompt set and emit
+#    `clap-prompts.json` with the pre-normalized embeddings — same
+#    schema as `clip-prompts.json`:
+python3 export_clap_prompt_embeddings.py \
+        --checkpoint 630k-fusion-best.pt \
+        --prompts    clap-prompts.txt \
+        --out        clap-prompts.json
+xcrun coremlcompiler compile CLAPAudioEncoder.mlpackage /tmp/
+mkdir -p /tmp/CLAPAudio
+mv /tmp/CLAPAudioEncoder.mlmodelc /tmp/CLAPAudio/
+cp clap-prompts.json                 /tmp/CLAPAudio/
+ditto -c -k --sequesterRsrc --keepParent /tmp/CLAPAudio CLAPAudio.zip
+zip -d CLAPAudio.zip '__MACOSX/*' 2>/dev/null || true
+gh release upload clap-audio-v1 CLAPAudio.zip
 ```
 
 `OverlayControls` renders a dedicated install/progress/retry row for

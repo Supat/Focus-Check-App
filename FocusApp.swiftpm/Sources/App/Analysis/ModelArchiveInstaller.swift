@@ -302,6 +302,42 @@ struct ModelArchive: Sendable {
         displayName: "Genital Sub-class Classifier"
     )
 
+    /// CLAP (LAION-AI Contrastive Language-Audio Pretraining) audio
+    /// encoder + pre-computed text-prompt embeddings for zero-shot
+    /// audio-context scoring. Same architectural pattern as `.clip`
+    /// — bundle archive containing two siblings:
+    ///   - `CLAPAudioEncoder.mlmodelc/` — Core ML audio encoder
+    ///     (LAION-CLAP HTSAT-tiny is the reference variant; outputs
+    ///     a 512-d embedding from a fixed-length mel-spectrogram or
+    ///     waveform input, depending on the export).
+    ///   - `clap-prompts.json` — array of `{prompt: String,
+    ///     embedding: [Float]}` records produced by the matching
+    ///     text encoder, pre-normalized.
+    ///
+    /// Used to surface a one-shot "audio context" badge for
+    /// imported audio / video files (top-similarity prompt in the
+    /// loaded clip's strongest-match window). Live-camera / image
+    /// modes don't run CLAP.
+    ///
+    /// **License**: LAION-CLAP code is CC-BY 4.0 / Apache-2.0
+    /// depending on the variant; weights are dataset-derived and
+    /// have research-only constraints. Treat the same as the other
+    /// research-licensed tiers — fine for Playgrounds / local dev,
+    /// not for signed App Store builds without a license review.
+    ///
+    /// **Version**: `CLAPAudio-v1` directory, `clap-audio-v1` tag.
+    /// Bump together when the prompt set or encoder variant
+    /// changes so existing installs get orphaned and the Download
+    /// button re-appears.
+    static let clapAudio = ModelArchive(
+        directoryName: "CLAPAudio-v1",
+        sourceURL: URL(string:
+            "https://github.com/Supat/Focus-Check-App/releases/download/clap-audio-v1/CLAPAudio.zip"
+        )!,
+        kind: .bundle,
+        displayName: "CLAP Audio Context"
+    )
+
     /// Every optional model the app can install. Drives the Model
     /// Manager UI; ordering controls how rows appear there.
     static let all: [ModelArchive] = [
@@ -315,6 +351,7 @@ struct ModelArchive: Sendable {
         .quality,
         .aesthetic,
         .genitalClassifier,
+        .clapAudio,
     ]
 
     /// Persistent install path: `Application Support/<directoryName>`.
