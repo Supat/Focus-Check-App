@@ -8,7 +8,7 @@ import simd
 /// An oriented black-bar redaction over a detected pair of eyes. Center +
 /// size + tilt angle (radians) — lets the renderer rotate the bar to follow
 /// a tilted head instead of drawing a jarring axis-aligned strip.
-struct EyeBar: Equatable {
+struct EyeBar: Equatable, Sendable {
     var center: CGPoint
     var size: CGSize
     var angleRadians: CGFloat
@@ -261,6 +261,50 @@ actor FocusAnalyzer {
     /// callers should query this each time they want to know the state.
     var sensitiveContentAvailability: SensitiveContentAvailability {
         sensitiveContent.availability
+    }
+
+    /// Bundled output of the per-frame video analysis pass — only
+    /// the signals the live mosaic + per-subject head badges need.
+    /// Photo-only tiers (sharpness, depth, ELA, motion blur, NIMA,
+    /// CLIP, EmoNet, PSPI, age, SCA) are skipped: they don't fit a
+    /// video-rate budget and the manual `forceCensor` toggle covers
+    /// the gate they used to drive.
+    struct VideoFrameAnalysis: Sendable {
+        var faceRectangles: [CGRect]
+        var bodyRectangles: [CGRect]
+        var groinRectangles: [CGRect]
+        var chestRectangles: [CGRect]
+        var eyeBars: [EyeBar]
+        var personMask: CIImage?
+        var nudityLevels: [NudityLevel]
+        var nudityGenders: [SubjectGender]
+        var nudityDetections: [NudityDetection]
+    }
+
+    /// One full Vision + NudeNet + GenitalClassifier pass on a single
+    /// video frame. Cost is dominated by NudeNet's per-body × TTA
+    /// inference (~300–500ms on iPad Pro for typical frames). The
+    /// caller throttles cadence — typically 1–3 Hz — and stores
+    /// results keyed by playhead time so live composites can pick
+    /// the nearest sample.
+    func analyzeVideoFrame(image: CIImage) -> VideoFrameAnalysis {
+        let vision = runVision(in: image)
+        let nudity = nudityDetector.analyze(
+            image: image,
+            bodies: vision.bodies,
+            ciContext: ciContext
+        )
+        return VideoFrameAnalysis(
+            faceRectangles: vision.faces,
+            bodyRectangles: vision.bodies,
+            groinRectangles: vision.groins,
+            chestRectangles: vision.chests,
+            eyeBars: vision.eyes,
+            personMask: vision.personMask,
+            nudityLevels: nudity.levels,
+            nudityGenders: nudity.genders,
+            nudityDetections: nudity.detections
+        )
     }
 
     /// Eagerly compile the installed Core ML models so the first analyze

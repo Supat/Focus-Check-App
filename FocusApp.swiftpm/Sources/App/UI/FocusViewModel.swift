@@ -458,6 +458,15 @@ final class FocusViewModel: ObservableObject {
     /// each decoded frame propagates to the renderer with no manual
     /// republish.
     private var videoSourceCancellable: AnyCancellable?
+    /// Periodic Vision + NudeNet + GenitalClassifier loop running
+    /// against the live video frames. Cancels and replaces itself
+    /// across `loadVideo` calls; nilled in `clear()`.
+    private var videoAnalysisTask: Task<Void, Never>?
+    /// Cadence of `videoAnalysisTask`. ~500ms = 2 Hz. Trade-off:
+    /// shorter = fresher overlays + more thermal load; longer =
+    /// laggier overlays on fast motion. 2 Hz is the sweet spot for
+    /// iPad Pro at the current per-frame cost.
+    private let videoAnalysisInterval: Duration = .milliseconds(500)
     /// Active download task slots, parallel to `installs`. Kept off
     /// `@Published` so spurious "task started / finished"
     /// invalidations don't churn SwiftUI views that only care about
@@ -883,6 +892,8 @@ final class FocusViewModel: ObservableObject {
         prior?.stop()
         videoSourceCancellable = nil
         videoSource = nil
+        videoAnalysisTask?.cancel()
+        videoAnalysisTask = nil
 
         Task { @MainActor [weak self] in
             do {
@@ -900,11 +911,54 @@ final class FocusViewModel: ObservableObject {
                         self?.sourceImage = image
                     }
                 self.videoSource = source
+                self.videoAnalysisTask = self.startVideoAnalysisLoop(
+                    source: source
+                )
                 source.play()
                 self.cleanupPreviousImport()
                 self.previousLoadedURL = url
             } catch {
                 self?.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    /// Periodic analyzer pump. Each iteration takes the latest decoded
+    /// frame from the source, runs Vision + NudeNet + GenitalClassifier
+    /// on it, and pushes the result into the published rectangles /
+    /// nudity vectors that drive the renderer's mosaic and the head-
+    /// badge stack. Sleeps `videoAnalysisInterval` between iterations.
+    /// Cancels itself when the task is torn down (loadVideo replacing
+    /// the source, or `clear()` zeroing it).
+    ///
+    /// The loop reads `currentImage` directly each tick — there's no
+    /// queue. If two ticks land before the analyzer finishes the
+    /// first, the slower of the two is the bound and the queue
+    /// degrades to "process the latest available frame" rather than
+    /// piling up. Acceptable for a 2 Hz cadence.
+    private func startVideoAnalysisLoop(
+        source: VideoFrameSource
+    ) -> Task<Void, Never> {
+        let analyzer = self.analyzer
+        let interval = self.videoAnalysisInterval
+        return Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                guard let image = source.currentImage else {
+                    try? await Task.sleep(for: interval)
+                    continue
+                }
+                let result = await analyzer.analyzeVideoFrame(image: image)
+                guard let self, !Task.isCancelled else { return }
+                self.faceRectangles = result.faceRectangles
+                self.bodyRectangles = result.bodyRectangles
+                self.groinRectangles = result.groinRectangles
+                self.chestRectangles = result.chestRectangles
+                self.eyeBars = result.eyeBars
+                self.personMask = result.personMask
+                self.nudityLevels = result.nudityLevels
+                self.nudityGenders = result.nudityGenders
+                self.nudityDetections = result.nudityDetections
+                try? await Task.sleep(for: interval)
             }
         }
     }
@@ -941,6 +995,8 @@ final class FocusViewModel: ObservableObject {
         videoSource?.stop()
         videoSourceCancellable = nil
         videoSource = nil
+        videoAnalysisTask?.cancel()
+        videoAnalysisTask = nil
         // Drop the loaded image first so the CIImage releases its
         // hold on the backing temp file, then delete the file.
         sourceImage = nil
