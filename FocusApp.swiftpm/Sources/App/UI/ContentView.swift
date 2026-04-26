@@ -652,6 +652,7 @@ struct ContentView: View {
     @ViewBuilder
     private var contextBadge: some View {
         if let top = viewModel.clipMatches.first,
+           Self.explicitClipPrompts.contains(top.prompt),
            viewModel.sourceImage != nil,
            !viewModel.overlayHidden {
             HStack(spacing: 6) {
@@ -669,6 +670,33 @@ struct ContentView: View {
             .liquidBadgeBackground(in: Capsule())
         }
     }
+
+    /// Subset of the CLIP prompt set that counts as "explicit"
+    /// context for badge-display purposes — only when the top
+    /// match across the whole prompt set lands inside this list
+    /// does the badge surface. Generic / safe / artistic / medical
+    /// matches stay invisible because the badge is meant as an
+    /// at-a-glance "this image looks explicit" cue, not a general
+    /// scene classifier.
+    ///
+    /// Must mirror the explicit blocks in
+    /// `Tools/export_clip_prompt_embeddings.py` — when those
+    /// prompts change, this list needs the same edit. (Same
+    /// hand-sync contract as `AudioPlaybackPlaceholder.safePrompts`.)
+    private static let explicitClipPrompts: Set<String> = [
+        // Generic explicit (v8, retained in v9).
+        "a photograph of two people having sex",
+        // Solo male explicit (v9).
+        "a photograph of a nude man masturbating",
+        "a close-up photograph of a man stroking an erect penis",
+        "an explicit photograph of an erect male genitalia",
+        "a photograph of a man during sexual self-stimulation",
+        // Male-male explicit (v9).
+        "a photograph of two men engaged in sexual intercourse",
+        "a photograph of two men engaging in oral sex",
+        "a photograph of two men engaged in anal sex",
+        "a photograph of multiple men in group sexual activity",
+    ]
 
     /// Upper-case the first letter of `s` while leaving the rest
     /// untouched — sentence case rather than title case, so prompts
