@@ -673,11 +673,25 @@ struct ContentView: View {
                             }
                         }
                     }
-                    // Anchor the stack's top near the body's top edge
-                    // so the head badge lands where it used to and the
-                    // optional PAD capsule hangs below it. Guard against
-                    // going above the viewport on very-near-top bodies.
-                    .position(x: rect.midX, y: max(rect.minY - 4, 36))
+                    // Anchor the stack's centre near the body's top
+                    // edge so the head badge lands where it used to
+                    // and the optional warning chip + PAD capsule
+                    // hang below it. Clamp on three edges so a body
+                    // near the viewport perimeter doesn't push the
+                    // stack out of frame:
+                    //   - y clamps ≥ 60 pt — enough room above for
+                    //     a typical SubjectHeadBadge + warning chip
+                    //     (~60–80 pt tall) without crossing the
+                    //     status bar / nav-bar.
+                    //   - x clamps to ±halfWidth so a body near a
+                    //     side edge slides the stack inward instead
+                    //     of letting it extend past the photo
+                    //     bounds, where the parent .clipped() would
+                    //     truncate it.
+                    .position(
+                        x: max(80, min(size.width - 80, rect.midX)),
+                        y: max(60, rect.minY - 4)
+                    )
                     .allowsHitTesting(false)
                 }
             }
