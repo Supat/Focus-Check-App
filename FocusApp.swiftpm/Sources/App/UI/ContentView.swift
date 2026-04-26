@@ -288,6 +288,7 @@ struct ContentView: View {
                     HStack(spacing: 8) {
                         nudeSubjectsBadge
                         contextBadge
+                        audioContextBadge
                     }
                     HStack(spacing: 8) {
                         qualityBadge
@@ -677,6 +678,50 @@ struct ContentView: View {
             .liquidBadgeBackground(in: Capsule())
         }
     }
+
+    /// CLAP audio-context badge. Surfaces during video playback —
+    /// for audio-only files the AudioPlaybackPlaceholder already
+    /// shows the full top-3 list, so duplicating the badge here
+    /// would be noise. Filters out the safe-class prompts (same
+    /// list as `AudioPlaybackPlaceholder.safePrompts`) so the
+    /// badge only appears when there's an actual notable audio
+    /// signal in the current playhead window.
+    @ViewBuilder
+    private var audioContextBadge: some View {
+        if let videoSource = viewModel.videoSource,
+           videoSource.hasVideoTrack,
+           !viewModel.overlayHidden,
+           let top = viewModel.audioMatches.first(where: {
+               !Self.safeAudioPrompts.contains($0.prompt)
+           }) {
+            HStack(spacing: 6) {
+                Image(systemName: "waveform.badge.magnifyingglass")
+                Text(Self.sentenceCased(top.prompt))
+                    .font(.caption)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                Text("\(Int((top.similarity * 100).rounded()))%")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .liquidBadgeBackground(in: Capsule())
+        }
+    }
+
+    /// Audio prompts treated as safe-class — useful CLAP ranking
+    /// anchors but not interesting to surface. Mirrors
+    /// `AudioPlaybackPlaceholder.safePrompts`; both must stay in
+    /// sync with the safe block of
+    /// `Tools/export_clap_prompt_embeddings.py`.
+    private static let safeAudioPrompts: Set<String> = [
+        "people speaking in conversation",
+        "people laughing together",
+        "music playing in the background",
+        "the ambient room tone of an empty room",
+        "the sound of footsteps",
+    ]
 
     /// Subset of the CLIP prompt set that counts as "explicit"
     /// context for badge-display purposes — only when the top
