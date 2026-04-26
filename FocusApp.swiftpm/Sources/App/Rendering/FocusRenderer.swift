@@ -157,10 +157,16 @@ final class FocusRenderer {
         var zoomScale: CGFloat
         var zoomAnchor: CGPoint
         var zoomPan: CGSize
+        var aspectFill: Bool
     }
 
     private func buildFrame(drawableSize: CGSize, pointsToPixels: CGFloat) -> CIImage {
         let snapshot: RenderSnapshot = MainActor.assumeIsolated {
+            // Aspect-fill the live camera so the feed covers the
+            // entire view (no black bars). Imported video / photos
+            // stay aspect-fit so the user sees the whole frame for
+            // inspection.
+            let aspectFill = viewModel.cameraSource != nil
             guard let source = viewModel.sourceImage else {
                 return RenderSnapshot(
                     inputs: nil,
@@ -170,7 +176,8 @@ final class FocusRenderer {
                     zoomPan: CGSize(
                         width: viewModel.zoomPanOffset.width * pointsToPixels,
                         height: viewModel.zoomPanOffset.height * pointsToPixels
-                    )
+                    ),
+                    aspectFill: aspectFill
                 )
             }
             // Mosaic fires when the classifier flagged the image AND the
@@ -209,7 +216,8 @@ final class FocusRenderer {
                 zoomPan: CGSize(
                     width: viewModel.zoomPanOffset.width * pointsToPixels,
                     height: viewModel.zoomPanOffset.height * pointsToPixels
-                )
+                ),
+                aspectFill: aspectFill
             )
         }
 
@@ -222,7 +230,8 @@ final class FocusRenderer {
             overlayHidden: snapshot.overlayHidden,
             zoomScale: snapshot.zoomScale,
             zoomAnchor: snapshot.zoomAnchor,
-            zoomPan: snapshot.zoomPan
+            zoomPan: snapshot.zoomPan,
+            aspectFill: snapshot.aspectFill
         )
     }
 
@@ -239,7 +248,8 @@ final class FocusRenderer {
         overlayHidden: Bool = false,
         zoomScale: CGFloat = 1,
         zoomAnchor: CGPoint = CGPoint(x: 0.5, y: 0.5),
-        zoomPan: CGSize = .zero
+        zoomPan: CGSize = .zero,
+        aspectFill: Bool = false
     ) -> CIImage {
         // Mosaic is applied at source resolution before fit/zoom, so the fit
         // transform handles the rest without rect-coordinate gymnastics.
@@ -253,17 +263,21 @@ final class FocusRenderer {
             : inputs.source
 
         let fitted = fit(image: baseSource, into: drawableSize,
+                         fill: aspectFill,
                          zoom: zoomScale, anchor: zoomAnchor, pan: zoomPan)
         if overlayHidden { return fitted }
 
         let sharpnessOverlay = inputs.sharpness.map {
-            fit(image: $0, into: drawableSize, zoom: zoomScale, anchor: zoomAnchor, pan: zoomPan)
+            fit(image: $0, into: drawableSize, fill: aspectFill,
+                zoom: zoomScale, anchor: zoomAnchor, pan: zoomPan)
         }
         let depthOverlay = inputs.depth.map {
-            fit(image: $0, into: drawableSize, zoom: zoomScale, anchor: zoomAnchor, pan: zoomPan)
+            fit(image: $0, into: drawableSize, fill: aspectFill,
+                zoom: zoomScale, anchor: zoomAnchor, pan: zoomPan)
         }
         let motionOverlay = inputs.motion.map {
-            fit(image: $0, into: drawableSize, zoom: zoomScale, anchor: zoomAnchor, pan: zoomPan)
+            fit(image: $0, into: drawableSize, fill: aspectFill,
+                zoom: zoomScale, anchor: zoomAnchor, pan: zoomPan)
         }
 
         let threshold = CGFloat(inputs.threshold)
@@ -1054,12 +1068,19 @@ final class FocusRenderer {
     }
 
     private static func fit(image: CIImage, into size: CGSize,
+                            fill: Bool = false,
                             zoom: CGFloat = 1.0,
                             anchor: CGPoint = CGPoint(x: 0.5, y: 0.5),
                             pan: CGSize = .zero) -> CIImage {
         let sx = size.width / image.extent.width
         let sy = size.height / image.extent.height
-        let s = min(sx, sy)
+        // `min` letterboxes (image fully visible, black bars on the
+        // short axis); `max` aspect-fills (image overflows the
+        // drawable, the renderer's bounds crop trims the excess).
+        // Live camera uses fill so the feed covers the whole view;
+        // photos / imported videos stay on fit so the user sees the
+        // whole frame for inspection.
+        let s = fill ? max(sx, sy) : min(sx, sy)
         let scaled = image.transformed(by: CGAffineTransform(scaleX: s, y: s))
         let offsetX = (size.width - scaled.extent.width) / 2 - scaled.extent.minX
         let offsetY = (size.height - scaled.extent.height) / 2 - scaled.extent.minY

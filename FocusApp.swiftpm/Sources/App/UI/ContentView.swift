@@ -539,14 +539,22 @@ struct ContentView: View {
 
 
     /// Map a source-extent CIImage rect (Y-up) into a SwiftUI view rect
-    /// (Y-down) that reflects the same aspect-fit + zoom transform the
-    /// Metal renderer applies. Must stay in sync with FocusRenderer.fit.
+    /// (Y-down) that reflects the same aspect-fit (or aspect-fill, for
+    /// the live camera) + zoom transform the Metal renderer applies.
+    /// Must stay in sync with FocusRenderer.fit.
 
     func viewRect(for sourceRect: CGRect,
                   source: CGRect,
                   in viewSize: CGSize) -> CGRect {
-        let scale = min(viewSize.width / source.width,
-                        viewSize.height / source.height)
+        // Camera mode aspect-fills (max scale) so the feed covers
+        // the whole view; everything else aspect-fits (min scale).
+        // The fitted rect can therefore extend off-screen in fill
+        // mode; that's expected — overlays anchored to off-screen
+        // pixels just don't render in the visible viewport.
+        let aspectFill = viewModel.cameraSource != nil
+        let sx = viewSize.width / source.width
+        let sy = viewSize.height / source.height
+        let scale = aspectFill ? max(sx, sy) : min(sx, sy)
         let fittedW = source.width * scale
         let fittedH = source.height * scale
         let offsetX = (viewSize.width - fittedW) / 2
