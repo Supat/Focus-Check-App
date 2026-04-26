@@ -391,11 +391,16 @@ final class FocusViewModel: ObservableObject {
     /// highest-similarity first. Empty when the CLIP bundle isn't
     /// installed.
     @Published var clipMatches: [CLIPMatch] = []
-    /// CLAP audio-context matches for the loaded audio / video file.
-    /// Populated by `scoreAudioContext` after import; stays empty
-    /// for image / camera sources, and for video files until /
-    /// unless we extend the scoring pipeline beyond audio-only.
+    /// CLAP top-K matches for the window that contains the current
+    /// playhead. Recomputed from `audioMatchesByWindow` whenever
+    /// `videoSource.currentTime` changes so the badge reacts to
+    /// playback live. Stays empty for image / camera sources.
     @Published var audioMatches: [CLAPMatch] = []
+    /// All CLAP per-window match sets for the loaded audio / video
+    /// file, sorted by `windowStart`. The displayed
+    /// `audioMatches` is a slice of this — the entry whose window
+    /// contains the current playhead.
+    @Published private(set) var audioMatchesByWindow: [CLAPWindowMatches] = []
     /// Per-face emotion predictions from FER+, indexed alongside
     /// `faceRectangles`. `nil` entries mean the classifier didn't
     /// meet its confidence floor for that face. Empty when the
@@ -477,6 +482,14 @@ final class FocusViewModel: ObservableObject {
     /// source is active so each decoded frame propagates to the
     /// renderer with no manual republish.
     private var videoSourceCancellable: AnyCancellable?
+    /// Combine bridge from `videoSource.currentTime` to
+    /// `refreshAudioMatchesForCurrentTime` — switches the
+    /// displayed CLAP audio context to whichever window contains
+    /// the current playhead. Independent of `videoSourceCancellable`
+    /// because audio-only sources don't republish `currentImage`
+    /// during playback (no video output) but do republish
+    /// `currentTime` via the periodic time observer.
+    private var audioPlayheadCancellable: AnyCancellable?
     /// Periodic Vision + NudeNet + GenitalClassifier loop running
     /// against the active live source. Cancels and replaces itself
     /// across `loadVideo` / `loadCamera` calls; nilled in `clear()`.
@@ -953,6 +966,18 @@ final class FocusViewModel: ObservableObject {
                         self.sourceImage = image
                         self.applySmoothedSnapshot(at: source.currentTime)
                     }
+                // Audio playback also has no `currentImage` updates
+                // (no video output), so subscribe to `currentTime`
+                // directly to drive the CLAP-window playhead. For
+                // video this fires on every frame too; the
+                // refresh-only-on-change guard inside
+                // `refreshAudioMatchesForCurrentTime` makes that
+                // cheap.
+                self.audioPlayheadCancellable = source.$currentTime
+                    .receive(on: DispatchQueue.main)
+                    .sink { [weak self] time in
+                        self?.refreshAudioMatchesForCurrentTime(time)
+                    }
                 self.videoSource = source
                 self.videoAnalysisTask = self.startLiveAnalysisLoop {
                     [weak source] in
@@ -964,8 +989,9 @@ final class FocusViewModel: ObservableObject {
                 self.cleanupPreviousImport()
                 self.previousLoadedURL = url
                 // Kick off CLAP audio-context scoring in the
-                // background. One-shot — populates `audioMatches`
-                // when done, no live updates during playback.
+                // background. The result is a per-window match
+                // list; the per-frame sink picks the active
+                // window's matches as the playhead moves.
                 self.scoreAudioContext(url: url)
             } catch {
                 self?.errorMessage = error.localizedDescription
@@ -974,17 +1000,43 @@ final class FocusViewModel: ObservableObject {
     }
 
     /// Background task running the CLAP scorer over `url`'s audio
-    /// track. The result lands on `audioMatches` for the badge to
-    /// pick up. Cancelled and replaced across loadVideo / loadCamera
-    /// / clear via `audioContextTask`.
+    /// track. The full per-window match list lands on
+    /// `audioMatchesByWindow`; `audioMatches` is then derived from
+    /// the current playhead. Cancelled and replaced across
+    /// loadVideo / loadCamera / clear via `audioContextTask`.
     private func scoreAudioContext(url: URL) {
         audioContextTask?.cancel()
         audioContextTask = Task { @MainActor [weak self] in
             guard let analyzer = self?.analyzer else { return }
-            let matches = await analyzer.scoreAudioContext(url: url)
+            let windows = await analyzer.scoreAudioContext(url: url)
             guard let self, !Task.isCancelled else { return }
-            self.audioMatches = matches
+            self.audioMatchesByWindow = windows
+            // Seed the displayed match list against the current
+            // playhead so the badge appears immediately, not on the
+            // next per-frame sink tick.
+            if let source = self.videoSource {
+                self.refreshAudioMatchesForCurrentTime(source.currentTime)
+            }
         }
+    }
+
+    /// Pick the CLAP window whose centre is closest to `time` and
+    /// publish its matches as the active `audioMatches`. Driven by
+    /// the per-frame Combine sink in `loadVideo` so the badge
+    /// updates live as the playhead moves.
+    private func refreshAudioMatchesForCurrentTime(_ time: CMTime) {
+        guard !audioMatchesByWindow.isEmpty else {
+            if !audioMatches.isEmpty { audioMatches = [] }
+            return
+        }
+        let secs = CMTimeGetSeconds(time)
+        let active = audioMatchesByWindow.min { lhs, rhs in
+            let lc = (lhs.windowStart + lhs.windowEnd) / 2
+            let rc = (rhs.windowStart + rhs.windowEnd) / 2
+            return abs(lc - secs) < abs(rc - secs)
+        }
+        let next = active?.matches ?? []
+        if next != audioMatches { audioMatches = next }
     }
 
     /// Live-camera entry point. Mirrors `loadVideo` but driven by
@@ -1043,12 +1095,14 @@ final class FocusViewModel: ObservableObject {
         cameraSource?.stop()
         cameraSource = nil
         videoSourceCancellable = nil
+        audioPlayheadCancellable = nil
         videoAnalysisTask?.cancel()
         videoAnalysisTask = nil
         videoSmoother.reset()
         audioContextTask?.cancel()
         audioContextTask = nil
         audioMatches = []
+        audioMatchesByWindow = []
     }
 
     /// Pull the smoother's interpolated output for `time` and copy
@@ -1196,6 +1250,7 @@ final class FocusViewModel: ObservableObject {
         nudityDetections = []
         clipMatches = []
         audioMatches = []
+        audioMatchesByWindow = []
         faceEmotions = []
         painScores = []
         ageEstimations = []

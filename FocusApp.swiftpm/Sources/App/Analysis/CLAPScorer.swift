@@ -2,15 +2,24 @@ import Foundation
 import AVFoundation
 import CoreML
 
-/// One CLAP zero-shot match for a window of the loaded audio.
-/// Mirror of `CLIPMatch` for images: a prompt + its cosine
-/// similarity against the audio embedding for some 10-second
-/// window, plus the window's start time in seconds so the UI can
-/// surface "the strongest match was at 1:23 in the file".
+/// One CLAP zero-shot match. Mirror of `CLIPMatch` for images: a
+/// prompt + its cosine similarity against the audio embedding for
+/// some 10-second window. Window timing lives on the enclosing
+/// `CLAPWindowMatches` so the same struct is reusable for any
+/// per-window aggregation the UI wants later.
 struct CLAPMatch: Hashable, Sendable {
     let prompt: String
     let similarity: Float
+}
+
+/// Top-K CLAP matches for one fixed-length window of the loaded
+/// audio. Returned as a list (one entry per window) so the UI can
+/// react to playback by switching the displayed match set as the
+/// playhead crosses window boundaries.
+struct CLAPWindowMatches: Hashable, Sendable {
     let windowStart: TimeInterval
+    let windowEnd: TimeInterval
+    let matches: [CLAPMatch]
 }
 
 /// CLAP-based audio context scorer. Reads the audio track with
@@ -37,16 +46,20 @@ struct CLAPScorer {
     func warm() -> Bool { encoder != nil }
 
     /// Score the audio at `audioURL` against the bundled prompts.
-    /// Returns the top `topK` prompts (one entry per prompt — the
-    /// best-scoring window for that prompt), sorted descending.
+    /// Returns one entry per analyzed window (50%-overlap, encoder-
+    /// determined window length), each carrying the top `topK`
+    /// matches for that window sorted descending by similarity.
+    /// Caller switches between windows based on the playhead so the
+    /// displayed badge reacts live to whatever's playing.
     /// Returns `[]` on any failure (model missing, decode error,
     /// no audio track, dimension mismatch).
-    func score(audioURL: URL, topK: Int = 3) async -> [CLAPMatch] {
+    func score(audioURL: URL, topK: Int = 3) async -> [CLAPWindowMatches] {
         guard let encoder, let prompts = CLAPPromptStore.shared else {
             return []
         }
         let sampleRate = encoder.sampleRate
         let windowSamples = encoder.windowSamples
+        let windowSeconds = TimeInterval(windowSamples) / sampleRate
         guard let samples = await Self.extractSamples(
             from: audioURL, sampleRate: sampleRate
         ) else { return [] }
@@ -57,17 +70,20 @@ struct CLAPScorer {
         // 50%-overlap windows so a salient sound that straddles a
         // window boundary still lands centred in some other window.
         let stride = max(1, windowSamples / 2)
-        var allMatches: [CLAPMatch] = []
+        var out: [CLAPWindowMatches] = []
         var windowStart = 0
         while windowStart + windowSamples <= samples.count {
             let slice = Array(samples[windowStart..<windowStart + windowSamples])
-            scoreWindow(
+            if let entry = scoreWindow(
                 slice: slice,
                 start: TimeInterval(windowStart) / sampleRate,
+                durationSeconds: windowSeconds,
+                topK: topK,
                 encoder: encoder,
-                prompts: prompts,
-                into: &allMatches
-            )
+                prompts: prompts
+            ) {
+                out.append(entry)
+            }
             windowStart += stride
         }
         // Tail: zero-pad the final partial window so a clip that
@@ -80,52 +96,47 @@ struct CLAPScorer {
                     repeating: 0, count: windowSamples - padded.count
                 )
             )
-            scoreWindow(
+            if let entry = scoreWindow(
                 slice: padded,
                 start: TimeInterval(windowStart) / sampleRate,
+                durationSeconds: windowSeconds,
+                topK: topK,
                 encoder: encoder,
-                prompts: prompts,
-                into: &allMatches
-            )
-        }
-        // Group by prompt, keep the best-scoring window per prompt.
-        var bestPerPrompt: [String: CLAPMatch] = [:]
-        for match in allMatches {
-            if let existing = bestPerPrompt[match.prompt] {
-                if match.similarity > existing.similarity {
-                    bestPerPrompt[match.prompt] = match
-                }
-            } else {
-                bestPerPrompt[match.prompt] = match
+                prompts: prompts
+            ) {
+                out.append(entry)
             }
         }
-        return Array(bestPerPrompt.values)
-            .sorted { $0.similarity > $1.similarity }
-            .prefix(topK)
-            .map { $0 }
+        return out
     }
 
     private func scoreWindow(
         slice: [Float],
         start: TimeInterval,
+        durationSeconds: TimeInterval,
+        topK: Int,
         encoder: CLAPEncoder,
-        prompts: CLAPPromptStore,
-        into matches: inout [CLAPMatch]
-    ) {
-        guard let embedding = encoder.embed(samples: slice) else { return }
+        prompts: CLAPPromptStore
+    ) -> CLAPWindowMatches? {
+        guard let embedding = encoder.embed(samples: slice) else { return nil }
         let normalized = Self.l2Normalize(embedding)
+        var matches: [CLAPMatch] = []
+        matches.reserveCapacity(prompts.entries.count)
         for entry in prompts.entries {
             guard entry.embedding.count == normalized.count else { continue }
             var dot: Float = 0
             for i in 0..<normalized.count {
                 dot += normalized[i] * entry.embedding[i]
             }
-            matches.append(CLAPMatch(
-                prompt: entry.prompt,
-                similarity: dot,
-                windowStart: start
-            ))
+            matches.append(CLAPMatch(prompt: entry.prompt, similarity: dot))
         }
+        guard !matches.isEmpty else { return nil }
+        matches.sort { $0.similarity > $1.similarity }
+        return CLAPWindowMatches(
+            windowStart: start,
+            windowEnd: start + durationSeconds,
+            matches: Array(matches.prefix(topK))
+        )
     }
 
     private static func l2Normalize(_ v: [Float]) -> [Float] {

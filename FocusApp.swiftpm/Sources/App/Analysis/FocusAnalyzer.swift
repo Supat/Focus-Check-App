@@ -336,12 +336,16 @@ actor FocusAnalyzer {
         _ = clapScorer.warm()
     }
 
-    /// One-shot CLAP audio context scoring for an imported audio /
-    /// video file. Reads the audio track, slices into 50%-overlap
-    /// 10 s windows, runs the encoder per window, and returns the
-    /// top `topK` prompt matches. Returns `[]` when the CLAP
-    /// archive isn't installed or the file has no audio track.
-    func scoreAudioContext(url: URL, topK: Int = 3) async -> [CLAPMatch] {
+    /// CLAP audio context scoring for an imported audio / video
+    /// file. Reads the audio track, slices into 50%-overlap 10 s
+    /// windows, runs the encoder per window, and returns one
+    /// `CLAPWindowMatches` per window (each carrying the top `topK`
+    /// prompts for that window). Caller picks the window based on
+    /// playhead time so the displayed badge reacts to playback
+    /// instead of showing a single static verdict for the whole
+    /// file. Returns `[]` when the CLAP archive isn't installed or
+    /// the file has no audio track.
+    func scoreAudioContext(url: URL, topK: Int = 3) async -> [CLAPWindowMatches] {
         await clapScorer.score(audioURL: url, topK: topK)
     }
 
