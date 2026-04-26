@@ -238,16 +238,20 @@ struct ModelArchive: Sendable {
     /// research-only training data, do not bundle in signed App
     /// Store builds.
     ///
-    /// **Version**: `GenitalClassifier-v3` directory,
-    /// `genital-classifier-v3` tag (v2 had a flat per-state schema
-    /// that didn't survive contact with the COVERED/EXPOSED-prefix
-    /// mosaic filters; superseded by v3). Bump the pair together
-    /// when the export pipeline changes (e.g. backbone swap, class
-    /// set edit, padding strategy change).
+    /// **Version**: `GenitalClassifier-v4` directory,
+    /// `genital-classifier-v4` tag. v4 keeps v3's 8-class
+    /// schema unchanged — retrained weights only — so the
+    /// `GenitalSubClass` enum, `NudityDetector.aggregate`, and
+    /// the chip severity ladder didn't need to change with this
+    /// bump. (v2 had a flat per-state schema that didn't survive
+    /// contact with the COVERED/EXPOSED-prefix mosaic filters;
+    /// superseded by v3, which v4 is a weights-refresh of.) Bump
+    /// the pair together when the export pipeline changes (e.g.
+    /// backbone swap, class set edit, padding strategy change).
     static let genitalClassifier = ModelArchive(
-        directoryName: "GenitalClassifier-v3.mlmodelc",
+        directoryName: "GenitalClassifier-v4.mlmodelc",
         sourceURL: URL(string:
-            "https://github.com/Supat/Focus-Check-App/releases/download/genital-classifier-v3/GenitalClassifier.mlmodelc.zip"
+            "https://github.com/Supat/Focus-Check-App/releases/download/genital-classifier-v4/GenitalClassifier.mlmodelc.zip"
         )!
     )
 
