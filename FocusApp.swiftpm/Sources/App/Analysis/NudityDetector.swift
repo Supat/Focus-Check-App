@@ -354,12 +354,14 @@ private final class NudityClassifier {
     private let inputSize: CGSize
 
     /// Default per-detection confidence floor — below this the
-    /// detection is dropped. Tighter than NudeNet's own 0.20
-    /// Python default; 0.20 produces a wide false-positive band
-    /// on busy frames (especially face / armpit / belly
-    /// hallucinations). 0.40 keeps the obvious subjects and drops
-    /// most of the borderline FPs.
-    private let defaultScoreThreshold: Float = 0.40
+    /// detection is dropped. NudeNet's own Python default is 0.20.
+    /// We sit slightly above it at 0.25 to trim the worst FACE /
+    /// armpit / belly hallucinations while still admitting the
+    /// 0.25–0.40 band that an earlier 0.40 floor was costing us
+    /// on legitimate subjects. The whole-image fallback pass plus
+    /// the GenitalClassifier override absorb most of the FPs the
+    /// looser threshold lets through.
+    private let defaultScoreThreshold: Float = 0.25
 
     /// Per-label confidence floor overriding the default. NudeNet's
     /// training behaviors:
@@ -510,17 +512,16 @@ private final class NudityClassifier {
         let extent = image.extent
         var all: [NudityDetection] = []
 
-        // Whole-image fallback pass. The per-body crops below skip
-        // any subject Vision didn't detect — a hard recall floor when
-        // a body is truncated, far from camera, or obscured enough
-        // that the body detector misses it. Running one global pass
-        // first recovers those misses; the global NMS at the end
-        // de-duplicates against the per-body passes when both fire
-        // on the same subject. One extra ~100 ms inference per
-        // analyze, acceptable for one-shot.
-        let whole = letterbox(image: image, into: inputSize)
-        all.append(contentsOf:
-            runDetector(letterboxed: whole, ciContext: ciContext))
+        // Whole-image fallback pass + flip TTA. The per-body crops
+        // below skip any subject Vision didn't detect — a hard
+        // recall floor when a body is truncated, far from camera,
+        // or obscured enough that the body detector misses it. The
+        // mirrored pass complements the original on subjects whose
+        // pose / framing only one orientation triggers. Global NMS
+        // at the end de-duplicates against the per-body passes.
+        all.append(contentsOf: detectWithFlipTTA(
+            on: image, region: extent, ciContext: ciContext
+        ))
 
         for body in bodies {
             let padX = body.width * Self.bodyCropPadding
@@ -529,45 +530,9 @@ private final class NudityClassifier {
                 .intersection(extent)
             guard !padded.isNull, padded.width >= 16, padded.height >= 16
             else { continue }
-            let crop = image.cropped(to: padded)
-
-            // Original pass.
-            let letterboxed = letterbox(image: crop, into: inputSize)
-            all.append(contentsOf:
-                runDetector(letterboxed: letterboxed, ciContext: ciContext))
-
-            // Horizontal-flip TTA. NudeNet's 640m was trained on a
-            // dataset that under-represents male anatomy — in addition
-            // to the per-label threshold fix above, running the model
-            // on the mirrored crop and pooling detections catches
-            // hard cases (occlusion / unusual pose / off-center
-            // framing) that only one orientation triggers. Cost is
-            // one extra inference per body (~100 ms on an iPad Pro,
-            // acceptable for one-shot analyze).
-            let mirrorAroundMidX = CGAffineTransform(scaleX: -1, y: 1)
-                .translatedBy(x: -2 * padded.midX, y: 0)
-            let flippedCrop = crop.transformed(by: mirrorAroundMidX)
-                .cropped(to: padded)
-            let letterboxedFlipped = letterbox(image: flippedCrop, into: inputSize)
-            let flippedDets = runDetector(letterboxed: letterboxedFlipped,
-                                          ciContext: ciContext)
-            // Undo the mirror on each detection's rect: its x range
-            // is currently relative to the flipped crop content, so
-            // reflect around padded.midX back to source coords.
-            let mirroredBack = flippedDets.map { det -> NudityDetection in
-                let newMinX = padded.minX + padded.maxX - det.rect.maxX
-                return NudityDetection(
-                    rect: CGRect(
-                        x: newMinX,
-                        y: det.rect.origin.y,
-                        width: det.rect.width,
-                        height: det.rect.height
-                    ),
-                    label: det.label,
-                    confidence: det.confidence
-                )
-            }
-            all.append(contentsOf: mirroredBack)
+            all.append(contentsOf: detectWithFlipTTA(
+                on: image, region: padded, ciContext: ciContext
+            ))
         }
         // Detections from neighboring body crops, and the TTA pair on
         // the same body, can all cover the same pixel region. The
@@ -577,11 +542,50 @@ private final class NudityClassifier {
         return classAgnosticNMS(all, iouThreshold: 0.45)
     }
 
+    /// Paired (original + horizontal-flip) detector pass over `image`
+    /// constrained to `region`. Detections from the flipped pass are
+    /// reflected back into source-extent coords so callers can pool
+    /// them with the unflipped pass without coord-frame mismatch.
+    /// NudeNet's 640m training set under-represents male anatomy;
+    /// running the model on the mirrored input and pooling catches
+    /// hard cases (occlusion / unusual pose / off-center framing)
+    /// that only one orientation triggers.
+    private func detectWithFlipTTA(on image: CIImage,
+                                   region: CGRect,
+                                   ciContext: CIContext) -> [NudityDetection] {
+        let crop = region == image.extent ? image : image.cropped(to: region)
+        let letterboxed = letterbox(image: crop, into: inputSize)
+        var dets = runDetector(letterboxed: letterboxed, ciContext: ciContext)
+
+        let mirrorAroundMidX = CGAffineTransform(scaleX: -1, y: 1)
+            .translatedBy(x: -2 * region.midX, y: 0)
+        let flippedCrop = crop.transformed(by: mirrorAroundMidX)
+            .cropped(to: region)
+        let letterboxedFlipped = letterbox(image: flippedCrop, into: inputSize)
+        let flipped = runDetector(letterboxed: letterboxedFlipped,
+                                  ciContext: ciContext)
+        for det in flipped {
+            // Undo the mirror on each detection's rect: its x range
+            // is relative to the flipped content, so reflect around
+            // region.midX back to source coords.
+            let newMinX = region.minX + region.maxX - det.rect.maxX
+            dets.append(NudityDetection(
+                rect: CGRect(x: newMinX, y: det.rect.origin.y,
+                             width: det.rect.width, height: det.rect.height),
+                label: det.label,
+                confidence: det.confidence
+            ))
+        }
+        return dets
+    }
+
     /// Outward padding applied to each Vision body rect before
-    /// cropping for per-body detection. Large enough to keep shoulders
-    /// and a little background context visible; tight enough that the
-    /// cropped region is still dominated by the target subject.
-    private static let bodyCropPadding: CGFloat = 0.15
+    /// cropping for per-body detection. Vision body rects routinely
+    /// truncate at the waist or knees and can clip extended limbs
+    /// at unusual poses; 25% gives the detector enough headroom that
+    /// feet / hands / hair stay inside the crop without the cropped
+    /// region drifting too far from being subject-dominated.
+    private static let bodyCropPadding: CGFloat = 0.25
 
     /// Render + predict + parse for an already-letterboxed input. The
     /// two public `detect` overloads share this path so both the whole-
