@@ -1,0 +1,210 @@
+import Foundation
+import AVFoundation
+import CoreImage
+import UIKit
+
+/// Live back-camera frame source. Mirrors `VideoFrameSource`'s
+/// shape externally — `currentImage` republishes per captured frame
+/// so the existing renderer pipeline picks each one up — but is
+/// driven by an `AVCaptureSession` instead of an `AVPlayer`. No
+/// timeline / transport: the only controls are start and stop.
+///
+/// Pipeline:
+///   AVCaptureDevice (back wide-angle camera)
+///     → AVCaptureDeviceInput
+///       → AVCaptureSession
+///         → AVCaptureVideoDataOutput (BGRA, IOSurface-backed)
+///           → sample-buffer delegate per captured frame
+///             → CIImage → main-actor publish
+///
+/// Permission: requests camera access at first `start()`. If the
+/// user has previously denied, `start()` throws — caller surfaces
+/// the error. The app's `.camera(purposeString:)` capability in
+/// Package.swift is what lets the OS show the prompt.
+///
+/// Color: BGRA8 + sRGB tag matches `VideoFrameSource`. iOS hardware
+/// captures Rec.709 by default in this format; SDR throughout.
+@MainActor
+final class CameraFrameSource: NSObject, ObservableObject {
+    /// Most recently captured frame, ready for the renderer. Nil
+    /// before the first frame and after `stop()`.
+    @Published private(set) var currentImage: CIImage?
+    /// Capture-time presentation timestamp. Mostly here for parity
+    /// with `VideoFrameSource` so the smoother / analyzer keying
+    /// machinery can stay source-agnostic. Wall-clock relative.
+    @Published private(set) var currentTime: CMTime = .zero
+    /// True after `start()` succeeds, until `stop()` runs.
+    @Published private(set) var isRunning: Bool = false
+
+    private let session = AVCaptureSession()
+    private let videoOutput = AVCaptureVideoDataOutput()
+    private let sessionQueue = DispatchQueue(
+        label: "FocusApp.CameraFrameSource.session"
+    )
+    private let sampleQueue = DispatchQueue(
+        label: "FocusApp.CameraFrameSource.samples"
+    )
+    private var didConfigure = false
+
+    override init() {
+        super.init()
+    }
+
+    /// Request authorization (if needed) and start the capture
+    /// session. Idempotent — calling on an already-running source
+    /// is a no-op. Throws when permission is denied or no back
+    /// camera is available.
+    func start() async throws {
+        let status = AVCaptureDevice.authorizationStatus(for: .video)
+        switch status {
+        case .authorized:
+            break
+        case .notDetermined:
+            let granted = await AVCaptureDevice.requestAccess(for: .video)
+            if !granted { throw CameraFrameSourceError.permissionDenied }
+        case .denied, .restricted:
+            throw CameraFrameSourceError.permissionDenied
+        @unknown default:
+            throw CameraFrameSourceError.permissionDenied
+        }
+
+        // Configure + start on the dedicated session queue so the
+        // setup work doesn't block main. The continuation flips
+        // `isRunning` back on main when the session is up.
+        try await withCheckedThrowingContinuation {
+            (cont: CheckedContinuation<Void, Error>) in
+            sessionQueue.async {
+                do {
+                    try self.configureIfNeeded()
+                    if !self.session.isRunning {
+                        self.session.startRunning()
+                    }
+                    DispatchQueue.main.async {
+                        self.isRunning = true
+                        cont.resume()
+                    }
+                } catch {
+                    cont.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    /// Stop the capture session. Drops the last published frame so
+    /// the renderer doesn't continue showing a stale image after
+    /// the source is torn down.
+    func stop() {
+        sessionQueue.async {
+            if self.session.isRunning {
+                self.session.stopRunning()
+            }
+            DispatchQueue.main.async {
+                self.isRunning = false
+                self.currentImage = nil
+            }
+        }
+    }
+
+    /// One-time AVCaptureSession setup — pick the back wide-angle
+    /// camera, wire it into the session, attach a BGRA video data
+    /// output. Reruns are no-ops via the `didConfigure` guard.
+    /// Runs on `sessionQueue` (called from `start`).
+    private func configureIfNeeded() throws {
+        guard !didConfigure else { return }
+        session.beginConfiguration()
+        defer { session.commitConfiguration() }
+
+        // .high preset is a sensible default — full 1080p on most
+        // iPads, falls back to whatever the device supports. We
+        // don't need 4K for a 2 Hz analysis pulse.
+        if session.canSetSessionPreset(.high) {
+            session.sessionPreset = .high
+        }
+
+        // Prefer the back wide-angle (the default 1× lens). On
+        // devices without a back camera (e.g. Mac Catalyst), fall
+        // through to whatever the system picks for video.
+        let device = AVCaptureDevice.default(
+            .builtInWideAngleCamera, for: .video, position: .back
+        ) ?? AVCaptureDevice.default(for: .video)
+        guard let device else {
+            throw CameraFrameSourceError.noCamera
+        }
+
+        let input = try AVCaptureDeviceInput(device: device)
+        guard session.canAddInput(input) else {
+            throw CameraFrameSourceError.cannotAddInput
+        }
+        session.addInput(input)
+
+        videoOutput.videoSettings = [
+            kCVPixelBufferPixelFormatTypeKey as String:
+                kCVPixelFormatType_32BGRA,
+            kCVPixelBufferIOSurfacePropertiesKey as String:
+                [:] as CFDictionary,
+        ]
+        videoOutput.alwaysDiscardsLateVideoFrames = true
+        videoOutput.setSampleBufferDelegate(self, queue: sampleQueue)
+        guard session.canAddOutput(videoOutput) else {
+            throw CameraFrameSourceError.cannotAddOutput
+        }
+        session.addOutput(videoOutput)
+
+        // Force portrait orientation by default. The natural sensor
+        // orientation on iPad is landscape-right, so without this
+        // the captured CIImage would arrive sideways relative to a
+        // user holding the device upright. Smarter
+        // device-orientation tracking can come later.
+        if let connection = videoOutput.connection(with: .video) {
+            #if os(iOS)
+            if connection.isVideoOrientationSupported {
+                connection.videoOrientation = .portrait
+            }
+            #endif
+        }
+
+        didConfigure = true
+    }
+}
+
+extension CameraFrameSource: AVCaptureVideoDataOutputSampleBufferDelegate {
+    /// Per-frame callback off `sampleQueue`. Wraps the pixel buffer
+    /// as a `CIImage` and hops to main to update `@Published`.
+    /// `nonisolated` because the protocol's signature is unisolated
+    /// — at the publish step we Task-hop back into the actor.
+    nonisolated func captureOutput(
+        _ output: AVCaptureOutput,
+        didOutput sampleBuffer: CMSampleBuffer,
+        from connection: AVCaptureConnection
+    ) {
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer)
+        else { return }
+        let time = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        let image = CIImage(
+            cvPixelBuffer: pixelBuffer,
+            options: [.colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!]
+        )
+        Task { @MainActor [weak self] in
+            self?.currentImage = image
+            self?.currentTime = time
+        }
+    }
+}
+
+enum CameraFrameSourceError: Error, LocalizedError {
+    case permissionDenied
+    case noCamera
+    case cannotAddInput
+    case cannotAddOutput
+
+    var errorDescription: String? {
+        switch self {
+        case .permissionDenied:
+            return "Camera access is required. Enable it in Settings → Privacy → Camera."
+        case .noCamera:
+            return "No back camera is available on this device."
+        case .cannotAddInput, .cannotAddOutput:
+            return "Couldn't configure the camera capture session."
+        }
+    }
+}

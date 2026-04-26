@@ -30,6 +30,11 @@ let package = Package(
             capabilities: [
                 .photoLibrary(purposeString: "Select photos to analyze focus regions and display their filename."),
                 .fileAccess(.userSelectedFiles, mode: .readOnly),
+                // Required for the live-camera source — back-camera
+                // frames feed the same renderer + analysis pipeline
+                // as imported videos. Without this capability the OS
+                // refuses the AVCaptureDevice request.
+                .camera(purposeString: "The live camera feed is analyzed for sensitive content and overlaid with redaction in real time."),
                 // Required for runtime model downloads (depth, NSFW). Without
                 // this the macOS app sandbox denies URLSession requests with
                 // 'server with the specified hostname could not be found'.
