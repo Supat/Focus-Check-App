@@ -75,28 +75,33 @@ struct AudioPlaybackPlaceholder: View {
     /// CLAP audio-context readout. Three states:
     ///   - archive not installed: hidden (the Model Manager is the
     ///     prompt to install it, no need to nag from here).
-    ///   - installed but matches empty: "Analyzing audio…" indicator.
-    ///   - installed and matches present: top-3 prompt rows with
-    ///     similarity %.
+    ///   - installed but no matches yet (scoring in progress):
+    ///     "Analyzing audio…" indicator.
+    ///   - installed, scored, top matches drop into the safe-class
+    ///     filter (ambient / speech / music / etc. dominate the
+    ///     window): row hidden — there's no signal worth reporting.
+    ///   - installed and notable matches present: top-3 of the
+    ///     filtered set with similarity %.
     @ViewBuilder
     private var audioContextSection: some View {
         if clapAvailable {
-            VStack(spacing: 6) {
-                Text("Audio Context")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .textCase(.uppercase)
-                if audioMatches.isEmpty {
+            let visibleMatches = audioMatches
+                .filter { !Self.safePrompts.contains($0.prompt) }
+                .prefix(3)
+            if audioMatches.isEmpty {
+                audioContextCapsule {
                     HStack(spacing: 8) {
                         ProgressView().controlSize(.small)
                         Text("Analyzing audio…")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                } else {
-                    ForEach(audioMatches.prefix(3), id: \.self) { match in
+                }
+            } else if !visibleMatches.isEmpty {
+                audioContextCapsule {
+                    ForEach(Array(visibleMatches), id: \.self) { match in
                         HStack(spacing: 12) {
-                            Text(match.prompt)
+                            Text(Self.sentenceCased(match.prompt))
                                 .font(.caption)
                                 .lineLimit(1)
                                 .truncationMode(.tail)
@@ -108,12 +113,49 @@ struct AudioPlaybackPlaceholder: View {
                     }
                 }
             }
-            .frame(maxWidth: 360)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(.ultraThinMaterial,
-                        in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
+    }
+
+    /// Shared capsule chrome for the audio-context section. Pulls the
+    /// "Audio Context" header + ultra-thin material background up so
+    /// both the spinner and the match-list variants share styling.
+    @ViewBuilder
+    private func audioContextCapsule<Body: View>(
+        @ViewBuilder content: () -> Body
+    ) -> some View {
+        VStack(spacing: 6) {
+            Text("Audio Context")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+            content()
+        }
+        .frame(maxWidth: 360)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial,
+                    in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    /// Prompts treated as "safe contrast" — useful for CLAP's ranking
+    /// stability but not interesting to surface, so the UI filters
+    /// them out. Must mirror the CLAP_AUDIO_PROMPTS file's
+    /// `Tools/export_clap_prompt_embeddings.py` safe-class list
+    /// (kept in sync by hand on each prompt-set bump).
+    private static let safePrompts: Set<String> = [
+        "people speaking in conversation",
+        "people laughing together",
+        "music playing in the background",
+        "the ambient room tone of an empty room",
+        "the sound of footsteps",
+    ]
+
+    /// First-letter sentence case. `.localizedCapitalized` would
+    /// title-case every word; the prompts read more naturally with
+    /// only the leading character upper-cased.
+    private static func sentenceCased(_ s: String) -> String {
+        guard let first = s.first else { return s }
+        return first.uppercased() + s.dropFirst()
     }
 
     /// Format the current/total seconds as `m:ss / m:ss`. Used as a
