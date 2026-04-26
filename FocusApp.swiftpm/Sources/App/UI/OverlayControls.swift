@@ -10,83 +10,94 @@ struct OverlayControls: View {
     @State private var thresholdText: String = ""
     @FocusState private var thresholdFocused: Bool
 
+    /// Video sources skip every photo-only analysis tier (sharpness,
+    /// depth, ELA, NIMA, EmoNet, etc.) and gate the mosaic by the
+    /// manual `forceCensor` toggle instead of the SCA classifier, so
+    /// the corresponding rows collapse out of the controls panel for
+    /// video to keep the UI honest about what's actually wired up.
+    private var isVideo: Bool { viewModel.videoSource != nil }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Picker("Style", selection: $viewModel.style) {
-                    ForEach(OverlayStyle.allCases) { style in
-                        Label(style.rawValue, systemImage: style.systemImage).tag(style)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-
-                ColorPicker("Overlay color",
-                            selection: $viewModel.overlayColor,
-                            supportsOpacity: false)
-                    .labelsHidden()
-                    .frame(width: 44)
-            }
-
-            HStack(spacing: 8) {
-                Image(systemName: "slider.horizontal.below.sun.max")
-                    .foregroundStyle(.secondary)
-                Slider(value: $viewModel.threshold, in: 0...1)
-                TextField("", text: $thresholdText)
-                    .focused($thresholdFocused)
-                    .multilineTextAlignment(.trailing)
-                    .font(.caption.monospacedDigit())
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 64)
-                    .submitLabel(.done)
-                    .onSubmit { commitThresholdText() }
-                    .onChange(of: thresholdFocused) { _, isFocused in
-                        if !isFocused { commitThresholdText() }
-                    }
-                    .onChange(of: viewModel.threshold) { _, new in
-                        // Keep the field text in sync when the slider moves — but only
-                        // while the field isn't actively being edited.
-                        if !thresholdFocused {
-                            thresholdText = formatted(new)
+            if !isVideo {
+                HStack {
+                    Picker("Style", selection: $viewModel.style) {
+                        ForEach(OverlayStyle.allCases) { style in
+                            Label(style.rawValue, systemImage: style.systemImage).tag(style)
                         }
                     }
-                    .onAppear { thresholdText = formatted(viewModel.threshold) }
-            }
-            // Slider + numeric field drive overlay compositing only; None mode
-            // renders the original image untouched so there's nothing to scrub.
-            .disabled(viewModel.style.isOff)
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
 
-            HStack {
-                Picker("Mode", selection: $viewModel.mode) {
-                    ForEach(AnalysisMode.allCases) { mode in
-                        Text(mode.rawValue).tag(mode)
+                    ColorPicker("Overlay color",
+                                selection: $viewModel.overlayColor,
+                                supportsOpacity: false)
+                        .labelsHidden()
+                        .frame(width: 44)
+                }
+
+                HStack(spacing: 8) {
+                    Image(systemName: "slider.horizontal.below.sun.max")
+                        .foregroundStyle(.secondary)
+                    Slider(value: $viewModel.threshold, in: 0...1)
+                    TextField("", text: $thresholdText)
+                        .focused($thresholdFocused)
+                        .multilineTextAlignment(.trailing)
+                        .font(.caption.monospacedDigit())
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 64)
+                        .submitLabel(.done)
+                        .onSubmit { commitThresholdText() }
+                        .onChange(of: thresholdFocused) { _, isFocused in
+                            if !isFocused { commitThresholdText() }
+                        }
+                        .onChange(of: viewModel.threshold) { _, new in
+                            // Keep the field text in sync when the slider moves — but only
+                            // while the field isn't actively being edited.
+                            if !thresholdFocused {
+                                thresholdText = formatted(new)
+                            }
+                        }
+                        .onAppear { thresholdText = formatted(viewModel.threshold) }
+                }
+                // Slider + numeric field drive overlay compositing only; None mode
+                // renders the original image untouched so there's nothing to scrub.
+                .disabled(viewModel.style.isOff)
+
+                HStack {
+                    Picker("Mode", selection: $viewModel.mode) {
+                        ForEach(AnalysisMode.allCases) { mode in
+                            Text(mode.rawValue).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    // Error style requires both signals — lock the picker to Hybrid so
+                    // the user can't accidentally strand the overlay without depth data.
+                    // None mode has no overlay, so analysis mode choice is moot.
+                    .disabled(
+                        viewModel.sourceImage == nil ||
+                        viewModel.style.requiresDepth ||
+                        viewModel.style.isOff
+                    )
+                    .onChange(of: viewModel.mode) { _, _ in
+                        viewModel.reanalyze()
                     }
                 }
-                .pickerStyle(.segmented)
-                // Error style requires both signals — lock the picker to Hybrid so
-                // the user can't accidentally strand the overlay without depth data.
-                // None mode has no overlay, so analysis mode choice is moot.
-                .disabled(
-                    viewModel.sourceImage == nil ||
-                    viewModel.style.requiresDepth ||
-                    viewModel.style.isOff
-                )
-                .onChange(of: viewModel.mode) { _, _ in
-                    viewModel.reanalyze()
-                }
-            }
 
-            depthInstallRow
+                depthInstallRow
+            }
             mosaicToggleRow
-            nsfwInstallRow
-            nudenetInstallRow
-            clipInstallRow
-            emotionInstallRow
-            painInstallRow
-            ageInstallRow
-            qualityInstallRow
-            aestheticInstallRow
-            genitalClassifierInstallRow
+            if !isVideo {
+                nsfwInstallRow
+                nudenetInstallRow
+                clipInstallRow
+                emotionInstallRow
+                painInstallRow
+                ageInstallRow
+                qualityInstallRow
+                aestheticInstallRow
+                genitalClassifierInstallRow
+            }
         }
         #if os(iOS)
         .onPencilSqueeze { phase in
@@ -149,16 +160,17 @@ struct OverlayControls: View {
     /// without detections to gate.
     @ViewBuilder
     private var perSubjectCluster: some View {
-        // One toggle controls both the PAD bars and the Pain bar
-        // sitting beside them. They're a single visual row and a
-        // single conceptual "per-subject meter".
-        Label("PAD meter", systemImage: "chart.bar.xaxis")
-            .labelStyle(.iconOnly)
-            .font(.caption)
-        Toggle("", isOn: $viewModel.showPADMeter)
-            .labelsHidden()
-            .toggleStyle(.switch)
-            .controlSize(.small)
+        // PAD meter is photo-only — no EmoNet/PSPI tier runs in video
+        // mode, so the toggle has nothing to gate.
+        if !isVideo {
+            Label("PAD meter", systemImage: "chart.bar.xaxis")
+                .labelStyle(.iconOnly)
+                .font(.caption)
+            Toggle("", isOn: $viewModel.showPADMeter)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+        }
         Label("Per subject", systemImage: "person.crop.square.filled.and.at.rectangle")
             .labelStyle(.iconOnly)
             .font(.caption)
@@ -186,12 +198,16 @@ struct OverlayControls: View {
     /// stacked-row variants.
     @ViewBuilder
     private var mosaicCluster: some View {
-        // The mode picker is usable whenever at least one of the mosaic paths
-        // can fire — either the classifier-gated one (toggle + SCA ready) or
-        // Force Censor (which bypasses the classifier entirely).
+        // Image mode: the mode picker is usable whenever at least one
+        // of the two mosaic paths can fire — the classifier-gated one
+        // (toggle + SCA ready) or Force Censor (bypasses classifier).
+        // Video mode: there is no classifier path, so the picker is
+        // gated solely by `forceCensor`.
         let classifierPath =
             viewModel.mosaicEnabled && viewModel.sensitiveContentAvailability.isReady
-        let pickerActive = classifierPath || viewModel.forceCensor
+        let pickerActive = isVideo
+            ? viewModel.forceCensor
+            : (classifierPath || viewModel.forceCensor)
 
         Label("Mosaic", systemImage: "eye.slash")
             .labelStyle(.iconOnly)
@@ -206,12 +222,16 @@ struct OverlayControls: View {
         .controlSize(.small)
         .frame(width: 560)
         .disabled(!pickerActive)
-        Toggle("", isOn: $viewModel.mosaicEnabled)
-            .labelsHidden()
-            .toggleStyle(.switch)
-            .controlSize(.small)
-            .disabled(!viewModel.sensitiveContentAvailability.isReady)
-        Label("Force", systemImage: "eye.slash.circle.fill")
+        // Classifier-gated mosaic toggle is photo-only — videos don't
+        // run SCA / NSFW per frame.
+        if !isVideo {
+            Toggle("", isOn: $viewModel.mosaicEnabled)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .disabled(!viewModel.sensitiveContentAvailability.isReady)
+        }
+        Label(isVideo ? "Censor" : "Force", systemImage: "eye.slash.circle.fill")
             .labelStyle(.iconOnly)
             .font(.caption)
         Toggle("", isOn: $viewModel.forceCensor)
