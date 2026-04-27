@@ -66,33 +66,60 @@ struct VideoTransportBar: View {
                 .font(.caption.monospacedDigit())
                 .frame(width: 44, alignment: .trailing)
 
-            Slider(
-                value: scrubBinding,
-                in: 0...max(source.duration, 0.001)
-            ) { editing in
-                if editing {
-                    wasPlayingBeforeScrub = source.isPlaying
-                    source.pause()
-                    // Tells the renderer + per-subject overlays
-                    // to hide while we drag — anchor data lags
-                    // the playhead by up to 500 ms (analyzer
-                    // pulse interval) so showing them on a fast
-                    // scrub pins mosaic boxes on stale frames.
-                    source.setSeeking(true)
-                } else {
-                    let target = scrubbingPosition ?? displayedSeconds
-                    let resume = wasPlayingBeforeScrub
-                    scrubbingPosition = nil
-                    Task { @MainActor in
-                        // Final landing seek is precise (zero
-                        // tolerances) so the user's exact target
-                        // frame ends up on screen.
-                        await source.seek(to: target)
-                        source.setSeeking(false)
-                        if resume { source.play() }
+            // GeometryReader captures the slider's drawn width so
+            // the double-tap handler can decide which side of the
+            // playhead the tap landed on. `.frame(height:)` reins
+            // GeometryReader's greedy vertical sizing back to the
+            // slider's natural height.
+            GeometryReader { geo in
+                Slider(
+                    value: scrubBinding,
+                    in: 0...max(source.duration, 0.001)
+                ) { editing in
+                    if editing {
+                        wasPlayingBeforeScrub = source.isPlaying
+                        source.pause()
+                        // Tells the renderer + per-subject overlays
+                        // to hide while we drag — anchor data lags
+                        // the playhead by up to 500 ms (analyzer
+                        // pulse interval) so showing them on a fast
+                        // scrub pins mosaic boxes on stale frames.
+                        source.setSeeking(true)
+                    } else {
+                        let target = scrubbingPosition ?? displayedSeconds
+                        let resume = wasPlayingBeforeScrub
+                        scrubbingPosition = nil
+                        Task { @MainActor in
+                            // Final landing seek is precise (zero
+                            // tolerances) so the user's exact target
+                            // frame ends up on screen.
+                            await source.seek(to: target)
+                            source.setSeeking(false)
+                            if resume { source.play() }
+                        }
                     }
                 }
+                // Double-tap to skip ±10 s relative to the playhead.
+                // Tap to the right of the thumb → +10, left → −10.
+                // simultaneousGesture lets the slider's existing
+                // tap-to-position + drag behavior keep working —
+                // SpatialTapGesture(count: 2) fires only on a real
+                // double-tap so single taps still hit the slider.
+                .simultaneousGesture(
+                    SpatialTapGesture(count: 2)
+                        .onEnded { event in
+                            let duration = max(source.duration, 0.001)
+                            let fraction = max(
+                                0, min(1, displayedSeconds / duration)
+                            )
+                            let thumbX = fraction * geo.size.width
+                            let delta: TimeInterval =
+                                event.location.x > thumbX ? 10 : -10
+                            jumpBy(delta)
+                        }
+                )
             }
+            .frame(height: 32)
 
             Text(Self.timeString(source.duration))
                 .font(.caption.monospacedDigit())
@@ -126,6 +153,18 @@ struct VideoTransportBar: View {
                 }
             }
         )
+    }
+
+    /// Jump the playhead by `delta` seconds, clamped to [0, duration].
+    /// Used by the double-tap handler — keeps playback running through
+    /// the seek (no pause/resume dance) so a 10 s skip during playback
+    /// reads as continuous viewing instead of a stutter.
+    private func jumpBy(_ delta: TimeInterval) {
+        let currentSeconds = CMTimeGetSeconds(source.currentTime)
+        let target = max(0, min(source.duration, currentSeconds + delta))
+        Task { @MainActor in
+            await source.seek(to: target)
+        }
     }
 
     private static func timeString(_ seconds: Double) -> String {
