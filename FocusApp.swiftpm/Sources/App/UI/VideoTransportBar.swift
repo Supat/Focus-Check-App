@@ -28,6 +28,18 @@ struct VideoTransportBar: View {
 
     var body: some View {
         HStack(spacing: 12) {
+            // Step-by-frame buttons sit either side of play/pause.
+            // Audio-only sources hide them — `step(byCount:)` is a
+            // video-track-only API.
+            if source.hasVideoTrack {
+                Button { source.stepFrame(by: -1) } label: {
+                    Image(systemName: "backward.frame.fill")
+                        .font(.title3)
+                        .frame(width: 32, height: 32)
+                }
+                .buttonStyle(.borderless)
+            }
+
             Button {
                 if source.isPlaying {
                     source.pause()
@@ -40,6 +52,15 @@ struct VideoTransportBar: View {
                     .frame(width: 32, height: 32)
             }
             .buttonStyle(.borderless)
+
+            if source.hasVideoTrack {
+                Button { source.stepFrame(by: 1) } label: {
+                    Image(systemName: "forward.frame.fill")
+                        .font(.title3)
+                        .frame(width: 32, height: 32)
+                }
+                .buttonStyle(.borderless)
+            }
 
             Text(Self.timeString(displayedSeconds))
                 .font(.caption.monospacedDigit())

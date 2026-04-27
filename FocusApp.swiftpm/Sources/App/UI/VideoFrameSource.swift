@@ -236,6 +236,17 @@ final class VideoFrameSource: ObservableObject {
         isSeeking = seeking
     }
 
+    /// Step `count` video frames from the current playhead — positive
+    /// advances, negative rewinds. Pauses playback first if running so
+    /// stepping has predictable, single-frame granularity instead of
+    /// fighting AVPlayer's continuous decode. No-op for audio-only
+    /// sources (AVPlayerItem.step requires a video track).
+    func stepFrame(by count: Int) {
+        guard hasVideoTrack else { return }
+        if isPlaying { pause() }
+        item.step(byCount: count)
+    }
+
     /// Display-link callback. Asks the output whether a new pixel
     /// buffer is ready for the upcoming refresh; if so, wraps it in
     /// a `CIImage` and republishes. Skips silently when the output
