@@ -21,6 +21,26 @@ packages:
     url: https://github.com/weichsel/ZIPFoundation
     from: 0.9.19
 
+# Shared schemes so the scheme survives the `xcuserdata`
+# directory being cleaned (setup.sh re-runs, SPM-cache wipes,
+# fresh checkouts). Without this Xcode auto-creates a per-user
+# scheme on first open which any cleanup deletes again.
+schemes:
+  FocusApp:
+    build:
+      targets:
+        FocusApp: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release
+
 targets:
   FocusApp:
     type: application
