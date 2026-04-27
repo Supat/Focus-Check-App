@@ -72,3 +72,7 @@ targets:
         # Communication Safety on iOS / Sensitive Content Warning on macOS).
         NSPhotoLibraryUsageDescription: "Focus Check reads selected photos' metadata (filename, EXIF) and may query the Photos library for the original asset filename."
         NSSensitiveContentAnalysisUsageDescription: "Focus Check uses on-device Sensitive Content Analysis to flag and optionally mosaic sensitive imagery before it's displayed."
+        # Camera key required for the back-camera live source —
+        # mirrors the `.camera(purposeString:)` capability declared
+        # in the .swiftpm Package.swift.
+        NSCameraUsageDescription: "The live camera feed is analyzed for sensitive content and overlaid with redaction in real time."
