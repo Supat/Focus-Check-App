@@ -46,6 +46,12 @@ final class VideoFrameSource: ObservableObject {
     /// Whether AVPlayer is currently playing. Toggled by `play()` /
     /// `pause()`; surfaced for the toolbar transport button.
     @Published private(set) var isPlaying: Bool = false
+    /// True while the user is actively scrubbing the transport bar.
+    /// Surfaced so consumers (the renderer + per-subject overlays)
+    /// can drop their compositing cost or hide stale anchors while
+    /// the playhead is moving fast — overlay anchor data lags the
+    /// scrub position because the analyzer only refreshes at 2 Hz.
+    @Published private(set) var isSeeking: Bool = false
     /// Total duration in seconds. Populated once the asset finishes
     /// loading its `.duration` property in `init`.
     let duration: TimeInterval
@@ -192,7 +198,9 @@ final class VideoFrameSource: ObservableObject {
 
     /// Frame-accurate seek — the analyzer reads `currentTime` to key
     /// its TrackStore lookups, so step-imprecise seeks would let
-    /// overlays land on the wrong sampled snapshot.
+    /// overlays land on the wrong sampled snapshot. Used at the
+    /// release-position end of a scrub so the final landing frame
+    /// is exact.
     func seek(to seconds: TimeInterval) async {
         let target = CMTime(
             seconds: seconds,
@@ -203,6 +211,29 @@ final class VideoFrameSource: ObservableObject {
             toleranceBefore: .zero,
             toleranceAfter: .zero
         )
+    }
+
+    /// Permissive-tolerance seek for in-drag preview. AVPlayer
+    /// picks the nearest keyframe instead of decoding to the exact
+    /// frame, which is typically 5–20× faster than the precise
+    /// `seek(to:)` above. Use during active scrub drag; switch to
+    /// `seek(to:)` for the release-position landing.
+    func seekFast(to seconds: TimeInterval) async {
+        let target = CMTime(
+            seconds: seconds,
+            preferredTimescale: CMTimeScale(NSEC_PER_SEC)
+        )
+        await player.seek(
+            to: target,
+            toleranceBefore: .positiveInfinity,
+            toleranceAfter: .positiveInfinity
+        )
+    }
+
+    /// Toggle the in-flight scrub flag the renderer / overlay
+    /// stack reads. VideoTransportBar calls this on grab / release.
+    func setSeeking(_ seeking: Bool) {
+        isSeeking = seeking
     }
 
     /// Display-link callback. Asks the output whether a new pixel

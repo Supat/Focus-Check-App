@@ -394,7 +394,7 @@ struct ContentView: View {
     @ViewBuilder
     private var megapixelsBadge: some View {
         if let source = viewModel.sourceImage,
-           !viewModel.overlayHidden {
+           !viewModel.shouldHideOverlays {
             let pixels = source.extent.width * source.extent.height
             let mp = max(1, Int((pixels / 1_000_000).rounded()))
             // Reference resolutions:
@@ -445,7 +445,7 @@ struct ContentView: View {
     private var exposureBadge: some View {
         if let info = viewModel.exposureInfo,
            viewModel.sourceImage != nil,
-           !viewModel.overlayHidden {
+           !viewModel.shouldHideOverlays {
             let parts = [
                 info.formattedFocalLength,
                 info.formattedShutter,
@@ -482,7 +482,7 @@ struct ContentView: View {
     private var provenanceBadge: some View {
         if let info = viewModel.exposureInfo,
            viewModel.sourceImage != nil,
-           !viewModel.overlayHidden,
+           !viewModel.shouldHideOverlays,
            info.software != nil || info.hasContentCredentials {
             HStack(spacing: 6) {
                 if info.hasContentCredentials {
@@ -662,7 +662,7 @@ struct ContentView: View {
         if let top = viewModel.clipMatches.first,
            Self.explicitClipPrompts.contains(top.prompt),
            viewModel.sourceImage != nil,
-           !viewModel.overlayHidden {
+           !viewModel.shouldHideOverlays {
             HStack(spacing: 6) {
                 Image(systemName: "sparkle.magnifyingglass")
                 Text(Self.sentenceCased(top.prompt))
@@ -690,7 +690,7 @@ struct ContentView: View {
     private var audioContextBadge: some View {
         if let videoSource = viewModel.videoSource,
            videoSource.hasVideoTrack,
-           !viewModel.overlayHidden,
+           !viewModel.shouldHideOverlays,
            let top = viewModel.audioMatches.first(where: {
                !Self.safeAudioPrompts.contains($0.prompt)
            }) {
@@ -776,7 +776,7 @@ struct ContentView: View {
         let total = coveredCount + partialCount + nudeCount
         if total > 0,
            viewModel.sourceImage != nil,
-           !viewModel.overlayHidden {
+           !viewModel.shouldHideOverlays {
             HStack(spacing: 10) {
                 if coveredCount > 0 {
                     Label("\(coveredCount)", systemImage: "person.fill")
@@ -805,7 +805,7 @@ struct ContentView: View {
         // number so the angle and confidence are visible even on mild cases.
         if let mb = viewModel.motionBlur,
            viewModel.sourceImage != nil,
-           !viewModel.overlayHidden,
+           !viewModel.shouldHideOverlays,
            mb.isSignificant || viewModel.style == .motion {
             HStack(spacing: 6) {
                 Image(systemName: "arrow.left.and.right")
@@ -831,7 +831,7 @@ struct ContentView: View {
     private var qualityBadge: some View {
         if let q = viewModel.qualityScore,
            viewModel.sourceImage != nil,
-           !viewModel.overlayHidden {
+           !viewModel.shouldHideOverlays {
             nimaBadge(q, label: "Quality",
                       icon: "checkmark.seal.fill")
         }
@@ -844,7 +844,7 @@ struct ContentView: View {
     private var aestheticBadge: some View {
         if let a = viewModel.aestheticScore,
            viewModel.sourceImage != nil,
-           !viewModel.overlayHidden {
+           !viewModel.shouldHideOverlays {
             nimaBadge(a, label: "Aesthetic",
                       icon: "sparkles")
         }

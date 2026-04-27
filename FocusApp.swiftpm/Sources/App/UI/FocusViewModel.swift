@@ -158,6 +158,17 @@ final class FocusViewModel: ObservableObject {
     /// Press-and-hold to compare against the original photo. While true, the
     /// renderer skips all overlay compositing and draws just the fitted source.
     @Published var overlayHidden: Bool = false
+    /// Composite "should the renderer + overlay stack stay hidden
+    /// right now" flag. ORs the user-driven press-and-hold compare
+    /// state with the in-flight scrub state on the active video
+    /// source — overlays would otherwise lag a fast scrub by up to
+    /// 500 ms (the analyzer's pulse interval), pinning a mosaic
+    /// box on the wrong frame as the user drags. Hiding overlays
+    /// during scrub trades that anchor lag for a brief unfiltered
+    /// preview, restored as soon as the user releases.
+    var shouldHideOverlays: Bool {
+        overlayHidden || (videoSource?.isSeeking == true)
+    }
 
     private var zoomAnimationTask: Task<Void, Never>?
 

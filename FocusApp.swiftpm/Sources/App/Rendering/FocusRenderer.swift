@@ -170,7 +170,7 @@ final class FocusRenderer {
             guard let source = viewModel.sourceImage else {
                 return RenderSnapshot(
                     inputs: nil,
-                    overlayHidden: viewModel.overlayHidden,
+                    overlayHidden: viewModel.shouldHideOverlays,
                     zoomScale: viewModel.zoomScale,
                     zoomAnchor: viewModel.zoomAnchor,
                     zoomPan: CGSize(
@@ -210,7 +210,7 @@ final class FocusRenderer {
             )
             return RenderSnapshot(
                 inputs: inputs,
-                overlayHidden: viewModel.overlayHidden,
+                overlayHidden: viewModel.shouldHideOverlays,
                 zoomScale: viewModel.zoomScale,
                 zoomAnchor: viewModel.zoomAnchor,
                 zoomPan: CGSize(

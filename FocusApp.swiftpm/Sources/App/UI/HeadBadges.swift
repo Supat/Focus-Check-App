@@ -20,7 +20,7 @@ extension ContentView {
     @ViewBuilder
     func nudityLabelOverlay(in size: CGSize) -> some View {
         if viewModel.showNudityLabels,
-           !viewModel.overlayHidden,
+           !viewModel.shouldHideOverlays,
            !viewModel.nudityDetections.isEmpty,
            let extent = viewModel.sourceImage?.extent,
            extent.width > 0, extent.height > 0 {
@@ -82,7 +82,7 @@ extension ContentView {
         // through.
         let labelsActive = viewModel.showNudityLabels
             && !viewModel.nudityDetections.isEmpty
-        if !viewModel.overlayHidden,
+        if !viewModel.shouldHideOverlays,
            !labelsActive,
            let extent = viewModel.sourceImage?.extent,
            extent.width > 0, extent.height > 0,
