@@ -25,16 +25,17 @@ import UIKit
 /// Color: BGRA8 + sRGB tag matches `VideoFrameSource`. iOS hardware
 /// captures Rec.709 by default in this format; SDR throughout.
 ///
-/// **Threading:** the class is *not* @MainActor — the AVCapture
-/// session lives on `sessionQueue` and orientation tracking flips
-/// rotation on the same queue, so making the class main-isolated
-/// would force a hop on every property access. Instead, every
-/// `@Published` setter explicitly dispatches to main via
-/// `DispatchQueue.main.async`, which is what SwiftUI observation
-/// requires. `@unchecked Sendable` reflects that the
-/// session-owned state is internally serialized via the dispatch
-/// queue.
-final class CameraFrameSource: NSObject, ObservableObject, @unchecked Sendable {
+/// **Threading:** the class is `@MainActor` for SwiftUI observation
+/// and to satisfy the `@MainActor`-isolated UIDevice / UIKit calls
+/// the orientation-tracking code makes. The AVCapture session
+/// itself lives off-main on `sessionQueue` — `session`,
+/// `videoOutput`, and `didConfigure` are marked
+/// `nonisolated(unsafe)` so the queue closures can read/write them
+/// without crossing the main-actor boundary. The dispatch queue
+/// serializes those touches; the `unsafe` annotation reflects that
+/// guarantee.
+@MainActor
+final class CameraFrameSource: NSObject, ObservableObject {
     /// Most recently captured frame, ready for the renderer. Nil
     /// before the first frame and after `stop()`.
     @Published private(set) var currentImage: CIImage?
@@ -45,15 +46,19 @@ final class CameraFrameSource: NSObject, ObservableObject, @unchecked Sendable {
     /// True after `start()` succeeds, until `stop()` runs.
     @Published private(set) var isRunning: Bool = false
 
-    private let session = AVCaptureSession()
-    private let videoOutput = AVCaptureVideoDataOutput()
-    private let sessionQueue = DispatchQueue(
+    // session / videoOutput / didConfigure live off-main. Marked
+    // nonisolated(unsafe) so sessionQueue.async closures can touch
+    // them without main-actor hops; access is serialized through
+    // the dispatch queue.
+    nonisolated(unsafe) private let session = AVCaptureSession()
+    nonisolated(unsafe) private let videoOutput = AVCaptureVideoDataOutput()
+    nonisolated private let sessionQueue = DispatchQueue(
         label: "FocusApp.CameraFrameSource.session"
     )
-    private let sampleQueue = DispatchQueue(
+    nonisolated private let sampleQueue = DispatchQueue(
         label: "FocusApp.CameraFrameSource.samples"
     )
-    private var didConfigure = false
+    nonisolated(unsafe) private var didConfigure = false
     /// Live device-orientation observer. Subscribed in `start()` so
     /// rotating the iPad mid-session updates the capture connection's
     /// rotation angle and the published frame stays upright.
@@ -113,7 +118,13 @@ final class CameraFrameSource: NSObject, ObservableObject, @unchecked Sendable {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.applyDeviceOrientation()
+            // `queue: .main` runs on main, but the @Sendable
+            // closure type doesn't carry actor isolation. Use
+            // assumeIsolated to assert and call the @MainActor
+            // helper without an extra Task hop.
+            MainActor.assumeIsolated {
+                self?.applyDeviceOrientation()
+            }
         }
         applyDeviceOrientation()
     }
@@ -177,8 +188,12 @@ final class CameraFrameSource: NSObject, ObservableObject, @unchecked Sendable {
     /// One-time AVCaptureSession setup — pick the back wide-angle
     /// camera, wire it into the session, attach a BGRA video data
     /// output. Reruns are no-ops via the `didConfigure` guard.
-    /// Runs on `sessionQueue` (called from `start`).
-    private func configureIfNeeded() throws {
+    /// Runs on `sessionQueue` (called from `start`); marked
+    /// `nonisolated` so it can be invoked from inside that queue's
+    /// closure without a main-actor hop. All the state it reads /
+    /// writes (session, videoOutput, didConfigure) is also
+    /// `nonisolated(unsafe)`; the dispatch queue serializes access.
+    nonisolated private func configureIfNeeded() throws {
         guard !didConfigure else { return }
         session.beginConfiguration()
         defer { session.commitConfiguration() }
@@ -219,14 +234,15 @@ final class CameraFrameSource: NSObject, ObservableObject, @unchecked Sendable {
         }
         session.addOutput(videoOutput)
 
-        // Seed the capture connection with whatever the current
-        // device orientation maps to (portrait fallback when the
-        // device is flat / unknown so the first frame isn't
-        // sideways). Live updates flow through
-        // `applyDeviceOrientation` on rotation events.
+        // Seed the capture connection with portrait. Reading the
+        // live UIDevice.current.orientation here would be a
+        // main-actor call from off-main, so we just hardcode 90°
+        // and let the orientation observer fire its first
+        // notification (synchronously seeded right after start
+        // returns) to update the angle if the device isn't
+        // actually portrait.
         if let connection = videoOutput.connection(with: .video) {
-            let initialAngle =
-                Self.rotationAngle(for: UIDevice.current.orientation) ?? 90
+            let initialAngle: CGFloat = 90
             if connection.isVideoRotationAngleSupported(initialAngle) {
                 connection.videoRotationAngle = initialAngle
             }

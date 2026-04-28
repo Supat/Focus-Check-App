@@ -167,7 +167,13 @@ final class VideoFrameSource: ObservableObject {
             audioTimeObserver = player.addPeriodicTimeObserver(
                 forInterval: interval, queue: .main
             ) { [weak self] time in
-                self?.currentTime = time
+                // queue: .main runs on main, but the closure itself
+                // is @Sendable and can't directly write to a
+                // main-actor property. assumeIsolated is the cheap
+                // hop — no Task spawn, just a runtime assertion.
+                MainActor.assumeIsolated {
+                    self?.currentTime = time
+                }
             }
         }
     }

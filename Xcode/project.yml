@@ -84,8 +84,9 @@ targets:
         LSRequiresIPhoneOS: true
         UILaunchScreen:
           UIColorName: ""
-        UIDeviceFamily:
-          - 2   # iPad
+        # UIDeviceFamily intentionally omitted — TARGETED_DEVICE_FAMILY
+        # build setting (= "2") drives this and Xcode warns when both
+        # are present.
         UISupportedInterfaceOrientations~ipad:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationPortraitUpsideDown
